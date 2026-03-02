@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: telemetry-postgres
+    environment:
+      POSTGRES_USER: telemetry
+      POSTGRES_PASSWORD: telemetry
+      POSTGRES_DB: telemetry_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telemetry -d telemetry_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: telemetry-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://telemetry:telemetry@postgres:5432/telemetry_db
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: telemetry-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      API_SERVER_URL: http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

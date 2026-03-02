@@ -1,0 +1,13 @@
+fastapi>=0.109
+uvicorn[standard]>=0.27
+pydantic>=2.0
+pydantic-settings>=2.0
+sqlalchemy>=2.0
+psycopg2-binary
+pgvector
+alembic
+numpy
+pandas
+sentence-transformers
+openai
+python-dotenv
