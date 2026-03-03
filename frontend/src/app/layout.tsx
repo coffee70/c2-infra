@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Telemetry Explanation Engine",
+  title: "Telemetry Operations Platform",
   description: "Search and explore spacecraft telemetry with semantic search and LLM explanations",
 };
 

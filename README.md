@@ -1,6 +1,18 @@
-# Telemetry Explanation Engine
+# Telemetry Operations Platform
 
-A full-stack system that ingests spacecraft telemetry schema and historical time-series data, computes statistical summaries, builds a semantic embedding index, and generates LLM-based contextual explanations.
+A **spacecraft telemetry monitoring and analysis platform** for mission operations. Ingest telemetry from power, thermal, ADCS, communications, and other subsystems; visualize trends and anomalies in real time; and get AI-powered explanations that help operators understand what each channel means and why values might be out of range.
+
+## What It Does
+
+- **Ingests & stores** telemetry schemas and time-series data (historical and real-time)
+- **Computes statistics** (mean, std dev, z-score) and detects anomalies (Normal/Caution/Warning)
+- **Semantic search** — find channels by meaning (e.g., "voltage", "temperature") instead of exact names
+- **LLM explanations** — contextual, human-readable summaries of each channel and its current state
+- **Live dashboard** — watchlist of key channels with sparklines, state badges, and an anomalies queue
+- **Real-time streaming** — WebSocket support for live telemetry and alerts with Ack/Resolve workflows
+- **Simulator** — mock vehicle streamer with scenarios (nominal, power sag, thermal runaway, etc.) for testing
+
+Designed for spacecraft ground operations, mission control dashboards, and teams that need to monitor and interpret large numbers of telemetry channels with AI-assisted context.
 
 ## Architecture
 
@@ -23,8 +35,9 @@ docker compose up -d
 
 This starts:
 - **Postgres** (port 5432) with TimescaleDB and pgvector
-- **Backend** (port 8000)
-- **Frontend** (port 3000)
+- **Backend** (port 8000) — FastAPI telemetry API
+- **Frontend** (port 3000) — Next.js dashboard
+- **Simulator** (port 8001) — mock vehicle streamer for testing scenarios
 
 Migrations run automatically on backend startup.
 
@@ -58,7 +71,8 @@ curl -X POST http://localhost:8000/telemetry/recompute-stats
 1. Open http://localhost:3000
 2. **Overview** (home): Watchlist of key channels (power, thermal, ADCS, comms) with current values, state badges, sparklines, and anomalies queue
 3. **Search**: Find telemetry by semantic search (e.g., "voltage", "temperature", "speed")
-4. Click a channel to view stats, trend chart, z-score, and LLM explanation
+4. **Simulator**: Start/stop mock vehicle streams with configurable scenarios (nominal, power sag, thermal runaway, etc.)
+5. Click a channel to view stats, trend chart, z-score, and LLM explanation
 
 ### 5. Realtime streaming (optional)
 
@@ -251,16 +265,17 @@ curl -X POST "http://localhost:8000/telemetry/watchlist" \
 
 ```
 c2-infra/
-├── backend/           # FastAPI application
+├── backend/           # FastAPI telemetry API
 │   ├── app/
 │   │   ├── models/    # SQLAlchemy models, Pydantic schemas
-│   │   ├── routes/    # API endpoints
-│   │   ├── services/  # Business logic
+│   │   ├── routes/    # API endpoints (telemetry, realtime, simulator)
+│   │   ├── services/  # Business logic (stats, embeddings, LLM)
 │   │   └── interfaces/  # Embedding/LLM provider abstractions
 │   └── migrations/
-├── frontend/          # Next.js application
+├── frontend/          # Next.js dashboard (Overview, Search, Simulator)
+├── simulator/        # Mock vehicle streamer (scenarios, ingest)
 ├── scripts/
-│   ├── init-db.sql    # Postgres extensions
+│   ├── init-db.sql    # Postgres extensions (TimescaleDB, pgvector)
 │   └── generate_synthetic_telemetry.py
 └── docker-compose.yml
 ```

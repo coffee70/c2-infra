@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    logger.info("Starting Telemetry Explanation Engine")
+    logger.info("Starting Telemetry Operations Platform")
     from app.realtime import get_realtime_processor
     from app.realtime.ws_hub import get_ws_hub
     hub = get_ws_hub()
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Telemetry Explanation Engine",
+    title="Telemetry Operations Platform",
     description="Ingest telemetry, compute stats, semantic search, and LLM explanations",
     version="1.0.0",
     lifespan=lifespan,

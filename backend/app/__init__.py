@@ -1,1 +1,1 @@
-"""Telemetry Explanation Engine - Backend application."""
+"""Telemetry Operations Platform - Backend application."""
