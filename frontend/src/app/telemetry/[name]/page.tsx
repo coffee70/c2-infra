@@ -1,12 +1,19 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 import { TrendChartAnalysis } from "@/components/trend-chart-analysis";
 import { TelemetryDetailActions } from "@/components/telemetry-detail-actions";
 import { TelemetryDetailLive } from "@/components/telemetry-detail-live";
-import { SimilarTelemetryCard } from "@/components/similar-telemetry-card";
 import { TelemetryDetailHeader } from "@/components/telemetry-detail-header";
+import { ExplanationBlock } from "@/components/explanation-block";
 import { formatSmartValue } from "@/lib/format-value";
 
 // Server-side: use API_SERVER_URL (backend container hostname in Docker)
@@ -59,10 +66,10 @@ interface RecentPoint {
   value: number;
 }
 
-async function fetchExplain(name: string): Promise<ExplainResponse | null> {
+async function fetchSummary(name: string): Promise<ExplainResponse | null> {
   try {
     const res = await fetch(
-      `${API_URL}/telemetry/${encodeURIComponent(name)}/explain`,
+      `${API_URL}/telemetry/${encodeURIComponent(name)}/summary`,
       { cache: "no-store" }
     );
     if (!res.ok) return null;
@@ -99,7 +106,7 @@ export default async function TelemetryDetailPage({
   const decodedName = decodeURIComponent(name);
 
   const [explain, recentData] = await Promise.all([
-    fetchExplain(decodedName),
+    fetchSummary(decodedName),
     fetchRecent(decodedName),
   ]);
 
@@ -107,19 +114,24 @@ export default async function TelemetryDetailPage({
 
   return (
     <div className="min-h-screen p-4 sm:p-6 lg:p-8">
-      <div className="max-w-6xl mx-auto space-y-6">
-        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-sm">
-          <Link
-            href="/overview"
-            className="text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded"
-          >
-            ← Overview
-          </Link>
-          <span className="text-muted-foreground">/</span>
-          <span className="text-muted-foreground truncate max-w-[200px]" title={decodedName}>
-            {decodedName}
-          </span>
-        </nav>
+      <div className="max-w-6xl mx-auto space-y-8">
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink asChild>
+                <Link href="/overview" className="text-primary hover:underline underline-offset-4">
+                  Overview
+                </Link>
+              </BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage className="truncate max-w-[200px]" title={decodedName}>
+                {decodedName}
+              </BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
 
         <TelemetryDetailHeader
           name={explain.name}
@@ -178,36 +190,7 @@ export default async function TelemetryDetailPage({
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <CardTitle>Explanation</CardTitle>
-              {explain.confidence_indicator && (
-                <Badge variant="secondary" className="text-xs font-normal">
-                  {explain.confidence_indicator}
-                </Badge>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <h3 className="text-sm font-medium text-muted-foreground mb-1">
-                What this means
-              </h3>
-              <p className="text-base">
-                {explain.what_this_means ?? explain.llm_explanation}
-              </p>
-            </div>
-            <details className="group">
-              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                Full explanation
-              </summary>
-              <p className="mt-2 whitespace-pre-wrap text-sm">{explain.llm_explanation}</p>
-            </details>
-          </CardContent>
-        </Card>
-
-        <SimilarTelemetryCard channels={explain.what_to_check_next ?? []} />
+        <ExplanationBlock channelName={decodedName} />
 
         <Card className="border-muted">
           <CardHeader>

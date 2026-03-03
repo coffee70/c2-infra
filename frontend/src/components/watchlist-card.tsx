@@ -77,24 +77,26 @@ export function WatchlistCard({
       className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-lg"
     >
       <Card
-        className={`hover:bg-accent/50 active:bg-accent/70 transition-colors cursor-pointer h-full duration-150 ${
+        className={`hover:bg-accent/50 active:bg-accent/70 transition-colors duration-200 cursor-pointer h-full ${
           stale ? "border-destructive/30" : ""
         }`}
       >
-        <CardHeader className="pb-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-medium text-sm truncate">{name}</span>
+        <CardHeader className="pb-2 min-w-0 overflow-hidden">
+          <div className="flex items-center justify-between gap-2 min-w-0">
+            <span className="font-medium text-sm truncate min-w-0">{name}</span>
             <Badge
               variant={stateVariant}
-              className="shrink-0 text-xs"
+              className="text-xs max-w-[130px] min-w-0 overflow-hidden"
               title={tooltipTitle}
             >
-              {stateLabel}
-              {stateReason && (
-                <span className="ml-1 opacity-80">
-                  ({stateReason.replace("_", " ")})
-                </span>
-              )}
+              <span className="truncate block">
+                {stateLabel}
+                {stateReason && (
+                  <span className="ml-1 opacity-80">
+                    ({stateReason.replace("_", " ")})
+                  </span>
+                )}
+              </span>
             </Badge>
           </div>
         </CardHeader>

@@ -4,9 +4,17 @@ import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -138,16 +146,15 @@ export function SimulatorPanel() {
 
   return (
     <div className="min-h-screen p-4 sm:p-6 lg:p-8">
-      <div className="max-w-2xl mx-auto space-y-6">
-        <h1 className="text-3xl font-bold">Telemetry Simulator</h1>
+      <div className="max-w-2xl mx-auto space-y-8">
+        <div className="space-y-1">
+          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Telemetry Simulator</h1>
+        </div>
 
         {error && (
-          <div
-            className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-            role="alert"
-          >
-            {error}
-          </div>
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
         <Card>
@@ -160,9 +167,9 @@ export function SimulatorPanel() {
               <span
                 className={`font-medium capitalize ${
                   state === "running"
-                    ? "text-green-600"
+                    ? "text-green-500 dark:text-green-400"
                     : state === "paused"
-                    ? "text-amber-600"
+                    ? "text-amber-500 dark:text-amber-400"
                     : "text-muted-foreground"
                 }`}
               >
@@ -186,27 +193,29 @@ export function SimulatorPanel() {
             <div className="grid gap-2">
               <Label htmlFor="scenario">Scenario</Label>
               <Select
-                id="scenario"
                 value={scenario}
-                onChange={(e) => setScenario(e.target.value)}
+                onValueChange={setScenario}
                 disabled={!canEdit}
               >
-                {SCENARIOS.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
-                  </option>
-                ))}
+                <SelectTrigger id="scenario">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SCENARIOS.map((s) => (
+                    <SelectItem key={s.value} value={s.value}>
+                      {s.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             </div>
             <div className="grid gap-2">
               <div className="flex items-center gap-2">
-                <input
+                <Checkbox
                   id="run-forever"
-                  type="checkbox"
                   checked={runForever}
-                  onChange={(e) => setRunForever(e.target.checked)}
+                  onCheckedChange={(c) => setRunForever(!!c)}
                   disabled={!canEdit}
-                  className="h-4 w-4 rounded border-input"
                 />
                 <Label htmlFor="run-forever" className="font-normal cursor-pointer">
                   Run forever

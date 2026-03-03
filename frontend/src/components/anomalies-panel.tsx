@@ -91,6 +91,7 @@ export function AnomaliesPanel({
       <CardContent>
         {totalCount === 0 ? (
           <EmptyState
+            icon="inbox"
             title="No anomalies detected"
             description="All systems are operating within normal parameters."
           />
@@ -108,7 +109,7 @@ export function AnomaliesPanel({
                         <li key={entry.name}>
                           <Link
                             href={`/telemetry/${encodeURIComponent(entry.name)}`}
-                            className="block p-2 rounded-md border hover:bg-accent transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                            className="block p-2 rounded-md border hover:bg-accent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 text-primary hover:underline underline-offset-4"
                           >
                             <div className="flex items-center justify-between gap-2">
                               <span className="font-medium text-sm">

@@ -1,12 +1,17 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/empty-state";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -19,8 +24,6 @@ export function WatchlistConfig() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [addingName, setAddingName] = useState<string | null>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
 
   const watchlistNames = new Set(entries.map((e) => e.name));
   const availableToAdd = allNames.filter(
@@ -75,51 +78,6 @@ export function WatchlistConfig() {
     }
   }
 
-  const closeModal = useCallback(() => {
-    setOpen(false);
-    triggerRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeModal();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, closeModal]);
-
-  useEffect(() => {
-    if (!open || !dialogRef.current) return;
-    const dialog = dialogRef.current;
-    const focusable = dialog.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    );
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    first?.focus();
-
-    const handleTab = (e: KeyboardEvent) => {
-      if (e.key !== "Tab") return;
-      if (e.shiftKey) {
-        if (document.activeElement === first) {
-          e.preventDefault();
-          last?.focus();
-        }
-      } else {
-        if (document.activeElement === last) {
-          e.preventDefault();
-          first?.focus();
-        }
-      }
-    };
-    dialog.addEventListener("keydown", handleTab);
-    return () => dialog.removeEventListener("keydown", handleTab);
-  }, [open]);
-
   async function handleRemove(name: string) {
     try {
       const res = await fetch(
@@ -138,7 +96,6 @@ export function WatchlistConfig() {
   return (
     <>
       <Button
-        ref={triggerRef}
         variant="outline"
         size="sm"
         onClick={() => setOpen(true)}
@@ -148,32 +105,18 @@ export function WatchlistConfig() {
         Edit watchlist
       </Button>
 
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={closeModal}
-        >
-          <Card
-            ref={dialogRef}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="watchlist-config-title"
-            className="w-full max-w-md max-h-[80vh] overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle id="watchlist-config-title">Configure Watchlist</CardTitle>
-              <Button variant="outline" size="sm" onClick={closeModal}>
-                Close
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-4 overflow-y-auto max-h-[60vh]">
-              {error && (
-                <p className="text-sm text-destructive">{error}</p>
-              )}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-md max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle id="watchlist-config-title">Configure Watchlist</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 overflow-y-auto max-h-[60vh] pr-2">
+            {error && (
+              <p className="text-sm text-destructive">{error}</p>
+            )}
 
-              <div>
-                <h4 className="text-sm font-medium mb-2">Current watchlist</h4>
+            <div>
+              <h4 className="text-sm font-medium mb-2">Current watchlist</h4>
                 {loading ? (
                   <div className="flex items-center gap-2 py-4">
                     <Spinner size="sm" />
@@ -181,6 +124,7 @@ export function WatchlistConfig() {
                   </div>
                 ) : entries.length === 0 ? (
                   <EmptyState
+                    icon="chart"
                     title="No channels in watchlist"
                     description="Add channels using the search below."
                   />
@@ -238,16 +182,16 @@ export function WatchlistConfig() {
                   )}
                   {availableToAdd.length === 0 && !searchQuery && (
                     <EmptyState
+                      icon="chart"
                       title="All telemetry already in watchlist"
                       description="Every channel is already in your watchlist."
                     />
                   )}
                 </ul>
               </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

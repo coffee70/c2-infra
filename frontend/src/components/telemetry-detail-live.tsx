@@ -76,8 +76,8 @@ export function TelemetryDetailLive({
   return (
     <div className="relative">
       {live && (
-        <span className="absolute top-2 right-2 inline-flex items-center gap-1.5 rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+        <span className="absolute top-2 right-2 inline-flex items-center gap-1.5 rounded-full bg-green-500/20 dark:bg-green-500/30 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400 animate-pulse" />
           Live
         </span>
       )}

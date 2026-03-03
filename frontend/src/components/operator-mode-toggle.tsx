@@ -2,6 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { MonitorIcon } from "lucide-react";
 
 const STORAGE_KEY = "operator_mode";
 type OperatorMode = "default" | "high-contrast" | "large-type";
@@ -27,6 +35,12 @@ function applyMode(mode: OperatorMode) {
   }
 }
 
+const MODE_LABELS: Record<OperatorMode, string> = {
+  default: "Default",
+  "high-contrast": "High contrast",
+  "large-type": "Large type",
+};
+
 export function OperatorModeToggle() {
   const [mode, setMode] = useState<OperatorMode>("default");
 
@@ -47,34 +61,25 @@ export function OperatorModeToggle() {
   };
 
   return (
-    <div
-      className="flex items-center gap-1"
-      title="Display mode for long console shifts. Default: standard colors. High contrast: stronger contrast for low-light. Large type: 1.25x font scale."
-    >
-      <Button
-        variant={mode === "default" ? "default" : "outline"}
-        size="sm"
-        className="h-8 text-xs"
-        onClick={() => setModeAndStore("default")}
-      >
-        Default
-      </Button>
-      <Button
-        variant={mode === "high-contrast" ? "default" : "outline"}
-        size="sm"
-        className="h-8 text-xs"
-        onClick={() => setModeAndStore("high-contrast")}
-      >
-        High contrast
-      </Button>
-      <Button
-        variant={mode === "large-type" ? "default" : "outline"}
-        size="sm"
-        className="h-8 text-xs"
-        onClick={() => setModeAndStore("large-type")}
-      >
-        Large type
-      </Button>
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 text-xs"
+          title="Display mode for long console shifts"
+        >
+          <MonitorIcon className="size-3.5" />
+          {MODE_LABELS[mode]}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuRadioGroup value={mode} onValueChange={(v) => setModeAndStore(v as OperatorMode)}>
+          <DropdownMenuRadioItem value="default">Default</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="high-contrast">High contrast</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="large-type">Large type</DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

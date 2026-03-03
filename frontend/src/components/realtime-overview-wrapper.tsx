@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { WatchlistCard } from "@/components/watchlist-card";
 import { EventConsole } from "@/components/event-console";
 import { EmptyState } from "@/components/empty-state";
@@ -206,21 +213,22 @@ export function RealtimeOverviewWrapper({
               <CardTitle>Watchlist / Console</CardTitle>
               <div className="flex items-center gap-2">
                 {sources.length > 1 && (
-                  <select
-                    value={sourceId}
-                    onChange={(e) => setSourceId(e.target.value)}
-                    className="h-8 rounded-md border border-input bg-background px-2 py-1 text-xs"
-                  >
-                    {sources.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
+                  <Select value={sourceId} onValueChange={setSourceId}>
+                    <SelectTrigger size="sm" className="h-8 w-auto min-w-[100px] text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sources.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 )}
                 {live && (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 dark:bg-green-500/30 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400" />
                   Live
                 </span>
                 )}
@@ -233,6 +241,7 @@ export function RealtimeOverviewWrapper({
           <CardContent>
             {channels.length === 0 ? (
               <EmptyState
+                icon="chart"
                 title="No channels in watchlist"
                 description="Configure your watchlist to see key metrics here."
               />

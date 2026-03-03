@@ -16,7 +16,21 @@ import {
 } from "@/components/ui/table";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/empty-state";
-import { Select } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -184,8 +198,10 @@ export default function SearchPage() {
 
   return (
     <div className="min-h-screen p-4 sm:p-6 lg:p-8">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <h1 className="text-3xl font-bold">Search Telemetry</h1>
+      <div className="max-w-5xl mx-auto space-y-8">
+        <div className="space-y-1">
+          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Search Telemetry</h1>
+        </div>
 
         {/* Recent & Favorites */}
         {(recent.length > 0 || favorites.length > 0) && (
@@ -201,7 +217,7 @@ export default function SearchPage() {
                       <Link
                         key={name}
                         href={`/telemetry/${encodeURIComponent(name)}`}
-                        className="text-sm px-3 py-1.5 rounded-md border hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        className="text-sm px-3 py-1.5 rounded-md border hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 text-primary hover:underline underline-offset-4"
                       >
                         {name}
                       </Link>
@@ -221,7 +237,7 @@ export default function SearchPage() {
                       <Link
                         key={name}
                         href={`/telemetry/${encodeURIComponent(name)}`}
-                        className="text-sm px-3 py-1.5 rounded-md border hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                        className="text-sm px-3 py-1.5 rounded-md border hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 text-primary hover:underline underline-offset-4"
                       >
                         {name}
                       </Link>
@@ -239,7 +255,7 @@ export default function SearchPage() {
             data-telemetry-search-input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="flex-1"
+            className="flex-1 min-w-0"
           />
           <Button type="submit" disabled={loading} className="gap-2">
             {loading && <Spinner size="sm" className="shrink-0" />}
@@ -255,67 +271,67 @@ export default function SearchPage() {
           <CardContent>
             <div className="flex flex-wrap gap-4 items-center">
               <div className="flex items-center gap-2">
-                <label htmlFor="filter-subsystem" className="text-sm font-medium">
+                <Label htmlFor="filter-subsystem" className="text-sm font-medium">
                   Subsystem
-                </label>
+                </Label>
                 <Select
-                  id="filter-subsystem"
-                  value={filterSubsystem}
-                  onChange={(e) => setFilterSubsystem(e.target.value)}
-                  className="h-9 w-auto min-w-[120px]"
+                  value={filterSubsystem || "__all__"}
+                  onValueChange={(v) => setFilterSubsystem(v === "__all__" ? "" : v)}
                 >
-                  <option value="">All</option>
-                  {subsystems.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
+                  <SelectTrigger id="filter-subsystem" className="h-9 w-auto min-w-[120px]">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">All</SelectItem>
+                    {subsystems.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </div>
               <div className="flex items-center gap-2">
-                <label htmlFor="filter-units" className="text-sm font-medium">
+                <Label htmlFor="filter-units" className="text-sm font-medium">
                   Units
-                </label>
+                </Label>
                 <Select
-                  id="filter-units"
-                  value={filterUnits}
-                  onChange={(e) => setFilterUnits(e.target.value)}
-                  className="h-9 w-auto min-w-[120px]"
+                  value={filterUnits || "__all__"}
+                  onValueChange={(v) => setFilterUnits(v === "__all__" ? "" : v)}
                 >
-                  <option value="">All</option>
-                  {units.map((u) => (
-                    <option key={u} value={u}>
-                      {u}
-                    </option>
-                  ))}
+                  <SelectTrigger id="filter-units" className="h-9 w-auto min-w-[120px]">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">All</SelectItem>
+                    {units.map((u) => (
+                      <SelectItem key={u} value={u}>
+                        {u}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </div>
-              <label
-                htmlFor="filter-anomalous"
-                className="flex items-center gap-2 cursor-pointer"
-              >
-                <input
+              <div className="flex items-center gap-2">
+                <Checkbox
                   id="filter-anomalous"
-                  type="checkbox"
                   checked={filterAnomalousOnly}
-                  onChange={(e) => setFilterAnomalousOnly(e.target.checked)}
-                  className="rounded border-input"
+                  onCheckedChange={(c) => setFilterAnomalousOnly(!!c)}
                 />
-                <span className="text-sm">Only anomalous</span>
-              </label>
-              <label
-                htmlFor="filter-recent"
-                className="flex items-center gap-2 cursor-pointer"
-              >
-                <input
+                <Label htmlFor="filter-anomalous" className="text-sm font-normal cursor-pointer">
+                  Only anomalous
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
                   id="filter-recent"
-                  type="checkbox"
                   checked={filterRecentOnly}
-                  onChange={(e) => setFilterRecentOnly(e.target.checked)}
-                  className="rounded border-input"
+                  onCheckedChange={(c) => setFilterRecentOnly(!!c)}
                 />
-                <span className="text-sm">Only channels with recent data</span>
-              </label>
+                <Label htmlFor="filter-recent" className="text-sm font-normal cursor-pointer">
+                  Only channels with recent data
+                </Label>
+              </div>
               {filterRecentOnly && (
                 <div className="flex items-center gap-2">
                   <Input
@@ -339,12 +355,9 @@ export default function SearchPage() {
         </Card>
 
         {favoriteError && (
-          <div
-            className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-            role="alert"
-          >
-            {favoriteError}
-          </div>
+          <Alert variant="destructive">
+            <AlertDescription>{favoriteError}</AlertDescription>
+          </Alert>
         )}
         {searched && (
           <Card>
@@ -353,9 +366,12 @@ export default function SearchPage() {
             </CardHeader>
             <CardContent>
               {error ? (
-                <p className="text-destructive">{error}</p>
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
               ) : results.length === 0 ? (
                 <EmptyState
+                  icon="search"
                   title="No results found"
                   description="Try a different search term or adjust your filters."
                 />
@@ -378,28 +394,32 @@ export default function SearchPage() {
                     {results.map((r) => (
                       <TableRow key={r.name}>
                         <TableCell className="w-8">
-                          <button
-                            type="button"
-                            onClick={() => toggleFavorite(r.name)}
-                            className="text-lg leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded"
-                            title={
-                              favorites.includes(r.name)
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={() => toggleFavorite(r.name)}
+                                className="text-lg leading-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded"
+                                aria-label={
+                                  favorites.includes(r.name)
+                                    ? `Remove ${r.name} from favorites`
+                                    : `Add ${r.name} to favorites`
+                                }
+                              >
+                                {favorites.includes(r.name) ? "★" : "☆"}
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              {favorites.includes(r.name)
                                 ? "Remove from favorites"
-                                : "Add to favorites"
-                            }
-                            aria-label={
-                              favorites.includes(r.name)
-                                ? `Remove ${r.name} from favorites`
-                                : `Add ${r.name} to favorites`
-                            }
-                          >
-                            {favorites.includes(r.name) ? "★" : "☆"}
-                          </button>
+                                : "Add to favorites"}
+                            </TooltipContent>
+                          </Tooltip>
                         </TableCell>
                         <TableCell>
                           <Link
                             href={`/telemetry/${encodeURIComponent(r.name)}`}
-                            className="font-medium text-primary hover:underline"
+                            className="font-medium text-primary hover:underline underline-offset-4"
                           >
                             {r.name}
                           </Link>

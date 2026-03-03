@@ -1,5 +1,6 @@
 import { WatchlistConfig } from "@/components/watchlist-config";
 import { RealtimeOverviewWrapper } from "@/components/realtime-overview-wrapper";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const API_URL =
   process.env.API_SERVER_URL ||
@@ -89,17 +90,18 @@ export default async function OverviewPage() {
 
   return (
     <div className="min-h-screen p-4 sm:p-6 lg:p-8">
-      <div className="max-w-6xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-8">
         {hasError && (
-          <div
-            className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-            role="alert"
-          >
-            Unable to load some data. The API may be unavailable. Check your connection and try again.
-          </div>
+          <Alert variant="destructive">
+            <AlertDescription>
+              Unable to load some data. The API may be unavailable. Check your connection and try again.
+            </AlertDescription>
+          </Alert>
         )}
-        <div className="flex items-center justify-between">
-          <h1 className="text-3xl font-bold">Operator Overview</h1>
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Operator Overview</h1>
+          </div>
           <WatchlistConfig />
         </div>
 

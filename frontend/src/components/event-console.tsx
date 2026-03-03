@@ -144,6 +144,7 @@ export function EventConsole({
         <CardContent>
           {totalCount === 0 ? (
             <EmptyState
+              icon="inbox"
               title="No active alerts"
               description="All systems are operating within normal parameters."
             />
@@ -181,7 +182,7 @@ export function EventConsole({
                                         ? `/telemetry/${encodeURIComponent(entry.name)}?source=${encodeURIComponent(sourceId)}`
                                         : `/telemetry/${encodeURIComponent(entry.name)}`
                                     }
-                                    className="font-medium text-sm hover:underline truncate flex-1 min-w-0"
+                                    className="font-medium text-sm text-primary hover:underline underline-offset-4 truncate flex-1 min-w-0"
                                   >
                                     {entry.name}
                                   </Link>
@@ -203,7 +204,7 @@ export function EventConsole({
                                     <span>z={entry.z_score.toFixed(2)}</span>
                                   )}
                                   {entry.status === "acked" && (
-                                    <span className="text-amber-600">Acked</span>
+                                    <span className="text-amber-500 dark:text-amber-400">Acked</span>
                                   )}
                                 </div>
                                 {canAck && (

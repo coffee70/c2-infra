@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Nav } from "@/components/nav";
 import { KeyboardShortcutsHandler } from "@/components/keyboard-shortcuts-handler";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -25,7 +26,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
@@ -37,11 +38,13 @@ export default function RootLayout({
         <a href="#main-content" className="sr-only">
           Skip to main content
         </a>
-        <Nav />
-        <KeyboardShortcutsHandler />
-        <main id="main-content" tabIndex={-1}>
-          {children}
-        </main>
+        <TooltipProvider>
+          <Nav />
+          <KeyboardShortcutsHandler />
+          <main id="main-content" tabIndex={-1}>
+            {children}
+          </main>
+        </TooltipProvider>
       </body>
     </html>
   );

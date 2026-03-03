@@ -65,7 +65,7 @@ export function SimilarTelemetryCard({ channels }: SimilarTelemetryCardProps) {
             <li key={r.name}>
               <Link
                 href={`/telemetry/${encodeURIComponent(r.name)}`}
-                className="block p-2 rounded-md border hover:bg-accent transition-colors duration-150 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="block p-2 rounded-md border hover:bg-accent transition-colors duration-200 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 text-primary hover:underline underline-offset-4"
               >
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span className="font-medium">{r.name}</span>

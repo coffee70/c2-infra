@@ -356,7 +356,7 @@ class TelemetryService:
             return "no recent data"
         return None
 
-    def get_explanation(self, name: str) -> ExplainResponse:
+    def get_explanation(self, name: str, skip_llm: bool = False) -> ExplainResponse:
         """Build full explanation with stats, z-score, and LLM response."""
         meta = self.get_by_name(name)
         if not meta:
@@ -388,38 +388,43 @@ class TelemetryService:
             recent_value, z_score, red_low, red_high, std_dev
         )
 
-        prompt = (
-            f"Telemetry Name: {meta.name}\n"
-            f"Units: {meta.units}\n"
-            f"Description: {meta.description or 'N/A'}\n"
-            f"Recent Value: {recent_value}\n"
-            f"Mean: {mean}\n"
-            f"Std Dev: {std_dev}\n"
-            f"P5: {float(stats_row.p5)}\n"
-            f"P95: {float(stats_row.p95)}\n"
-            f"Z-Score: {z_score if z_score is not None else 'N/A'}\n"
-            f"Is Anomalous: {is_anomalous}\n\n"
-            "Provide a concise explanation in two parts:\n"
-            "1. WHAT THIS MEANS: Start with 1-2 sentences summarizing what this telemetry represents and whether the current value is concerning. Be direct and actionable for ops.\n"
-            "2. Then add any additional context or detail if helpful."
-        )
-
-        llm_explanation = self._llm.generate(prompt)
-
-        # Extract "What this means" as first 1-2 sentences (before first double newline or first 2 sentences)
-        what_this_means = llm_explanation
-        if "\n\n" in llm_explanation:
-            what_this_means = llm_explanation.split("\n\n")[0].strip()
+        if skip_llm:
+            llm_explanation = ""
+            what_this_means = ""
+            related: list = []
         else:
-            sentences = [s.strip() for s in llm_explanation.replace("\n", " ").split(". ") if s.strip()]
-            if len(sentences) >= 2:
-                s = ". ".join(sentences[:2])
-                what_this_means = s if s.endswith(".") else s + "."
-            elif sentences:
-                s = sentences[0]
-                what_this_means = s if s.endswith(".") else s + "."
+            prompt = (
+                f"Telemetry Name: {meta.name}\n"
+                f"Units: {meta.units}\n"
+                f"Description: {meta.description or 'N/A'}\n"
+                f"Recent Value: {recent_value}\n"
+                f"Mean: {mean}\n"
+                f"Std Dev: {std_dev}\n"
+                f"P5: {float(stats_row.p5)}\n"
+                f"P95: {float(stats_row.p95)}\n"
+                f"Z-Score: {z_score if z_score is not None else 'N/A'}\n"
+                f"Is Anomalous: {is_anomalous}\n\n"
+                "Provide a concise explanation in two parts:\n"
+                "1. WHAT THIS MEANS: Start with 1-2 sentences summarizing what this telemetry represents and whether the current value is concerning. Be direct and actionable for ops.\n"
+                "2. Then add any additional context or detail if helpful."
+            )
 
-        related = self.get_related_channels(name, limit=5)
+            llm_explanation = self._llm.generate(prompt)
+
+            # Extract "What this means" as first 1-2 sentences (before first double newline or first 2 sentences)
+            what_this_means = llm_explanation
+            if "\n\n" in llm_explanation:
+                what_this_means = llm_explanation.split("\n\n")[0].strip()
+            else:
+                sentences = [s.strip() for s in llm_explanation.replace("\n", " ").split(". ") if s.strip()]
+                if len(sentences) >= 2:
+                    s = ". ".join(sentences[:2])
+                    what_this_means = s if s.endswith(".") else s + "."
+                elif sentences:
+                    s = sentences[0]
+                    what_this_means = s if s.endswith(".") else s + "."
+
+            related = self.get_related_channels(name, limit=5)
         n_samples = getattr(stats_row, "n_samples", 0)
         confidence = self._compute_confidence_indicator(n_samples, last_timestamp)
 

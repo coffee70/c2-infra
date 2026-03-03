@@ -6,19 +6,21 @@ from typing import Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.telemetry import TelemetryMetadata
+from app.models.telemetry import TelemetryData, TelemetryMetadata, TelemetryStatistics
 from app.models.schemas import (
     AnomaliesResponse,
     DataPoint,
     ExplainResponse,
+    RecentDataPoint,
+    RelatedChannel,
+    StatisticsResponse,
     OverviewChannel,
     OverviewResponse,
-    RecentDataPoint,
     RecentDataResponse,
     RecomputeStatsResponse,
     SearchResponse,
@@ -43,7 +45,7 @@ from app.services.overview_service import (
 from app.services.realtime_service import get_telemetry_sources
 from app.utils.subsystem import infer_subsystem
 from app.services.statistics_service import StatisticsService
-from app.services.telemetry_service import TelemetryService
+from app.services.telemetry_service import TelemetryService, _compute_state
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -240,20 +242,114 @@ def search(
     return SearchResponse(results=results)
 
 
+def _get_explanation_summary_db_only(db: Session, name: str) -> ExplainResponse:
+    """Build explain response using only DB—no embedding/LLM cold start."""
+    meta = db.execute(select(TelemetryMetadata).where(TelemetryMetadata.name == name)).scalars().first()
+    if not meta:
+        raise ValueError(f"Telemetry not found: {name}")
+
+    stats_row = db.get(TelemetryStatistics, meta.id)
+    if not stats_row:
+        raise ValueError(f"Statistics not computed for: {name}")
+
+    rows = _get_recent_values_db_only(db, name, limit=1)
+    recent_value: Optional[float] = float(rows[0][1]) if rows else None
+    last_timestamp: Optional[str] = rows[0][0].isoformat() if rows else None
+
+    mean = float(stats_row.mean)
+    std_dev = float(stats_row.std_dev)
+    z_score: Optional[float] = None
+    is_anomalous = False
+
+    if recent_value is not None and std_dev > 0:
+        z_score = (recent_value - mean) / std_dev
+        is_anomalous = abs(z_score) > 2
+
+    if recent_value is None:
+        recent_value = mean
+
+    red_low = float(meta.red_low) if meta.red_low is not None else None
+    red_high = float(meta.red_high) if meta.red_high is not None else None
+    state, state_reason = _compute_state(recent_value, z_score, red_low, red_high, std_dev)
+
+    return ExplainResponse(
+        name=meta.name,
+        description=meta.description,
+        units=meta.units,
+        statistics=StatisticsResponse(
+            mean=mean,
+            std_dev=std_dev,
+            min_value=float(stats_row.min_value),
+            max_value=float(stats_row.max_value),
+            p5=float(stats_row.p5),
+            p50=float(stats_row.p50),
+            p95=float(stats_row.p95),
+            n_samples=getattr(stats_row, "n_samples", 0),
+        ),
+        recent_value=recent_value,
+        z_score=z_score,
+        is_anomalous=is_anomalous,
+        state=state,
+        state_reason=state_reason,
+        last_timestamp=last_timestamp,
+        red_low=red_low,
+        red_high=red_high,
+        what_this_means="",
+        what_to_check_next=[],
+        confidence_indicator=None,
+        llm_explanation="",
+    )
+
+
+@router.get("/{name}/summary", response_model=ExplainResponse)
+def get_summary(
+    name: str,
+    db: Session = Depends(get_db),
+):
+    """Fast summary for initial page load—DB only, no embedding/LLM."""
+    name = unquote(name)
+    try:
+        return _get_explanation_summary_db_only(db, name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.get("/{name}/explain", response_model=ExplainResponse)
 def explain(
     name: str,
+    skip_llm: bool = False,
     db: Session = Depends(get_db),
     embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
     llm: object = Depends(get_llm_provider),
 ):
-    """Get explanation for a telemetry point."""
+    """Get explanation for a telemetry point. Use skip_llm=1 for fast initial load."""
     name = unquote(name)
     service = TelemetryService(db, embedding, llm)
     try:
-        return service.get_explanation(name)
+        return service.get_explanation(name, skip_llm=skip_llm)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+def _get_recent_values_db_only(
+    db: Session, name: str, limit: int = 100, since=None, until=None
+) -> list[tuple[datetime, float]]:
+    """Get recent values using only DB—no embedding/LLM cold start."""
+    meta = db.execute(select(TelemetryMetadata).where(TelemetryMetadata.name == name)).scalars().first()
+    if not meta:
+        raise ValueError(f"Telemetry not found: {name}")
+    stmt = (
+        select(TelemetryData.timestamp, TelemetryData.value)
+        .where(TelemetryData.telemetry_id == meta.id)
+        .order_by(desc(TelemetryData.timestamp))
+        .limit(limit)
+    )
+    if since is not None:
+        stmt = stmt.where(TelemetryData.timestamp >= since)
+    if until is not None:
+        stmt = stmt.where(TelemetryData.timestamp <= until)
+    rows = db.execute(stmt).fetchall()
+    return [(r[0], float(r[1])) for r in rows]
 
 
 @router.get("/{name}/recent", response_model=RecentDataResponse)
@@ -263,8 +359,6 @@ def get_recent(
     since: Optional[str] = None,
     until: Optional[str] = None,
     db: Session = Depends(get_db),
-    embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
-    llm: object = Depends(get_llm_provider),
 ):
     """Get most recent data points for charting. Use since/until (ISO8601) for time-range filter."""
     name = unquote(name)
@@ -280,9 +374,8 @@ def get_recent(
             until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid until format, use ISO8601")
-    service = TelemetryService(db, embedding, llm)
     try:
-        rows = service.get_recent_values(name, limit=limit, since=since_dt, until=until_dt)
+        rows = _get_recent_values_db_only(db, name, limit=limit, since=since_dt, until=until_dt)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return RecentDataResponse(
