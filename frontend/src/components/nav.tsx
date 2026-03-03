@@ -19,6 +19,12 @@ export function Nav() {
         >
           Search
         </Link>
+        <Link
+          href="/simulator"
+          className="text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded"
+        >
+          Simulator
+        </Link>
         <button
           type="button"
           onClick={() => window.dispatchEvent(new CustomEvent("show-keyboard-shortcuts"))}

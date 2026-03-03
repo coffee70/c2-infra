@@ -1,6 +1,9 @@
 """Database models."""
 
 from app.models.telemetry import (
+    TelemetryAlert,
+    TelemetryAlertNote,
+    TelemetryCurrent,
     TelemetryData,
     TelemetryMetadata,
     TelemetryStatistics,
@@ -12,4 +15,7 @@ __all__ = [
     "TelemetryData",
     "TelemetryStatistics",
     "WatchlistEntry",
+    "TelemetryCurrent",
+    "TelemetryAlert",
+    "TelemetryAlertNote",
 ]

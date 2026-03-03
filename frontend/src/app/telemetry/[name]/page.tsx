@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { TrendChartAnalysis } from "@/components/trend-chart-analysis";
 import { TelemetryDetailActions } from "@/components/telemetry-detail-actions";
-import { CurrentValueBlock } from "@/components/current-value-block";
+import { TelemetryDetailLive } from "@/components/telemetry-detail-live";
 import { SimilarTelemetryCard } from "@/components/similar-telemetry-card";
 import { TelemetryDetailHeader } from "@/components/telemetry-detail-header";
 import { formatSmartValue } from "@/lib/format-value";
@@ -88,10 +88,14 @@ async function fetchRecent(name: string): Promise<RecentPoint[]> {
 
 export default async function TelemetryDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ name: string }>;
+  searchParams: Promise<{ source?: string }>;
 }) {
   const { name } = await params;
+  const { source } = await searchParams;
+  const sourceId = source ?? "default";
   const decodedName = decodeURIComponent(name);
 
   const [explain, recentData] = await Promise.all([
@@ -127,14 +131,16 @@ export default async function TelemetryDetailPage({
           lastTimestamp={explain.last_timestamp}
         />
 
-        <CurrentValueBlock
-          value={explain.recent_value}
-          units={explain.units}
-          lastTimestamp={explain.last_timestamp}
-          p50={explain.statistics.p50}
-          state={explain.state}
-          stateReason={explain.state_reason}
-          zScore={explain.z_score}
+        <TelemetryDetailLive
+          channelName={explain.name}
+          sourceId={sourceId}
+          initialValue={explain.recent_value}
+          initialUnits={explain.units}
+          initialLastTimestamp={explain.last_timestamp}
+          initialP50={explain.statistics.p50}
+          initialState={explain.state}
+          initialStateReason={explain.state_reason}
+          initialZScore={explain.z_score}
           recentData={recentData}
         />
 
@@ -155,6 +161,7 @@ export default async function TelemetryDetailPage({
           <CardContent>
             <TrendChartAnalysis
               channelName={decodedName}
+              sourceId={sourceId}
               units={explain.units}
               bounds={{
                 p5: explain.statistics.p5,

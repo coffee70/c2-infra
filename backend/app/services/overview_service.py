@@ -10,6 +10,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.models.telemetry import (
+    TelemetryCurrent,
     TelemetryData,
     TelemetryMetadata,
     TelemetryStatistics,
@@ -102,8 +103,8 @@ def _get_recent_for_sparkline(db: Session, telemetry_id, limit: int = SPARKLINE_
     ]
 
 
-def get_overview(db: Session) -> list[dict]:
-    """Get overview data for all watchlist channels."""
+def get_overview(db: Session, source_id: str = "default") -> list[dict]:
+    """Get overview data for all watchlist channels, optionally filtered by source."""
     watchlist = get_watchlist(db)
     if not watchlist:
         return []
@@ -113,7 +114,7 @@ def get_overview(db: Session) -> list[dict]:
         name = entry["name"]
         meta = db.execute(
             select(TelemetryMetadata).where(TelemetryMetadata.name == name)
-        ).scalar_one_or_none()
+        ).scalars().first()
         if not meta:
             continue
 
@@ -121,11 +122,15 @@ def get_overview(db: Session) -> list[dict]:
         if not stats:
             continue
 
-        latest = _get_latest_value_and_ts(db, meta.id)
-        if not latest:
-            continue
-
-        value, ts = latest
+        # Prefer TelemetryCurrent for the source; fall back to TelemetryData
+        current = db.get(TelemetryCurrent, (source_id, meta.id))
+        if current:
+            value, ts = float(current.value), current.generation_time
+        else:
+            latest = _get_latest_value_and_ts(db, meta.id)
+            if not latest:
+                continue
+            value, ts = latest
         std_dev = float(stats.std_dev)
         mean = float(stats.mean)
         z_score = (value - mean) / std_dev if std_dev > 0 else None
@@ -151,8 +156,8 @@ def get_overview(db: Session) -> list[dict]:
     return result
 
 
-def get_anomalies(db: Session) -> dict[str, list[dict]]:
-    """Get all anomalous channels grouped by subsystem."""
+def get_anomalies(db: Session, source_id: str = "default") -> dict[str, list[dict]]:
+    """Get anomalous channels grouped by subsystem, optionally filtered by source."""
     stmt = select(TelemetryMetadata, TelemetryStatistics).join(
         TelemetryStatistics,
         TelemetryMetadata.id == TelemetryStatistics.telemetry_id,
@@ -162,11 +167,14 @@ def get_anomalies(db: Session) -> dict[str, list[dict]]:
     anomalies_by_subsystem: dict[str, list[dict]] = defaultdict(list)
 
     for meta, stats in rows:
-        latest = _get_latest_value_and_ts(db, meta.id)
-        if not latest:
-            continue
-
-        value, ts = latest
+        current = db.get(TelemetryCurrent, (source_id, meta.id))
+        if current:
+            value, ts = float(current.value), current.generation_time
+        else:
+            latest = _get_latest_value_and_ts(db, meta.id)
+            if not latest:
+                continue
+            value, ts = latest
         std_dev = float(stats.std_dev)
         mean = float(stats.mean)
         z_score = (value - mean) / std_dev if std_dev > 0 else None

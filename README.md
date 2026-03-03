@@ -60,6 +60,23 @@ curl -X POST http://localhost:8000/telemetry/recompute-stats
 3. **Search**: Find telemetry by semantic search (e.g., "voltage", "temperature", "speed")
 4. Click a channel to view stats, trend chart, z-score, and LLM explanation
 
+### 5. Realtime streaming (optional)
+
+Start the mock vehicle streamer to see live telemetry and alerts:
+
+```bash
+./scripts/mock_vehicle_streamer.sh --scenario nominal --duration 120
+```
+
+Or with anomalies:
+
+```bash
+./scripts/mock_vehicle_streamer.sh --scenario power_sag --speed 10
+./scripts/mock_vehicle_streamer.sh --scenario thermal_runaway --duration 90
+```
+
+The Overview page will show live updates (green "Live" badge when connected). The Events Console supports Ack and Resolve for alerts.
+
 ## API Reference
 
 ### POST /telemetry/schema
@@ -76,6 +93,24 @@ Response:
 ```json
 {"status": "created", "telemetry_id": "<uuid>"}
 ```
+
+### POST /telemetry/realtime/ingest
+
+Ingest realtime measurement events (batch).
+
+```bash
+curl -X POST http://localhost:8000/telemetry/realtime/ingest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "events": [
+      {"source_id": "vehicle1", "channel_name": "PWR_BUS_A_VOLT", "generation_time": "2025-03-02T12:00:00Z", "value": 28.3}
+    ]
+  }'
+```
+
+### WebSocket /telemetry/realtime/ws
+
+Subscribe to live telemetry and alerts. Client messages: `subscribe_watchlist`, `subscribe_alerts`, `ack_alert`, `resolve_alert`.
 
 ### POST /telemetry/data
 

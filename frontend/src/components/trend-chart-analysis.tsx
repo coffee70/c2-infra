@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 import {
   LineChart,
   Line,
@@ -26,6 +27,8 @@ const API_URL =
 interface DataPoint {
   timestamp: string;
   value: number;
+  /** When we received this point (from live stream). Used for gap detection. */
+  receptionTime?: string;
 }
 
 interface Bounds {
@@ -106,11 +109,13 @@ function downsample<T extends { timestamp: string; value: number }>(
 
 export function TrendChartAnalysis({
   channelName,
+  sourceId = "default",
   units,
   bounds,
   lastTimestamp,
 }: {
   channelName: string;
+  sourceId?: string;
   units?: string | null;
   bounds?: Bounds;
   lastTimestamp?: string | null;
@@ -190,7 +195,14 @@ export function TrendChartAnalysis({
         : Promise.resolve([]),
     ])
       .then(([main, compare]) => {
-        setData(main);
+        setData((prev) => {
+          const merged = new Map<string, DataPoint>();
+          [...main, ...prev].forEach((p) => merged.set(p.timestamp, p));
+          return Array.from(merged.values()).sort(
+            (a, b) =>
+              new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
+        });
         setCompareData(compare);
         setBrushSelection(null);
         setBrushRefetch(null);
@@ -206,6 +218,39 @@ export function TrendChartAnalysis({
       .catch(() => setChannelList([]));
   }, []);
 
+  useEffect(() => {
+    const client = new RealtimeWsClient();
+    client.subscribe((msg) => {
+      if (msg.type === "telemetry_update" && msg.channel?.name === channelName) {
+        const ch = msg.channel;
+        const newPoint: DataPoint = {
+          timestamp: ch.generation_time,
+          value: ch.current_value,
+          receptionTime: ch.reception_time,
+        };
+        setData((prev) => {
+          const merged = [...prev];
+          const existingIdx = merged.findIndex(
+            (p) => p.timestamp === newPoint.timestamp
+          );
+          if (existingIdx >= 0) {
+            merged[existingIdx] = newPoint;
+          } else {
+            merged.push(newPoint);
+            merged.sort(
+              (a, b) =>
+                new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
+          }
+          return merged.slice(-fetchLimit);
+        });
+      }
+    });
+    client.connect();
+    client.subscribeWatchlist([channelName], sourceId);
+    return () => client.disconnect();
+  }, [channelName, sourceId, fetchLimit]);
+
   const timeOpts = useMemo(
     () => ({
       timeZone: useUTC ? "UTC" : undefined,
@@ -219,7 +264,10 @@ export function TrendChartAnalysis({
   );
 
   const chartData = useMemo(() => {
-    const merged = new Map<string, { timestamp: string; value: number; compareValue?: number }>();
+    const merged = new Map<
+      string,
+      { timestamp: string; value: number; compareValue?: number; receptionTime?: string }
+    >();
     data.forEach((d) => merged.set(d.timestamp, { ...d }));
     if (compareData.length > 0) {
       compareData.forEach((d) => {
@@ -294,8 +342,15 @@ export function TrendChartAnalysis({
   const sampleInterval = useMemo(() => medianInterval(data), [data]);
   const lastPoint = displayData.length > 0 ? displayData[displayData.length - 1] : null;
   const now = Date.now();
-  const lastTs = lastTimestamp ? new Date(lastTimestamp).getTime() : (lastPoint ? new Date(lastPoint.timestamp).getTime() : null);
-  const gapMs = lastTs != null ? now - lastTs : null;
+  const lastReceivedAt =
+    lastPoint?.receptionTime
+      ? new Date(lastPoint.receptionTime).getTime()
+      : lastPoint
+        ? new Date(lastPoint.timestamp).getTime()
+        : lastTimestamp
+          ? new Date(lastTimestamp).getTime()
+          : null;
+  const gapMs = lastReceivedAt != null ? now - lastReceivedAt : null;
   const possibleGap = sampleInterval != null && gapMs != null && gapMs > 2 * sampleInterval;
 
   const tooltipContent = useCallback(

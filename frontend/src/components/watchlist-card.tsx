@@ -41,6 +41,7 @@ interface WatchlistCardProps {
   state: string;
   stateReason?: string | null;
   sparklineData: { timestamp: string; value: number }[];
+  sourceId?: string;
 }
 
 export function WatchlistCard({
@@ -51,6 +52,7 @@ export function WatchlistCard({
   state,
   stateReason,
   sparklineData,
+  sourceId,
 }: WatchlistCardProps) {
   const stale = isStale(lastTimestamp);
   const stateVariant =
@@ -64,9 +66,14 @@ export function WatchlistCard({
         ? "Statistical anomaly (out of family)"
         : undefined;
 
+  const href =
+    sourceId && sourceId !== "default"
+      ? `/telemetry/${encodeURIComponent(name)}?source=${encodeURIComponent(sourceId)}`
+      : `/telemetry/${encodeURIComponent(name)}`;
+
   return (
     <Link
-      href={`/telemetry/${encodeURIComponent(name)}`}
+      href={href}
       className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-lg"
     >
       <Card

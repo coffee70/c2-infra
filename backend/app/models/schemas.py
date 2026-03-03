@@ -205,3 +205,167 @@ class TelemetryListResponse(BaseModel):
     """Response for GET /telemetry/list."""
 
     names: list[str]
+
+
+# --- Realtime: canonical measurement event (ingest) ---
+class MeasurementEvent(BaseModel):
+    """Canonical internal measurement event from realtime ingest."""
+
+    source_id: str = "default"
+    channel_name: str
+    generation_time: str  # RFC3339
+    reception_time: Optional[str] = None  # RFC3339; server assigns if omitted
+    value: float
+    quality: str = "valid"  # valid | suspect | invalid
+    sequence: Optional[int] = None
+    tags: Optional[dict[str, Any]] = None
+
+
+class MeasurementEventBatch(BaseModel):
+    """Batch of measurement events for POST /telemetry/realtime/ingest."""
+
+    events: list[MeasurementEvent]
+
+
+# --- Realtime: telemetry update (to UI) ---
+class RealtimeChannelUpdate(BaseModel):
+    """Single channel update pushed to WebSocket clients."""
+
+    source_id: str = "default"
+    name: str
+    units: Optional[str] = None
+    description: Optional[str] = None
+    subsystem_tag: str
+    current_value: float
+    generation_time: str
+    reception_time: str
+    state: str  # normal, caution, warning
+    state_reason: Optional[str] = None
+    z_score: Optional[float] = None
+    quality: str = "valid"
+    sparkline_data: list[RecentDataPoint] = []
+
+
+# --- Realtime: alert lifecycle ---
+class TelemetryAlertSchema(BaseModel):
+    """Alert as sent over WebSocket and stored."""
+
+    id: str
+    source_id: str = "default"
+    channel_name: str
+    telemetry_id: str
+    subsystem: str
+    units: Optional[str] = None
+    severity: str  # caution, warning
+    reason: Optional[str] = None  # out_of_limits, out_of_family
+    status: str  # new, acked, resolved
+    opened_at: str
+    opened_reception_at: str
+    last_update_at: str
+    current_value: float
+    red_low: Optional[float] = None
+    red_high: Optional[float] = None
+    z_score: Optional[float] = None
+    acked_at: Optional[str] = None
+    acked_by: Optional[str] = None
+    cleared_at: Optional[str] = None
+    resolved_at: Optional[str] = None
+    resolved_by: Optional[str] = None
+    resolution_text: Optional[str] = None
+    resolution_code: Optional[str] = None
+
+
+class AlertEventMessage(BaseModel):
+    """Server -> client: alert lifecycle event."""
+
+    type: str  # opened, updated, cleared, acked, resolved
+    alert: TelemetryAlertSchema
+
+
+# --- Realtime: WebSocket client -> server messages ---
+class WsHello(BaseModel):
+    """Client hello."""
+
+    type: str = "hello"
+    client_version: Optional[str] = None
+    requested_features: Optional[list[str]] = None
+
+
+class WsSubscribeWatchlist(BaseModel):
+    """Subscribe to watchlist channels."""
+
+    type: str = "subscribe_watchlist"
+    channels: list[str]
+
+
+class WsSubscribeChannel(BaseModel):
+    """Subscribe to single channel for detail view."""
+
+    type: str = "subscribe_channel"
+    name: str
+    window_points: Optional[int] = 100
+
+
+class WsSubscribeAlerts(BaseModel):
+    """Subscribe to alert stream."""
+
+    type: str = "subscribe_alerts"
+    subsystems: Optional[list[str]] = None
+    severities: Optional[list[str]] = None
+
+
+class WsAckAlert(BaseModel):
+    """Ack an alert."""
+
+    type: str = "ack_alert"
+    alert_id: str
+
+
+class WsResolveAlert(BaseModel):
+    """Resolve an alert with optional resolution text."""
+
+    type: str = "resolve_alert"
+    alert_id: str
+    resolution_text: str = ""
+    resolution_code: Optional[str] = None
+
+
+# --- Realtime: WebSocket server -> client messages ---
+class WsSnapshotWatchlist(BaseModel):
+    """Initial snapshot of watchlist channels."""
+
+    type: str = "snapshot_watchlist"
+    channels: list[RealtimeChannelUpdate]
+
+
+class WsTelemetryUpdate(BaseModel):
+    """Incremental telemetry update."""
+
+    type: str = "telemetry_update"
+    channel: RealtimeChannelUpdate
+
+
+class WsSnapshotAlerts(BaseModel):
+    """Initial snapshot of active alerts."""
+
+    type: str = "snapshot_alerts"
+    active: list[TelemetryAlertSchema]
+
+
+class WsAlertEvent(BaseModel):
+    """Alert lifecycle event."""
+
+    type: str = "alert_event"
+    event_type: str  # opened, updated, cleared, acked, resolved
+    alert: TelemetryAlertSchema
+
+
+class WsFeedStatus(BaseModel):
+    """Feed health status (best-effort in dev/demo)."""
+
+    type: str = "feed_status"
+    source_id: str
+    connected: bool
+    last_reception_time: Optional[str] = None
+    approx_rate_hz: Optional[float] = None
+    drop_count: Optional[int] = None

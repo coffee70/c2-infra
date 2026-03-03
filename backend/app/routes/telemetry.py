@@ -40,6 +40,7 @@ from app.services.overview_service import (
     get_watchlist,
     remove_from_watchlist,
 )
+from app.services.realtime_service import get_telemetry_sources
 from app.utils.subsystem import infer_subsystem
 from app.services.statistics_service import StatisticsService
 from app.services.telemetry_service import TelemetryService
@@ -130,17 +131,29 @@ def recompute_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/overview", response_model=OverviewResponse)
-def overview(db: Session = Depends(get_db)):
-    """Get overview data for watchlist channels."""
-    channels = get_overview(db)
+def overview(
+    source_id: str = "default",
+    db: Session = Depends(get_db),
+):
+    """Get overview data for watchlist channels, optionally filtered by source."""
+    channels = get_overview(db, source_id=source_id)
     return OverviewResponse(channels=[OverviewChannel(**c) for c in channels])
 
 
 @router.get("/anomalies", response_model=AnomaliesResponse)
-def anomalies(db: Session = Depends(get_db)):
-    """Get all anomalous channels grouped by subsystem."""
-    data = get_anomalies(db)
+def anomalies(
+    source_id: str = "default",
+    db: Session = Depends(get_db),
+):
+    """Get anomalous channels grouped by subsystem, optionally filtered by source."""
+    data = get_anomalies(db, source_id=source_id)
     return AnomaliesResponse(**data)
+
+
+@router.get("/sources")
+def list_sources(db: Session = Depends(get_db)):
+    """List registered telemetry stream sources."""
+    return get_telemetry_sources(db)
 
 
 @router.get("/watchlist", response_model=WatchlistResponse)

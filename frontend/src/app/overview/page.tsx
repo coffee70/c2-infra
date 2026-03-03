@@ -1,8 +1,5 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { WatchlistCard } from "@/components/watchlist-card";
-import { AnomaliesPanel } from "@/components/anomalies-panel";
 import { WatchlistConfig } from "@/components/watchlist-config";
-import { EmptyState } from "@/components/empty-state";
+import { RealtimeOverviewWrapper } from "@/components/realtime-overview-wrapper";
 
 const API_URL =
   process.env.API_SERVER_URL ||
@@ -30,9 +27,23 @@ interface AnomaliesData {
   other?: { name: string; units?: string; current_value: number; last_timestamp: string; z_score?: number; state_reason?: string }[];
 }
 
-async function fetchOverview(): Promise<{ channels: OverviewChannel[]; error: boolean }> {
+async function fetchSources(): Promise<{ id: string; name: string; description?: string | null }[]> {
   try {
-    const res = await fetch(`${API_URL}/telemetry/overview`, { cache: "no-store" });
+    const res = await fetch(`${API_URL}/telemetry/sources`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+async function fetchOverview(sourceId: string = "default"): Promise<{ channels: OverviewChannel[]; error: boolean }> {
+  try {
+    const res = await fetch(
+      `${API_URL}/telemetry/overview?source_id=${encodeURIComponent(sourceId)}`,
+      { cache: "no-store" }
+    );
     if (!res.ok) return { channels: [], error: true };
     const data = await res.json();
     return { channels: data.channels || [], error: false };
@@ -41,9 +52,12 @@ async function fetchOverview(): Promise<{ channels: OverviewChannel[]; error: bo
   }
 }
 
-async function fetchAnomalies(): Promise<{ data: AnomaliesData; error: boolean }> {
+async function fetchAnomalies(sourceId: string = "default"): Promise<{ data: AnomaliesData; error: boolean }> {
   try {
-    const res = await fetch(`${API_URL}/telemetry/anomalies`, { cache: "no-store" });
+    const res = await fetch(
+      `${API_URL}/telemetry/anomalies?source_id=${encodeURIComponent(sourceId)}`,
+      { cache: "no-store" }
+    );
     if (!res.ok) return { data: { power: [], thermal: [], adcs: [], comms: [] }, error: true };
     const data = await res.json();
     return {
@@ -61,10 +75,13 @@ async function fetchAnomalies(): Promise<{ data: AnomaliesData; error: boolean }
   }
 }
 
+const DEFAULT_SOURCE_ID = "simulator";
+
 export default async function OverviewPage() {
-  const [overviewResult, anomaliesResult] = await Promise.all([
-    fetchOverview(),
-    fetchAnomalies(),
+  const [sources, overviewResult, anomaliesResult] = await Promise.all([
+    fetchSources(),
+    fetchOverview(DEFAULT_SOURCE_ID),
+    fetchAnomalies(DEFAULT_SOURCE_ID),
   ]);
   const channels = overviewResult.channels;
   const anomalies = anomaliesResult.data;
@@ -86,50 +103,13 @@ export default async function OverviewPage() {
           <WatchlistConfig />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Watchlist / Console</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  Key channels: power, thermal, ADCS, comms
-                </p>
-              </CardHeader>
-              <CardContent>
-                {channels.length === 0 ? (
-                  <EmptyState
-                    title="No channels in watchlist"
-                    description="Configure your watchlist to see key metrics here."
-                  />
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {channels.map((ch) => (
-                      <WatchlistCard
-                        key={ch.name}
-                        name={ch.name}
-                        units={ch.units}
-                        currentValue={ch.current_value}
-                        lastTimestamp={ch.last_timestamp}
-                        state={ch.state}
-                        stateReason={ch.state_reason}
-                        sparklineData={ch.sparkline_data}
-                      />
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-          <div>
-            <AnomaliesPanel
-              power={anomalies.power}
-              thermal={anomalies.thermal}
-              adcs={anomalies.adcs}
-              comms={anomalies.comms}
-              other={anomalies.other}
-            />
-          </div>
-        </div>
+        <RealtimeOverviewWrapper
+          initialChannels={channels}
+          initialAnomalies={anomalies}
+          hasError={hasError}
+          sources={sources}
+          initialSourceId={DEFAULT_SOURCE_ID}
+        />
       </div>
     </div>
   );
