@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CurrentValueBlock } from "@/components/current-value-block";
+import { Badge } from "@/components/ui/badge";
 import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 
 const LIVE_STALE_MS = 15000;
@@ -76,10 +77,13 @@ export function TelemetryDetailLive({
   return (
     <div className="relative">
       {live && (
-        <span className="absolute top-2 right-2 inline-flex items-center gap-1.5 rounded-full bg-green-500/20 dark:bg-green-500/30 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400 animate-pulse" />
+        <Badge
+          variant="success"
+          className="absolute top-2 right-2 gap-1.5"
+        >
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse opacity-80" />
           Live
-        </span>
+        </Badge>
       )}
       <CurrentValueBlock
         value={value}

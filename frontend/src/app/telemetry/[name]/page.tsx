@@ -15,6 +15,13 @@ import { TelemetryDetailLive } from "@/components/telemetry-detail-live";
 import { TelemetryDetailHeader } from "@/components/telemetry-detail-header";
 import { ExplanationBlock } from "@/components/explanation-block";
 import { formatSmartValue } from "@/lib/format-value";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Separator } from "@/components/ui/separator";
+import { ChevronDownIcon } from "lucide-react";
 
 // Server-side: use API_SERVER_URL (backend container hostname in Docker)
 // Client-side fallback: NEXT_PUBLIC_API_URL or localhost
@@ -232,7 +239,8 @@ export default async function TelemetryDetailPage({
                 </dd>
               </div>
             </dl>
-            <div className="border-t pt-3 space-y-1.5 text-sm text-muted-foreground">
+            <Separator className="my-3" />
+            <div className="space-y-1.5 text-sm text-muted-foreground">
               <p>
                 5% of the time it&apos;s below{" "}
                 {formatSmartValue(explain.statistics.p5, explain.units)}
@@ -246,23 +254,26 @@ export default async function TelemetryDetailPage({
                 {formatSmartValue(explain.statistics.p95, explain.units)}
               </p>
             </div>
-            <details className="group">
-              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+            <Collapsible>
+              <CollapsibleTrigger className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer data-[state=open]:[&_svg]:rotate-180">
                 Mean, Std Dev
-              </summary>
-              <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <dt className="text-xs text-muted-foreground">Mean</dt>
-                  <dd>{formatSmartValue(explain.statistics.mean, explain.units)}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Std Dev</dt>
-                  <dd>
-                    {formatSmartValue(explain.statistics.std_dev, explain.units)}
-                  </dd>
-                </div>
-              </dl>
-            </details>
+                <ChevronDownIcon className="size-3.5 transition-transform duration-200" />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Mean</dt>
+                    <dd>{formatSmartValue(explain.statistics.mean, explain.units)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Std Dev</dt>
+                    <dd>
+                      {formatSmartValue(explain.statistics.std_dev, explain.units)}
+                    </dd>
+                  </div>
+                </dl>
+              </CollapsibleContent>
+            </Collapsible>
           </CardContent>
         </Card>
       </div>

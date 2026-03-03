@@ -21,7 +21,7 @@ import argparse
 import random
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 try:
@@ -106,12 +106,58 @@ def get_rate(name: str) -> float:
     return RATES_HZ.get(get_subsystem(name), 0.5)
 
 
+def backfill_historical(
+    base_url: str,
+    minutes: int,
+    channels: dict[str, tuple[float, float]],
+    anomaly_frac: float = 0.02,
+) -> None:
+    """Seed recent history with synthetic data so charts show a full time range."""
+    data_url = f"{base_url.rstrip('/')}/telemetry/data"
+    end_time = datetime.now(timezone.utc)
+    start_time = end_time - timedelta(minutes=minutes)
+    # ~1 point every 5 seconds for reasonable density
+    interval_sec = 5
+    n_points = max(1, (minutes * 60) // interval_sec)
+
+    print(f"Backfilling {minutes} minutes of history ({n_points} points per channel)...")
+    for name, (mean, std) in channels.items():
+        data: list[dict[str, Any]] = []
+        for i in range(n_points):
+            ts = start_time + timedelta(seconds=i * interval_sec)
+            anomaly = random.random() < anomaly_frac
+            value = mean + (random.choice([-1, 1]) * random.uniform(2.5, 5.0) * std) if anomaly else random.gauss(mean, std)
+            data.append({"timestamp": ts.isoformat(), "value": value})
+
+        batch_size = 100
+        for i in range(0, len(data), batch_size):
+            batch = data[i : i + batch_size]
+            try:
+                r = requests.post(
+                    data_url,
+                    json={"telemetry_name": name, "data": batch},
+                    timeout=30,
+                )
+                if r.status_code != 200:
+                    print(f"  Backfill error for {name}: {r.status_code}")
+            except requests.RequestException as e:
+                print(f"  Backfill failed for {name}: {e}")
+    print("Backfill complete.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Mock vehicle telemetry streamer")
     parser.add_argument("--base-url", default="http://localhost:8000", help="Backend API URL")
     parser.add_argument("--scenario", default="nominal", choices=list(SCENARIOS), help="Scenario to run")
     parser.add_argument("--speed", type=float, default=1.0, help="Time speed factor (e.g. 10 = 10x faster)")
-    parser.add_argument("--duration", type=float, default=300, help="Duration in seconds")
+    parser.add_argument("--duration", type=float, default=3600, help="Duration in seconds")
+    parser.add_argument(
+        "--backfill-minutes",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Seed N minutes of historical data before streaming (for full chart range)",
+    )
     parser.add_argument("--drop-prob", type=float, default=0.0, help="Link dropout probability per sample")
     parser.add_argument("--jitter", type=float, default=0.1, help="Inter-sample jitter factor (0-1)")
     args = parser.parse_args()
@@ -125,6 +171,9 @@ def main() -> None:
 
     # Build channel lookup: name -> (mean, std)
     channels = {row[0]: (row[3], row[4]) for row in TELEMETRY_DEFINITIONS}
+
+    if args.backfill_minutes > 0:
+        backfill_historical(base_url, args.backfill_minutes, channels, anomaly_frac)
 
     print(f"Scenario: {args.scenario} - {scenario['description']}")
     print(f"Duration: {args.duration}s (speed={args.speed}x)")

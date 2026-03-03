@@ -1,9 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 import {
-  LineChart,
   Line,
   XAxis,
   YAxis,
@@ -12,7 +11,6 @@ import {
   ResponsiveContainer,
   ReferenceArea,
   ReferenceLine,
-  Brush,
   ComposedChart,
 } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -20,6 +18,23 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/empty-state";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { ChevronDownIcon } from "lucide-react";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -89,22 +104,37 @@ function toDatetimeLocal(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-const MIN_POINTS = 100;
-const MAX_POINTS = 600;
-const DEFAULT_POINTS = 300;
+const POINTS_PER_PIXEL = 2;
+const MIN_DISPLAY_POINTS = 100;
 
-function downsample<T extends { timestamp: string; value: number }>(
+/** Auto-downsample by target pixel width. Preserves shape with min-max decimation. */
+function downsampleByWidth<T extends { timestamp: string; value: number }>(
   data: T[],
-  maxPoints: number
+  chartWidth: number
 ): T[] {
-  if (data.length <= maxPoints) return data;
-  const step = data.length / maxPoints;
+  const targetPoints = Math.min(
+    data.length,
+    Math.max(MIN_DISPLAY_POINTS, Math.floor(chartWidth * POINTS_PER_PIXEL))
+  );
+  if (data.length <= targetPoints) return data;
+  const bucketSize = data.length / targetPoints;
   const result: T[] = [];
-  for (let i = 0; i < maxPoints; i++) {
-    const idx = Math.min(Math.floor(i * step), data.length - 1);
-    result.push(data[idx]);
+  for (let i = 0; i < targetPoints; i++) {
+    const startIdx = Math.floor(i * bucketSize);
+    const endIdx = Math.min(Math.floor((i + 1) * bucketSize), data.length);
+    const bucket = data.slice(startIdx, endIdx);
+    if (bucket.length === 1) {
+      result.push(bucket[0]);
+    } else {
+      const minPoint = bucket.reduce((a, b) => (a.value < b.value ? a : b));
+      const maxPoint = bucket.reduce((a, b) => (a.value > b.value ? a : b));
+      result.push(minPoint);
+      if (minPoint.timestamp !== maxPoint.timestamp) result.push(maxPoint);
+    }
   }
-  return result;
+  return result.sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+  );
 }
 
 export function TrendChartAnalysis({
@@ -129,9 +159,10 @@ export function TrendChartAnalysis({
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");
   const [useCustomRange, setUseCustomRange] = useState(false);
-  const [brushSelection, setBrushSelection] = useState<[number, number] | null>(null);
-  const [brushRefetch, setBrushRefetch] = useState<{ since: string; until: string } | null>(null);
-  const [maxDisplayPoints, setMaxDisplayPoints] = useState(DEFAULT_POINTS);
+  const [timeRangePct, setTimeRangePct] = useState<[number, number]>([0, 100]);
+  const [zoomRefetch, setZoomRefetch] = useState<{ since: string; until: string } | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [chartWidth, setChartWidth] = useState(800);
 
   const [data, setData] = useState<DataPoint[]>([]);
   const [compareData, setCompareData] = useState<DataPoint[]>([]);
@@ -139,10 +170,10 @@ export function TrendChartAnalysis({
   const [error, setError] = useState<string | null>(null);
 
   const { sinceDate, untilDate } = useMemo(() => {
-    if (brushRefetch) {
+    if (zoomRefetch) {
       return {
-        sinceDate: brushRefetch.since,
-        untilDate: brushRefetch.until,
+        sinceDate: zoomRefetch.since,
+        untilDate: zoomRefetch.until,
       };
     }
     if (useCustomRange && customStart) {
@@ -161,16 +192,16 @@ export function TrendChartAnalysis({
     const since = new Date();
     since.setMinutes(since.getMinutes() - rangeMinutes);
     return { sinceDate: since.toISOString(), untilDate: null };
-  }, [useCustomRange, customStart, customEnd, rangeMinutes, brushRefetch]);
+  }, [useCustomRange, customStart, customEnd, rangeMinutes, zoomRefetch]);
 
   const fetchLimit = useMemo(() => {
-    if (brushRefetch) return 1000;
+    if (zoomRefetch) return 1000;
     const mins = useCustomRange ? 60 : rangeMinutes;
     if (mins <= 15) return 150;
     if (mins <= 60) return 300;
     if (mins <= 360) return 600;
     return 1000;
-  }, [brushRefetch, useCustomRange, rangeMinutes]);
+  }, [zoomRefetch, useCustomRange, rangeMinutes]);
 
   const fetchData = useCallback(
     async (name: string, since: string, until: string | null) => {
@@ -204,12 +235,21 @@ export function TrendChartAnalysis({
           );
         });
         setCompareData(compare);
-        setBrushSelection(null);
-        setBrushRefetch(null);
+        setTimeRangePct([0, 100]);
+        setZoomRefetch(null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));
   }, [channelName, compareChannel, sinceDate, untilDate, fetchData]);
+
+  useEffect(() => {
+    const el = chartContainerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setChartWidth(el.clientWidth));
+    ro.observe(el);
+    setChartWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     fetch(`${API_URL}/telemetry/list`, { cache: "no-store" })
@@ -244,6 +284,7 @@ export function TrendChartAnalysis({
           }
           return merged.slice(-fetchLimit);
         });
+        setTimeRangePct([0, 100]);
       }
     });
     client.connect();
@@ -289,10 +330,17 @@ export function TrendChartAnalysis({
     }));
   }, [data, compareData, timeOpts]);
 
-  const displayData = useMemo(
-    () => downsample(chartData, maxDisplayPoints),
-    [chartData, maxDisplayPoints]
-  );
+  const displayData = useMemo(() => {
+    const [startPct, endPct] = timeRangePct;
+    let filtered = chartData;
+    if (startPct > 0 || endPct < 100) {
+      const len = chartData.length;
+      const startIdx = Math.floor((startPct / 100) * len);
+      const endIdx = Math.min(Math.ceil((endPct / 100) * len), len);
+      filtered = chartData.slice(Math.max(0, startIdx), endIdx);
+    }
+    return downsampleByWidth(filtered, chartWidth);
+  }, [chartData, timeRangePct, chartWidth]);
 
   const hasBounds = bounds != null;
   const p5 = bounds?.p5 ?? 0;
@@ -386,16 +434,19 @@ export function TrendChartAnalysis({
 
   if (loading && data.length === 0) {
     return (
-      <div className="flex h-[300px] items-center justify-center text-muted-foreground">
-        Loading chart...
+      <div className="flex h-[300px] items-center justify-center gap-2 text-muted-foreground">
+        <Spinner size="default" />
+        <span className="text-sm">Loading chart…</span>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex h-[300px] items-center justify-center text-destructive">
-        {error}
+      <div className="flex h-[300px] items-center justify-center">
+        <Alert variant="destructive" className="max-w-md">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       </div>
     );
   }
@@ -404,6 +455,7 @@ export function TrendChartAnalysis({
     return (
       <div className="flex h-[300px] items-center justify-center">
         <EmptyState
+          icon="chart"
           title="No data in selected time range"
           description="Try a different time range or check if the channel has recent data."
         />
@@ -417,6 +469,10 @@ export function TrendChartAnalysis({
     "6h": "Last 6 hours",
     "24h": "Last 24 hours",
   };
+
+  const isZoomed = timeRangePct[0] > 0 || timeRangePct[1] < 100;
+  const dataMaxTime = chartData.length > 0 ? new Date(chartData[chartData.length - 1].timestamp).getTime() : 0;
+  const isLiveData = lastPoint && dataMaxTime > 0 && Date.now() - dataMaxTime < 60_000;
 
   return (
     <div className="space-y-3 overflow-visible">
@@ -475,111 +531,137 @@ export function TrendChartAnalysis({
           )}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border pt-3">
-          <span className="w-14 shrink-0 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-            Display
-          </span>
-          <div className="flex flex-wrap items-center gap-3">
-          <div className="flex gap-1">
-            <Button
-              variant={useUTC ? "default" : "outline"}
-              size="sm"
-              aria-label="Show times in UTC"
-              onClick={() => setUseUTC(true)}
-            >
-              UTC
-            </Button>
-            <Button
-              variant={!useUTC ? "default" : "outline"}
-              size="sm"
-              aria-label="Show times in local timezone"
-              onClick={() => setUseUTC(false)}
-            >
-              Local
-            </Button>
+        <Collapsible className="border-t border-border pt-3">
+          <div className="flex flex-col gap-2">
+            <CollapsibleTrigger className="flex w-fit items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground cursor-pointer data-[state=open]:[&_svg]:rotate-180">
+              Display options
+              <ChevronDownIcon className="size-3.5 transition-transform duration-200" />
+            </CollapsibleTrigger>
+            <CollapsibleContent className="w-full">
+              <div className="flex flex-wrap items-center gap-3 pt-2">
+                <div className="flex gap-1">
+                  <Button
+                    variant={useUTC ? "default" : "outline"}
+                    size="sm"
+                    aria-label="Show times in UTC"
+                    onClick={() => setUseUTC(true)}
+                  >
+                    UTC
+                  </Button>
+                  <Button
+                    variant={!useUTC ? "default" : "outline"}
+                    size="sm"
+                    aria-label="Show times in local timezone"
+                    onClick={() => setUseUTC(false)}
+                  >
+                    Local
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="show-mean-p50"
+                    checked={showMeanP50}
+                    onCheckedChange={(c) => setShowMeanP50(!!c)}
+                    aria-label="Show mean and P50 overlay lines"
+                  />
+                  <Label htmlFor="show-mean-p50" className="text-sm font-normal cursor-pointer">
+                    Mean/P50
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="show-p5-p95"
+                    checked={showP5P95}
+                    onCheckedChange={(c) => setShowP5P95(!!c)}
+                    aria-label="Show P5 and P95 overlay lines"
+                  />
+                  <Label htmlFor="show-p5-p95" className="text-sm font-normal cursor-pointer">
+                    P5/P95
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={compareChannel ?? "__none__"}
+                    onValueChange={(v) => setCompareChannel(v === "__none__" ? null : v)}
+                  >
+                    <SelectTrigger className="h-9 min-w-[180px]" aria-label="Compare with another channel">
+                      <SelectValue placeholder="Add channel to compare" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Add channel to compare</SelectItem>
+                      {channelList
+                        .filter((n) => n !== channelName)
+                        .map((n) => (
+                          <SelectItem key={n} value={n}>
+                            {n}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                  {compareChannel && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Clear compare channel (currently ${compareChannel})`}
+                      onClick={() => setCompareChannel(null)}
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CollapsibleContent>
           </div>
-          <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-            <input
-              type="checkbox"
-              checked={showMeanP50}
-              onChange={(e) => setShowMeanP50(e.target.checked)}
-              className="rounded"
-              aria-label="Show mean and P50 overlay lines"
+        </Collapsible>
+
+        {chartData.length > 10 && (
+          <div className="flex flex-wrap items-center gap-3 border-t border-border pt-3">
+            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Time window
+            </span>
+            <Slider
+              min={0}
+              max={100}
+              step={1}
+              value={timeRangePct}
+              onValueChange={(v) => setTimeRangePct([v[0] ?? 0, v[1] ?? 100])}
+              className="w-48"
+              aria-label="Select time range to view"
             />
-            Mean/P50
-          </label>
-          <label className="flex cursor-pointer items-center gap-1.5 text-sm">
-            <input
-              type="checkbox"
-              checked={showP5P95}
-              onChange={(e) => setShowP5P95(e.target.checked)}
-              className="rounded"
-              aria-label="Show P5 and P95 overlay lines"
-            />
-            P5/P95
-          </label>
-          <div className="flex items-center gap-2">
-            <select
-              className="h-9 min-h-[44px] rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-              value={compareChannel ?? ""}
-              onChange={(e) => setCompareChannel(e.target.value || null)}
-              aria-label="Compare with another channel"
-            >
-              <option value="">Add channel to compare</option>
-              {channelList
-                .filter((n) => n !== channelName)
-                .map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-            </select>
-            {compareChannel && (
-              <Button
-                size="sm"
-                variant="outline"
-                aria-label={`Clear compare channel (currently ${compareChannel})`}
-                onClick={() => setCompareChannel(null)}
-              >
-                Clear
-              </Button>
+            {isZoomed && (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  aria-label="Zoom to selected range (refetch)"
+                  onClick={() => {
+                    const len = chartData.length;
+                    const startIdx = Math.floor((timeRangePct[0] / 100) * len);
+                    const endIdx = Math.min(Math.ceil((timeRangePct[1] / 100) * len), len);
+                    const startPt = chartData[startIdx];
+                    const endPt = chartData[endIdx];
+                    if (startPt && endPt) {
+                      setZoomRefetch({
+                        since: startPt.timestamp,
+                        until: endPt.timestamp,
+                      });
+                    }
+                  }}
+                >
+                  Zoom
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label="Reset to full range"
+                  onClick={() => setTimeRangePct([0, 100])}
+                >
+                  Reset
+                </Button>
+              </>
             )}
           </div>
-          {brushSelection && (
-            <Button
-              size="sm"
-              aria-label="Zoom to selected range"
-              onClick={() => {
-                const [s, e] = brushSelection;
-                if (displayData[s] && displayData[e]) {
-                  setBrushRefetch({
-                    since: displayData[s].timestamp,
-                    until: displayData[e].timestamp,
-                  });
-                }
-              }}
-            >
-              Zoom
-            </Button>
-          )}
-          <div className="flex items-center gap-2">
-            <label htmlFor="points-slider" className="text-sm">
-              Points: {maxDisplayPoints}
-            </label>
-            <input
-              id="points-slider"
-              type="range"
-              min={MIN_POINTS}
-              max={MAX_POINTS}
-              step={50}
-              value={maxDisplayPoints}
-              onChange={(e) => setMaxDisplayPoints(Number(e.target.value))}
-              className="h-2 w-32 cursor-pointer accent-primary"
-              aria-label="Maximum points to display on chart"
-            />
-          </div>
-          </div>
-        </div>
+        )}
       </div>
 
       {sampleInterval != null && (
@@ -602,6 +684,7 @@ export function TrendChartAnalysis({
       )}
 
       <div
+        ref={chartContainerRef}
         className="h-[380px] w-full min-w-0 overflow-visible px-8"
         role="img"
         aria-label={`Trend chart for ${channelName} over selected time range`}
@@ -790,23 +873,13 @@ export function TrendChartAnalysis({
                 isAnimationActive={displayData.length <= 200}
               />
             )}
-            {displayData.length > 10 && (
-              <Brush
-                dataKey="time"
-                height={30}
+            {isLiveData && displayData.length > 0 && (
+              <ReferenceLine
+                x={displayData[displayData.length - 1]?.time}
                 stroke="var(--primary)"
-                fill="var(--muted)"
-                onChange={(range) => {
-                  if (range && typeof range === "object" && "startIndex" in range && "endIndex" in range) {
-                    const startIdx = range.startIndex as number;
-                    const endIdx = range.endIndex as number;
-                    if (startIdx !== endIdx) {
-                      setBrushSelection([startIdx, endIdx]);
-                    }
-                  }
-                }}
-                startIndex={brushSelection?.[0] ?? 0}
-                endIndex={brushSelection?.[1] ?? Math.max(0, displayData.length - 1)}
+                strokeDasharray="4 4"
+                strokeOpacity={0.6}
+                label={{ value: "Now", position: "top", fontSize: 10 }}
               />
             )}
           </ComposedChart>

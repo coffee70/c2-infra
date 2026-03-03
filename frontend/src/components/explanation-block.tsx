@@ -3,6 +3,12 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { ChevronDownIcon } from "lucide-react";
 import { SimilarTelemetryCard } from "@/components/similar-telemetry-card";
 import { Spinner } from "@/components/ui/spinner";
 
@@ -117,14 +123,17 @@ export function ExplanationBlock({ channelName }: ExplanationBlockProps) {
             </p>
           </div>
           {data.llm_explanation && (
-            <details className="group">
-              <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+            <Collapsible>
+              <CollapsibleTrigger className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer data-[state=open]:[&_svg]:rotate-180">
                 Full explanation
-              </summary>
-              <p className="mt-2 whitespace-pre-wrap text-sm">
-                {data.llm_explanation}
-              </p>
-            </details>
+                <ChevronDownIcon className="size-3.5 transition-transform duration-200" />
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <p className="mt-2 whitespace-pre-wrap text-sm">
+                  {data.llm_explanation}
+                </p>
+              </CollapsibleContent>
+            </Collapsible>
           )}
         </CardContent>
       </Card>

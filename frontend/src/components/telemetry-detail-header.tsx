@@ -3,6 +3,11 @@
 import { useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { TelemetryDetailActions } from "@/components/telemetry-detail-actions";
 
 function formatWithUnits(
@@ -85,8 +90,8 @@ export function TelemetryDetailHeader({
     : "";
 
   return (
-    <header className="sticky top-0 z-10 py-4 mb-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <header className="sticky top-14 z-10 py-4 mb-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b">
+      <div className="flex flex-wrap items-center justify-between gap-4 px-4 sm:px-6">
         <div className="flex flex-wrap items-center gap-3 min-w-0">
           <h1 className="text-lg font-semibold truncate" title={name}>
             {name}
@@ -105,40 +110,52 @@ export function TelemetryDetailHeader({
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 text-xs"
-            onClick={() => copyToClipboard(name, "name")}
-            title="Copy channel name"
-            aria-label="Copy channel name"
-            aria-live="polite"
-          >
-            {copyFailedKey === "name" ? "Copy failed" : copied === "name" ? "Copied!" : "Copy name"}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 text-xs"
-            onClick={() => copyToClipboard(copyValueText, "value")}
-            title="Copy channel name and value"
-            aria-label="Copy channel name and value"
-            aria-live="polite"
-          >
-            {copyFailedKey === "value" ? "Copy failed" : copied === "value" ? "Copied!" : "Copy value"}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => copyToClipboard(name, "name")}
+                aria-label="Copy channel name"
+                aria-live="polite"
+              >
+                {copyFailedKey === "name" ? "Copy failed" : copied === "name" ? "Copied!" : "Copy name"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Copy channel name</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => copyToClipboard(copyValueText, "value")}
+                aria-label="Copy channel name and value"
+                aria-live="polite"
+              >
+                {copyFailedKey === "value" ? "Copy failed" : copied === "value" ? "Copied!" : "Copy value"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Copy channel name and value</TooltipContent>
+          </Tooltip>
           {lastTimestamp && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => copyToClipboard(copyTimestampText, "timestamp")}
-              title="Copy channel name and timestamp"
-              aria-label="Copy channel name and timestamp"
-              aria-live="polite"
-            >
-              {copyFailedKey === "timestamp" ? "Copy failed" : copied === "timestamp" ? "Copied!" : "Copy timestamp"}
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => copyToClipboard(copyTimestampText, "timestamp")}
+                  aria-label="Copy channel name and timestamp"
+                  aria-live="polite"
+                >
+                  {copyFailedKey === "timestamp" ? "Copy failed" : copied === "timestamp" ? "Copied!" : "Copy timestamp"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Copy channel name and timestamp</TooltipContent>
+            </Tooltip>
           )}
           <TelemetryDetailActions name={name} />
         </div>
