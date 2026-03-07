@@ -1,16 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { auditLog } from "@/lib/audit-log";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { WatchlistCard } from "@/components/watchlist-card";
 import { EventConsole } from "@/components/event-console";
+import { ContextBanner } from "@/components/context-banner";
+import { NowPanel } from "@/components/now-panel";
 import { EmptyState } from "@/components/empty-state";
 import {
   RealtimeWsClient,
@@ -188,9 +184,8 @@ export function RealtimeOverviewWrapper({
   useEffect(() => {
     if (!client) return;
     const channelNames = initialChannels.map((ch) => ch.name);
-    if (channelNames.length > 0) {
-      client.subscribeWatchlist(channelNames, sourceId);
-    }
+    // Always subscribe: when channels empty, backend defaults to watchlist and sends snapshot
+    client.subscribeWatchlist(channelNames, sourceId);
     client.subscribeAlerts(sourceId);
   }, [client, sourceId, initialChannels]);
 
@@ -204,28 +199,28 @@ export function RealtimeOverviewWrapper({
     return () => clearInterval(interval);
   }, []);
 
+  const totalAlerts =
+    anomalies.power.length +
+    anomalies.thermal.length +
+    anomalies.adcs.length +
+    anomalies.comms.length +
+    (anomalies.other?.length ?? 0);
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div className="space-y-4">
+      <ContextBanner
+        sourceId={sourceId}
+        onSourceChange={setSourceId}
+        sources={sources}
+        activeAlertCount={totalAlerts}
+      />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
               <CardTitle>Watchlist / Console</CardTitle>
               <div className="flex items-center gap-2">
-                {sources.length > 1 && (
-                  <Select value={sourceId} onValueChange={setSourceId}>
-                    <SelectTrigger size="sm" className="h-8 w-auto min-w-[100px] text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {sources.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
                 {live && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 dark:bg-green-500/30 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400" />
@@ -265,18 +260,34 @@ export function RealtimeOverviewWrapper({
           </CardContent>
         </Card>
       </div>
-      <div>
+      <div className="space-y-4">
+        <NowPanel sourceId={sourceId} sinceMinutes={15} />
         <EventConsole
           anomalies={anomalies}
           alerts={alerts}
           sourceId={sourceId}
-          onAck={client ? (id) => client.ackAlert(id) : undefined}
+          onAck={
+            client
+              ? (id) => {
+                  auditLog("alert.acked", { alert_id: id });
+                  client.ackAlert(id);
+                }
+              : undefined
+          }
           onResolve={
             client
-              ? (id, text, code) => client.resolveAlert(id, text, code)
+              ? (id, text, code) => {
+                  auditLog("alert.resolved", {
+                    alert_id: id,
+                    resolution_text: text,
+                    resolution_code: code,
+                  });
+                  client.resolveAlert(id, text, code);
+                }
               : undefined
           }
         />
+      </div>
       </div>
     </div>
   );

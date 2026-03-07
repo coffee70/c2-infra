@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from simulator.lib.audit import audit_log
 from simulator.streamer import TelemetryStreamer
 
 app = FastAPI(title="Telemetry Simulator", version="1.0.0")
@@ -38,7 +39,7 @@ def get_status() -> dict[str, Any]:
             "config": None,
             "sim_elapsed": 0,
         }
-    return {
+    payload = {
         "state": _streamer.state,
         "config": {
             "scenario": _streamer.scenario_name,
@@ -51,11 +52,20 @@ def get_status() -> dict[str, Any]:
         },
         "sim_elapsed": round(_streamer.sim_elapsed, 1),
     }
+    return payload
 
 
 @app.post("/start")
 def start(config: StartConfig) -> dict[str, Any]:
     """Start the simulator with given config."""
+    audit_log(
+        "simulator.start.received",
+        origin="backend",
+        scenario=config.scenario,
+        duration=config.duration,
+        speed=config.speed,
+        source_id=config.source_id,
+    )
     global _streamer
     if _streamer is not None and _streamer.state != "idle":
         raise HTTPException(status_code=409, detail=f"Simulator already {_streamer.state}")
@@ -73,7 +83,17 @@ def start(config: StartConfig) -> dict[str, Any]:
         source_id=config.source_id,
     )
     if not _streamer.start():
+        audit_log("simulator.start.failed", reason="TelemetryStreamer.start() returned False", level="error")
         raise HTTPException(status_code=500, detail="Failed to start")
+    audit_log(
+        "simulator.start.handled",
+        origin="backend",
+        scenario=config.scenario,
+        duration=config.duration,
+        speed=config.speed,
+        source_id=config.source_id,
+        base_url=base_url,
+    )
     return {"status": "started", "state": _streamer.state}
 
 
@@ -83,6 +103,7 @@ def pause() -> dict[str, Any]:
     s = _get_streamer()
     if not s.pause():
         raise HTTPException(status_code=409, detail=f"Cannot pause: state={s.state}")
+    audit_log("simulator.pause")
     return {"status": "paused", "state": s.state}
 
 
@@ -92,6 +113,7 @@ def resume() -> dict[str, Any]:
     s = _get_streamer()
     if not s.resume():
         raise HTTPException(status_code=409, detail=f"Cannot resume: state={s.state}")
+    audit_log("simulator.resume")
     return {"status": "resumed", "state": s.state}
 
 
@@ -103,4 +125,5 @@ def stop() -> dict[str, Any]:
         return {"status": "stopped", "state": "idle"}
     _streamer.stop()
     _streamer = None
+    audit_log("simulator.stop")
     return {"status": "stopped", "state": "idle"}

@@ -47,6 +47,7 @@ from app.utils.subsystem import infer_subsystem
 from app.services.statistics_service import StatisticsService
 from app.services.telemetry_service import TelemetryService, _compute_state
 from app.config import get_settings
+from app.lib.audit import audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,7 @@ def create_schema(
         )
     except IntegrityError:
         raise HTTPException(status_code=409, detail="Telemetry name already exists")
+    audit_log("schema.create", name=body.name, telemetry_id=str(telemetry_id))
     return TelemetrySchemaResponse(
         status="created",
         telemetry_id=telemetry_id,
@@ -111,24 +113,40 @@ def ingest_data(
     embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
     llm: object = Depends(get_llm_provider),
 ):
-    """Ingest batch of telemetry data."""
+    """Ingest batch of telemetry data. source_id in body (default: default) scopes data when telemetry_data is source-aware."""
     service = TelemetryService(db, embedding, llm)
     try:
         data = []
         for pt in body.data:
             ts = datetime.fromisoformat(pt.timestamp.replace("Z", "+00:00"))
             data.append((ts, pt.value))
-        rows = service.insert_data(body.telemetry_name, data)
+        rows = service.insert_data(body.telemetry_name, data, source_id=body.source_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    audit_log(
+        "ingest.batch",
+        telemetry_name=body.telemetry_name,
+        count=rows,
+        source_id=body.source_id,
+    )
     return TelemetryDataResponse(rows_inserted=rows)
 
 
 @router.post("/recompute-stats", response_model=RecomputeStatsResponse)
-def recompute_stats(db: Session = Depends(get_db)):
-    """Recompute statistics for all telemetry points."""
+def recompute_stats(
+    source_id: Optional[str] = None,
+    all_sources: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Recompute statistics. source_id= filters to one source; all_sources=true recomputes per source (when source-aware). Default: single source 'default'."""
     stats_service = StatisticsService(db)
-    count = stats_service.recompute_all()
+    count = stats_service.recompute_all(source_id=source_id, all_sources=all_sources)
+    audit_log(
+        "stats.recompute",
+        source_id=source_id or "default",
+        all_sources=all_sources,
+        telemetry_processed=count,
+    )
     return RecomputeStatsResponse(telemetry_processed=count)
 
 
@@ -175,6 +193,7 @@ def add_watchlist(
     """Add a channel to the watchlist."""
     try:
         add_to_watchlist(db, body.telemetry_name)
+        audit_log("watchlist.add", telemetry_name=body.telemetry_name)
         return {"status": "added"}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -188,6 +207,7 @@ def delete_watchlist(
     """Remove a channel from the watchlist."""
     name = unquote(name)
     remove_from_watchlist(db, name)
+    audit_log("watchlist.remove", name=name)
     return {"status": "removed"}
 
 
@@ -225,11 +245,12 @@ def search(
     units: Optional[str] = None,
     recent_minutes: Optional[int] = None,
     limit: int = 10,
+    source_id: str = "default",
     db: Session = Depends(get_db),
     embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
     llm: object = Depends(get_llm_provider),
 ):
-    """Semantic search over telemetry with optional filters."""
+    """Semantic search over telemetry with optional filters. source_id scopes current value/stats."""
     service = TelemetryService(db, embedding, llm)
     results = service.semantic_search(
         q,
@@ -238,21 +259,31 @@ def search(
         anomalous_only=anomalous_only,
         units=units,
         recent_minutes=recent_minutes,
+        source_id=source_id,
+    )
+    audit_log(
+        "search",
+        q=q,
+        subsystem=subsystem,
+        anomalous_only=anomalous_only,
+        limit=limit,
+        source_id=source_id,
+        result_count=len(results),
     )
     return SearchResponse(results=results)
 
 
-def _get_explanation_summary_db_only(db: Session, name: str) -> ExplainResponse:
+def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "default") -> ExplainResponse:
     """Build explain response using only DB—no embedding/LLM cold start."""
     meta = db.execute(select(TelemetryMetadata).where(TelemetryMetadata.name == name)).scalars().first()
     if not meta:
         raise ValueError(f"Telemetry not found: {name}")
 
-    stats_row = db.get(TelemetryStatistics, meta.id)
+    stats_row = db.get(TelemetryStatistics, (source_id, meta.id))
     if not stats_row:
         raise ValueError(f"Statistics not computed for: {name}")
 
-    rows = _get_recent_values_db_only(db, name, limit=1)
+    rows = _get_recent_values_db_only(db, name, limit=1, source_id=source_id)
     recent_value: Optional[float] = float(rows[0][1]) if rows else None
     last_timestamp: Optional[str] = rows[0][0].isoformat() if rows else None
 
@@ -304,12 +335,13 @@ def _get_explanation_summary_db_only(db: Session, name: str) -> ExplainResponse:
 @router.get("/{name}/summary", response_model=ExplainResponse)
 def get_summary(
     name: str,
+    source_id: str = "default",
     db: Session = Depends(get_db),
 ):
-    """Fast summary for initial page load—DB only, no embedding/LLM."""
+    """Fast summary for initial page load—DB only, no embedding/LLM. source_id filters by stream source."""
     name = unquote(name)
     try:
-        return _get_explanation_summary_db_only(db, name)
+        return _get_explanation_summary_db_only(db, name, source_id=source_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -318,29 +350,38 @@ def get_summary(
 def explain(
     name: str,
     skip_llm: bool = False,
+    source_id: str = "default",
     db: Session = Depends(get_db),
     embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
     llm: object = Depends(get_llm_provider),
 ):
-    """Get explanation for a telemetry point. Use skip_llm=1 for fast initial load."""
+    """Get explanation for a telemetry point. Use skip_llm=1 for fast initial load. source_id filters by stream source."""
     name = unquote(name)
     service = TelemetryService(db, embedding, llm)
     try:
-        return service.get_explanation(name, skip_llm=skip_llm)
+        return service.get_explanation(name, skip_llm=skip_llm, source_id=source_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 def _get_recent_values_db_only(
-    db: Session, name: str, limit: int = 100, since=None, until=None
+    db: Session,
+    name: str,
+    limit: int = 100,
+    since=None,
+    until=None,
+    source_id: str = "default",
 ) -> list[tuple[datetime, float]]:
-    """Get recent values using only DB—no embedding/LLM cold start."""
+    """Get recent values using only DB—no embedding/LLM cold start. source_id filters when telemetry_data is source-aware."""
     meta = db.execute(select(TelemetryMetadata).where(TelemetryMetadata.name == name)).scalars().first()
     if not meta:
         raise ValueError(f"Telemetry not found: {name}")
     stmt = (
         select(TelemetryData.timestamp, TelemetryData.value)
-        .where(TelemetryData.telemetry_id == meta.id)
+        .where(
+            TelemetryData.telemetry_id == meta.id,
+            TelemetryData.source_id == source_id,
+        )
         .order_by(desc(TelemetryData.timestamp))
         .limit(limit)
     )
@@ -358,9 +399,10 @@ def get_recent(
     limit: int = 100,
     since: Optional[str] = None,
     until: Optional[str] = None,
+    source_id: str = "default",
     db: Session = Depends(get_db),
 ):
-    """Get most recent data points for charting. Use since/until (ISO8601) for time-range filter."""
+    """Get most recent data points for charting. Use since/until (ISO8601) for time-range filter. source_id filters by stream source (default: default)."""
     name = unquote(name)
     since_dt: Optional[datetime] = None
     until_dt: Optional[datetime] = None
@@ -375,7 +417,7 @@ def get_recent(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid until format, use ISO8601")
     try:
-        rows = _get_recent_values_db_only(db, name, limit=limit, since=since_dt, until=until_dt)
+        rows = _get_recent_values_db_only(db, name, limit=limit, since=since_dt, until=until_dt, source_id=source_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return RecentDataResponse(

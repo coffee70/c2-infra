@@ -1,6 +1,7 @@
 """Realtime processor: persist measurements, compute state, manage alert lifecycle."""
 
 import logging
+import threading
 from collections import deque
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -25,7 +26,10 @@ from app.models.telemetry import (
     TelemetryMetadata,
     TelemetryStatistics,
 )
+from app.lib.audit import audit_log
 from app.realtime.bus import get_realtime_bus
+from app.realtime.feed_health import get_feed_health_tracker
+from app.services.ops_events_service import write_event as write_ops_event
 from app.services.telemetry_service import _compute_state
 from app.utils.subsystem import infer_subsystem
 
@@ -48,12 +52,13 @@ class RealtimeProcessor:
 
     def __init__(self) -> None:
         self._session_factory = get_session_factory()
-        self._state_history: dict[str, deque[str]] = {}
+        self._state_history: dict[tuple[str, str], deque[str]] = {}
+        self._state_history_lock = threading.Lock()
         self._telemetry_update_handlers: list = []
         self._bus = get_realtime_bus()
 
     def _get_state_history(self, source_id: str, channel: str) -> deque[str]:
-        """Get or create state history for source+channel (keeps last N)."""
+        """Get or create state history for source+channel (keeps last N). Caller must hold _state_history_lock."""
         key = (source_id, channel)
         if key not in self._state_history:
             self._state_history[key] = deque(maxlen=DEBOUNCE_CONSECUTIVE)
@@ -78,6 +83,7 @@ class RealtimeProcessor:
     ) -> None:
         """Process single measurement: validate, persist, update current, check alerts."""
         source_id = event.source_id or "default"
+        get_feed_health_tracker().record_reception(source_id)
 
         meta = db.execute(
             select(TelemetryMetadata).where(TelemetryMetadata.name == event.channel_name)
@@ -97,6 +103,7 @@ class RealtimeProcessor:
         try:
             db.add(
                 TelemetryData(
+                    source_id=source_id,
                     telemetry_id=meta.id,
                     timestamp=gen_time,
                     value=Decimal(str(event.value)),
@@ -114,7 +121,7 @@ class RealtimeProcessor:
             return
 
         # Compute state
-        stats = db.get(TelemetryStatistics, meta.id)
+        stats = db.get(TelemetryStatistics, (source_id, meta.id))
         std_dev = float(stats.std_dev) if stats else 0.0
         mean = float(stats.mean) if stats else 0.0
         red_low = float(meta.red_low) if meta.red_low is not None else None
@@ -132,9 +139,12 @@ class RealtimeProcessor:
                 event.value, z_score, red_low, red_high, std_dev
             )
 
-        # Debounce: update history
-        history = self._get_state_history(source_id, event.channel_name)
-        history.append(state)
+        # Debounce: update history (lock guards dict and deque for thread-pool concurrency)
+        with self._state_history_lock:
+            history = self._get_state_history(source_id, event.channel_name)
+            history.append(state)
+            should_open_alert = list(history) == ["warning"] * DEBOUNCE_CONSECUTIVE
+            should_clear_alert = list(history) == ["normal"] * DEBOUNCE_CONSECUTIVE
 
         # Upsert telemetry_current
         if current:
@@ -165,7 +175,10 @@ class RealtimeProcessor:
         # Sparkline data
         spark_stmt = (
             select(TelemetryData.timestamp, TelemetryData.value)
-            .where(TelemetryData.telemetry_id == meta.id)
+            .where(
+                TelemetryData.telemetry_id == meta.id,
+                TelemetryData.source_id == source_id,
+            )
             .order_by(desc(TelemetryData.timestamp))
             .limit(SPARKLINE_POINTS)
         )
@@ -195,7 +208,7 @@ class RealtimeProcessor:
         )
 
         # Alert lifecycle: open after 2 consecutive warnings
-        if list(history) == ["warning"] * DEBOUNCE_CONSECUTIVE:
+        if should_open_alert:
             open_alert = db.execute(
                 select(TelemetryAlert)
                 .where(TelemetryAlert.source_id == source_id)
@@ -220,7 +233,32 @@ class RealtimeProcessor:
                 )
                 db.add(alert)
                 db.flush()
+                audit_log(
+                    "alert.opened",
+                    alert_id=str(alert.id),
+                    channel_name=meta.name,
+                    source_id=source_id,
+                    reason=reason,
+                    z_score=z_score,
+                )
                 logger.info("Alert opened: channel=%s severity=%s", meta.name, "warning")
+                write_ops_event(
+                    db,
+                    source_id=source_id,
+                    event_time=gen_time,
+                    event_type="alert.opened",
+                    severity="warning",
+                    summary=f"{meta.name} out of family/limits",
+                    entity_type="alert",
+                    entity_id=meta.name,
+                    payload={
+                        "alert_id": str(alert.id),
+                        "channel_name": meta.name,
+                        "value": event.value,
+                        "reason": reason,
+                        "z_score": z_score,
+                    },
+                )
                 self._publish_alert_event(
                     "opened",
                     alert,
@@ -234,7 +272,7 @@ class RealtimeProcessor:
                 )
 
         # Alert lifecycle: clear after 2 consecutive normals
-        if list(history) == ["normal"] * DEBOUNCE_CONSECUTIVE:
+        if should_clear_alert:
             open_alert = db.execute(
                 select(TelemetryAlert)
                 .where(TelemetryAlert.source_id == source_id)
@@ -247,7 +285,28 @@ class RealtimeProcessor:
             if open_alert:
                 open_alert.cleared_at = recv_time
                 open_alert.last_update_at = recv_time
+                audit_log(
+                    "alert.cleared",
+                    alert_id=str(open_alert.id),
+                    channel_name=meta.name,
+                    source_id=source_id,
+                )
                 logger.info("Alert cleared: channel=%s", meta.name)
+                write_ops_event(
+                    db,
+                    source_id=source_id,
+                    event_time=recv_time,
+                    event_type="alert.cleared",
+                    severity="info",
+                    summary=f"{meta.name} returned to normal",
+                    entity_type="alert",
+                    entity_id=meta.name,
+                    payload={
+                        "alert_id": str(open_alert.id),
+                        "channel_name": meta.name,
+                        "value": event.value,
+                    },
+                )
                 self._publish_alert_event(
                     "cleared",
                     open_alert,

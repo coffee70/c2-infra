@@ -116,14 +116,16 @@ class TelemetryService:
         self,
         telemetry_name: str,
         data: list[tuple[datetime, float]],
+        source_id: str = "default",
     ) -> int:
-        """Insert batch of time-series data."""
+        """Insert batch of time-series data. source_id scopes data when telemetry_data is source-aware."""
         meta = self.get_by_name(telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")
 
         rows = [
             TelemetryData(
+                source_id=source_id,
                 telemetry_id=meta.id,
                 timestamp=ts,
                 value=Decimal(str(v)),
@@ -141,6 +143,7 @@ class TelemetryService:
         anomalous_only: bool = False,
         units: Optional[str] = None,
         recent_minutes: Optional[int] = None,
+        source_id: str = "default",
     ) -> list[SearchResult]:
         """Vector similarity search with enriched metadata and optional filters."""
         if not query or not query.strip():
@@ -176,8 +179,8 @@ class TelemetryService:
             if units and meta.units != units:
                 continue
 
-            stats = self._db.get(TelemetryStatistics, meta.id)
-            latest = self.get_recent_value_with_timestamp(meta.name)
+            stats = self._db.get(TelemetryStatistics, (source_id, meta.id))
+            latest = self.get_recent_value_with_timestamp(meta.name, source_id=source_id)
 
             # Filter by recent data
             if recent_minutes and cutoff:
@@ -229,15 +232,19 @@ class TelemetryService:
         limit: int = 100,
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
+        source_id: str = "default",
     ) -> list[tuple[datetime, float]]:
-        """Get most recent values for a telemetry point, optionally filtered by time range."""
+        """Get most recent values for a telemetry point, optionally filtered by time range and source."""
         meta = self.get_by_name(name)
         if not meta:
             raise ValueError(f"Telemetry not found: {name}")
 
         stmt = (
             select(TelemetryData.timestamp, TelemetryData.value)
-            .where(TelemetryData.telemetry_id == meta.id)
+            .where(
+                TelemetryData.telemetry_id == meta.id,
+                TelemetryData.source_id == source_id,
+            )
             .order_by(desc(TelemetryData.timestamp))
             .limit(limit)
         )
@@ -248,19 +255,23 @@ class TelemetryService:
         rows = self._db.execute(stmt).fetchall()
         return [(r[0], float(r[1])) for r in rows]
 
-    def get_recent_value(self, name: str) -> Optional[float]:
+    def get_recent_value(
+        self, name: str, source_id: str = "default"
+    ) -> Optional[float]:
         """Get the most recent single value."""
-        rows = self.get_recent_values(name, limit=1)
+        rows = self.get_recent_values(name, limit=1, source_id=source_id)
         return rows[0][1] if rows else None
 
     def get_recent_value_with_timestamp(
-        self, name: str
+        self, name: str, source_id: str = "default"
     ) -> Optional[Tuple[float, datetime]]:
         """Get the most recent value and its timestamp."""
-        rows = self.get_recent_values(name, limit=1)
+        rows = self.get_recent_values(name, limit=1, source_id=source_id)
         return (rows[0][1], rows[0][0]) if rows else None
 
-    def get_related_channels(self, name: str, limit: int = 5) -> list[RelatedChannel]:
+    def get_related_channels(
+        self, name: str, limit: int = 5, source_id: str = "default"
+    ) -> list[RelatedChannel]:
         """Get channels linked by subsystem/physics for 'What to check next'."""
         meta = self.get_by_name(name)
         if not meta:
@@ -311,8 +322,8 @@ class TelemetryService:
             current_value: Optional[float] = None
             current_status: Optional[str] = None
             last_timestamp: Optional[str] = None
-            latest = self.get_recent_value_with_timestamp(m.name)
-            stats = self._db.get(TelemetryStatistics, m.id)
+            latest = self.get_recent_value_with_timestamp(m.name, source_id=source_id)
+            stats = self._db.get(TelemetryStatistics, (source_id, m.id))
             if latest and stats:
                 val, ts = latest
                 current_value = val
@@ -356,14 +367,16 @@ class TelemetryService:
             return "no recent data"
         return None
 
-    def get_explanation(self, name: str, skip_llm: bool = False) -> ExplainResponse:
+    def get_explanation(
+        self, name: str, skip_llm: bool = False, source_id: str = "default"
+    ) -> ExplainResponse:
         """Build full explanation with stats, z-score, and LLM response."""
         meta = self.get_by_name(name)
         if not meta:
             raise ValueError(f"Telemetry not found: {name}")
 
-        stats_row = self._db.get(TelemetryStatistics, meta.id)
-        recent_row = self.get_recent_value_with_timestamp(name)
+        stats_row = self._db.get(TelemetryStatistics, (source_id, meta.id))
+        recent_row = self.get_recent_value_with_timestamp(name, source_id=source_id)
         recent_value = recent_row[0] if recent_row else None  # (value, timestamp)
         last_timestamp = recent_row[1].isoformat() if recent_row else None
 
@@ -424,7 +437,7 @@ class TelemetryService:
                     s = sentences[0]
                     what_this_means = s if s.endswith(".") else s + "."
 
-            related = self.get_related_channels(name, limit=5)
+            related = self.get_related_channels(name, limit=5, source_id=source_id)
         n_samples = getattr(stats_row, "n_samples", 0)
         confidence = self._compute_confidence_indicator(n_samples, last_timestamp)
 

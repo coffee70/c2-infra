@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { auditLog } from "@/lib/audit-log";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,6 +18,31 @@ import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
+
+async function fetchApiWithFallback(
+  path: string,
+  init: RequestInit
+): Promise<{ response: Response; baseUrl: string }> {
+  const bases = [API_URL, API_FALLBACK_URL].filter(
+    (v, i, arr) => arr.indexOf(v) === i
+  );
+  let lastError: unknown = null;
+  for (const base of bases) {
+    try {
+      const response = await fetch(`${base}${path}`, {
+        ...init,
+      });
+      if (response.ok) {
+        return { response, baseUrl: base };
+      }
+      lastError = new Error(`HTTP ${response.status} from ${base}${path}`);
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError ?? new Error("All API paths failed");
+}
 
 const SCENARIOS = [
   { value: "nominal", label: "Nominal" },
@@ -51,49 +77,90 @@ export function SimulatorPanel() {
   const [speed, setSpeed] = useState(1);
   const [dropProb, setDropProb] = useState(0);
   const [jitter, setJitter] = useState(0.1);
+  const statusInFlightRef = useRef(false);
+  const consecutiveStatusFailuresRef = useRef(0);
+  const lastLoggedStateRef = useRef<string | null>(null);
 
   const fetchStatus = useCallback(async () => {
+    if (statusInFlightRef.current) {
+      return;
+    }
+    statusInFlightRef.current = true;
     try {
-      const res = await fetch(`${API_URL}/simulator/status`, { cache: "no-store" });
+      const { response: res } = await fetchApiWithFallback(
+        "/simulator/status",
+        { cache: "no-store" }
+      );
       if (!res.ok) throw new Error(res.statusText);
       const data = await res.json();
       setStatus(data);
+      consecutiveStatusFailuresRef.current = 0;
       setError(null);
+      if (lastLoggedStateRef.current !== data.state) {
+        lastLoggedStateRef.current = data.state;
+        auditLog("simulator.status.fetched", {
+          state: data.state,
+          sim_elapsed: data.sim_elapsed,
+        });
+      }
     } catch (e) {
-      setError("Simulator unavailable");
-      setStatus(null);
+      consecutiveStatusFailuresRef.current += 1;
+      if (consecutiveStatusFailuresRef.current >= 2) {
+        setError("Simulator unavailable");
+      }
+    } finally {
+      statusInFlightRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     fetchStatus();
-    const id = setInterval(fetchStatus, 2000);
+    const id = setInterval(fetchStatus, 10000);
     return () => clearInterval(id);
   }, [fetchStatus]);
 
   async function handleStart() {
     setLoading(true);
     setError(null);
+    auditLog("simulator.start.sent", {
+      scenario,
+      duration: runForever ? 0 : duration,
+      speed,
+      drop_prob: dropProb,
+      jitter,
+    });
     try {
-      const res = await fetch(`${API_URL}/simulator/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          scenario,
-          duration: runForever ? 0 : duration,
-          speed,
-          drop_prob: dropProb,
-          jitter,
-          source_id: "simulator",
-        }),
-      });
+      const { response: res } = await fetchApiWithFallback(
+        "/simulator/start",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scenario,
+            duration: runForever ? 0 : duration,
+            speed,
+            drop_prob: dropProb,
+            jitter,
+            source_id: "simulator",
+          }),
+        },
+      );
       if (!res.ok) {
         const text = await res.text();
         throw new Error(text || res.statusText);
       }
-      await fetchStatus();
+      auditLog("simulator.start", {
+        scenario,
+        duration: runForever ? 0 : duration,
+        speed,
+        drop_prob: dropProb,
+        jitter,
+      });
+      fetchStatus(); // fire-and-forget; polling will update state
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to start");
+      const msg = e instanceof Error ? e.message : "Failed to start";
+      auditLog("simulator.start", { error: msg });
+      setError(msg.includes("abort") ? "Request timed out — simulator may be unavailable" : msg);
     } finally {
       setLoading(false);
     }
@@ -103,10 +170,15 @@ export function SimulatorPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/simulator/pause`, { method: "POST" });
+      const { response: res } = await fetchApiWithFallback(
+        "/simulator/pause",
+        { method: "POST" },
+      );
       if (!res.ok) throw new Error(await res.text());
+      auditLog("simulator.pause");
       await fetchStatus();
     } catch (e) {
+      auditLog("simulator.pause", { error: e instanceof Error ? e.message : "Failed to pause" });
       setError(e instanceof Error ? e.message : "Failed to pause");
     } finally {
       setLoading(false);
@@ -117,10 +189,15 @@ export function SimulatorPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/simulator/resume`, { method: "POST" });
+      const { response: res } = await fetchApiWithFallback(
+        "/simulator/resume",
+        { method: "POST" },
+      );
       if (!res.ok) throw new Error(await res.text());
+      auditLog("simulator.resume");
       await fetchStatus();
     } catch (e) {
+      auditLog("simulator.resume", { error: e instanceof Error ? e.message : "Failed to resume" });
       setError(e instanceof Error ? e.message : "Failed to resume");
     } finally {
       setLoading(false);
@@ -131,18 +208,23 @@ export function SimulatorPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_URL}/simulator/stop`, { method: "POST" });
+      const { response: res } = await fetchApiWithFallback(
+        "/simulator/stop",
+        { method: "POST" },
+      );
       if (!res.ok) throw new Error(await res.text());
+      auditLog("simulator.stop");
       await fetchStatus();
     } catch (e) {
+      auditLog("simulator.stop", { error: e instanceof Error ? e.message : "Failed to stop" });
       setError(e instanceof Error ? e.message : "Failed to stop");
     } finally {
       setLoading(false);
     }
   }
 
-  const state = status?.state ?? "idle";
-  const canEdit = state === "idle";
+  const state = status?.state ?? "unknown";
+  const canEdit = state === "idle" || state === "unknown";
 
   return (
     <div className="min-h-screen p-4 sm:p-6 lg:p-8">
@@ -170,6 +252,8 @@ export function SimulatorPanel() {
                     ? "text-green-500 dark:text-green-400"
                     : state === "paused"
                     ? "text-amber-500 dark:text-amber-400"
+                    : state === "unknown"
+                    ? "text-yellow-500 dark:text-yellow-400"
                     : "text-muted-foreground"
                 }`}
               >
@@ -283,12 +367,12 @@ export function SimulatorPanel() {
           <CardContent className="flex flex-wrap gap-2">
             <Button
               onClick={handleStart}
-              disabled={loading || state !== "idle"}
+              disabled={loading || (state !== "idle" && state !== "unknown")}
               variant="default"
             >
               {loading && state === "idle" ? (
                 <>
-                  <Spinner size="sm" className="mr-2" />
+                  <Spinner size="sm" className="mr-2 border-primary-foreground border-t-transparent" />
                   Starting...
                 </>
               ) : (

@@ -2,10 +2,11 @@
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -17,14 +18,16 @@ from app.models.schemas import (
     WsSnapshotAlerts,
     WsSnapshotWatchlist,
 )
-from app.models.telemetry import TelemetryAlert
+from app.models.telemetry import TelemetryAlert, TelemetryMetadata
 from app.realtime.bus import get_realtime_bus
 from app.realtime.ws_hub import get_ws_hub
+from app.services.ops_events_service import write_event as write_ops_event
 from app.services.realtime_service import (
     get_active_alerts,
     get_realtime_snapshot_for_channels,
     get_watchlist_channel_names,
 )
+from app.lib.audit import audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +53,92 @@ def _assign_reception_time(events: list[MeasurementEvent]) -> list[MeasurementEv
 
 
 @router.post("/ingest")
-def ingest_realtime(
+async def ingest_realtime(
     body: MeasurementEventBatch,
+    request: Request,
 ) -> dict[str, Any]:
-    """Ingest batch of realtime measurement events."""
+    """Ingest batch of realtime measurement events. Async to avoid thread pool contention with processor."""
+    started_at = time.perf_counter()
+    request_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
     bus = get_realtime_bus()
+    raw_events = body.events
+    source_ids = sorted({e.source_id or "default" for e in raw_events})
+    filled_reception = sum(1 for e in raw_events if not e.reception_time)
+
+    audit_log(
+        "ingest.request.start",
+        request_id=request_id,
+        method=request.method,
+        path=request.url.path,
+        count=len(raw_events),
+        source_ids=source_ids,
+        queue_size_before=bus.measurement_queue_size(),
+        queue_maxsize=bus.measurement_queue_maxsize(),
+    )
+
+    assign_started = time.perf_counter()
     events = _assign_reception_time(body.events)
+    assign_duration_ms = round((time.perf_counter() - assign_started) * 1000, 3)
+    audit_log(
+        "ingest.stage.assign_reception_time",
+        request_id=request_id,
+        count=len(events),
+        filled_missing_reception_time=filled_reception,
+        duration_ms=assign_duration_ms,
+    )
+
+    enqueue_started = time.perf_counter()
+    accepted = 0
+    dropped = 0
     for e in events:
-        bus.publish_measurement(e)
-    logger.info("Realtime ingest: accepted=%d events", len(events))
-    return {"accepted": len(events)}
+        if bus.publish_measurement(e):
+            accepted += 1
+        else:
+            dropped += 1
+
+    enqueue_duration_ms = round((time.perf_counter() - enqueue_started) * 1000, 3)
+    queue_after = bus.measurement_queue_size()
+    audit_log(
+        "ingest.stage.enqueue_complete",
+        request_id=request_id,
+        count=len(events),
+        accepted=accepted,
+        dropped=dropped,
+        duration_ms=enqueue_duration_ms,
+        queue_size_after=queue_after,
+    )
+
+    audit_log(
+        "ingest.received",
+        direction="external_to_backend",
+        request_id=request_id,
+        count=accepted,
+        dropped=dropped,
+        source_ids=source_ids,
+    )
+    total_duration_ms = round((time.perf_counter() - started_at) * 1000, 3)
+    audit_log(
+        "ingest.ack",
+        request_id=request_id,
+        accepted=accepted,
+        dropped=dropped,
+        total_duration_ms=total_duration_ms,
+    )
+    logger.info(
+        "Realtime ingest ack",
+        extra={
+            "event": {
+                "action": "ingest.ack.debug",
+                "component": "backend",
+                "request_id": request_id,
+                "accepted": accepted,
+                "dropped": dropped,
+                "queue_size_after": queue_after,
+                "total_duration_ms": total_duration_ms,
+            }
+        },
+    )
+    return {"accepted": accepted}
 
 
 @router.websocket("/ws")
@@ -187,9 +266,25 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         alert.acked_by = "operator"
                         alert.status = "acked"
                         alert.last_update_at = alert.acked_at
-                        session.commit()
-                        from app.models.telemetry import TelemetryMetadata
                         meta = session.get(TelemetryMetadata, alert.telemetry_id)
+                        write_ops_event(
+                            session,
+                            source_id=alert.source_id,
+                            event_time=alert.acked_at,
+                            event_type="alert.acked",
+                            severity="info",
+                            summary=f"{meta.name if meta else 'channel'} acked by operator",
+                            entity_type="operator_action",
+                            entity_id=meta.name if meta else None,
+                            payload={"alert_id": alert_id, "actor": "operator"},
+                        )
+                        session.commit()
+                        audit_log(
+                            "alert.acked",
+                            alert_id=alert_id,
+                            channel_name=meta.name if meta else None,
+                            source_id=alert.source_id,
+                        )
                         from app.utils.subsystem import infer_subsystem
                         subsys = infer_subsystem(meta.name, meta) if meta else "other"
                         schema = TelemetryAlertSchema(
@@ -229,9 +324,31 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         alert.resolution_code = resolution_code
                         alert.status = "resolved"
                         alert.last_update_at = alert.resolved_at
-                        session.commit()
-                        from app.models.telemetry import TelemetryMetadata
                         meta = session.get(TelemetryMetadata, alert.telemetry_id)
+                        write_ops_event(
+                            session,
+                            source_id=alert.source_id,
+                            event_time=alert.resolved_at,
+                            event_type="alert.resolved",
+                            severity="info",
+                            summary=f"{meta.name if meta else 'channel'} resolved: {resolution_text or resolution_code or 'no notes'}",
+                            entity_type="operator_action",
+                            entity_id=meta.name if meta else None,
+                            payload={
+                                "alert_id": alert_id,
+                                "actor": "operator",
+                                "resolution_text": resolution_text,
+                                "resolution_code": resolution_code,
+                            },
+                        )
+                        session.commit()
+                        audit_log(
+                            "alert.resolved",
+                            alert_id=alert_id,
+                            channel_name=meta.name if meta else None,
+                            source_id=alert.source_id,
+                            resolution_code=resolution_code,
+                        )
                         from app.utils.subsystem import infer_subsystem
                         subsys = infer_subsystem(meta.name, meta) if meta else "other"
                         schema = TelemetryAlertSchema(

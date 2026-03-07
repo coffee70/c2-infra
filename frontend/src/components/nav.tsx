@@ -12,8 +12,10 @@ import {
 
 const NAV_LINKS = [
   { href: "/overview", label: "Overview" },
+  { href: "/timeline", label: "Timeline" },
   { href: "/search", label: "Search" },
   { href: "/simulator", label: "Simulator" },
+  { href: "/docs", label: "Docs" },
 ] as const;
 
 export function Nav() {

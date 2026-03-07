@@ -1,3 +1,6 @@
+# Cursor debug logs
+.cursor/debug-*.log
+
 # Virtual environment
 .venv/
 venv/

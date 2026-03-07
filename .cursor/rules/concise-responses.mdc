@@ -1,0 +1,14 @@
+---
+description: Keep agent responses short and to the point, no fluff
+alwaysApply: true
+---
+
+# Concise Responses
+
+**Be brief.** Prefer short, direct answers over long explanations.
+
+- Skip preamble and filler (e.g., "Great question!", "I'd be happy to help")
+- Answer the question first; add detail only if needed
+- Use bullets or short paragraphs instead of long prose
+- Avoid repeating what the user already said
+- If the answer is simple, keep it to 1–3 sentences

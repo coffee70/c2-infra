@@ -14,6 +14,8 @@ import { TelemetryDetailActions } from "@/components/telemetry-detail-actions";
 import { TelemetryDetailLive } from "@/components/telemetry-detail-live";
 import { TelemetryDetailHeader } from "@/components/telemetry-detail-header";
 import { ExplanationBlock } from "@/components/explanation-block";
+import { ContextBanner } from "@/components/context-banner";
+import { ChannelRecentEvents } from "@/components/channel-recent-events";
 import { formatSmartValue } from "@/lib/format-value";
 import {
   Collapsible,
@@ -73,10 +75,10 @@ interface RecentPoint {
   value: number;
 }
 
-async function fetchSummary(name: string): Promise<ExplainResponse | null> {
+async function fetchSummary(name: string, sourceId: string = "default"): Promise<ExplainResponse | null> {
   try {
     const res = await fetch(
-      `${API_URL}/telemetry/${encodeURIComponent(name)}/summary`,
+      `${API_URL}/telemetry/${encodeURIComponent(name)}/summary?source_id=${encodeURIComponent(sourceId)}`,
       { cache: "no-store" }
     );
     if (!res.ok) return null;
@@ -86,10 +88,10 @@ async function fetchSummary(name: string): Promise<ExplainResponse | null> {
   }
 }
 
-async function fetchRecent(name: string): Promise<RecentPoint[]> {
+async function fetchRecent(name: string, sourceId: string = "default"): Promise<RecentPoint[]> {
   try {
     const res = await fetch(
-      `${API_URL}/telemetry/${encodeURIComponent(name)}/recent?limit=100`,
+      `${API_URL}/telemetry/${encodeURIComponent(name)}/recent?limit=100&source_id=${encodeURIComponent(sourceId)}`,
       { cache: "no-store" }
     );
     if (!res.ok) return [];
@@ -113,8 +115,8 @@ export default async function TelemetryDetailPage({
   const decodedName = decodeURIComponent(name);
 
   const [explain, recentData] = await Promise.all([
-    fetchSummary(decodedName),
-    fetchRecent(decodedName),
+    fetchSummary(decodedName, sourceId),
+    fetchRecent(decodedName, sourceId),
   ]);
 
   if (!explain) notFound();
@@ -122,6 +124,7 @@ export default async function TelemetryDetailPage({
   return (
     <div className="min-h-screen p-4 sm:p-6 lg:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
+        <ContextBanner sourceId={sourceId} />
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
@@ -197,7 +200,13 @@ export default async function TelemetryDetailPage({
           </CardContent>
         </Card>
 
-        <ExplanationBlock channelName={decodedName} />
+        <ExplanationBlock channelName={decodedName} sourceId={sourceId} />
+
+        <ChannelRecentEvents
+          channelName={decodedName}
+          sourceId={sourceId}
+          sinceMinutes={60}
+        />
 
         <Card className="border-muted">
           <CardHeader>

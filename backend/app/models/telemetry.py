@@ -6,7 +6,7 @@ from typing import Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Index, Numeric, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -40,6 +40,7 @@ class TelemetryData(Base):
 
     __tablename__ = "telemetry_data"
 
+    source_id: Mapped[str] = mapped_column(Text, primary_key=True, default="default")
     telemetry_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("telemetry_metadata.id", ondelete="CASCADE"),
@@ -52,15 +53,21 @@ class TelemetryData(Base):
     value: Mapped[float] = mapped_column(Numeric(20, 10), nullable=False)
 
     __table_args__ = (
-        Index("ix_telemetry_data_telemetry_id_timestamp", "telemetry_id", "timestamp"),
+        Index(
+            "ix_telemetry_data_source_telemetry_timestamp",
+            "source_id",
+            "telemetry_id",
+            "timestamp",
+        ),
     )
 
 
 class TelemetryStatistics(Base):
-    """Precomputed statistics for each telemetry point."""
+    """Precomputed statistics for each telemetry point per source."""
 
     __tablename__ = "telemetry_statistics"
 
+    source_id: Mapped[str] = mapped_column(Text, primary_key=True, default="default")
     telemetry_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("telemetry_metadata.id", ondelete="CASCADE"),
@@ -180,6 +187,42 @@ class TelemetryAlert(Base):
     resolved_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     resolution_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     resolution_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class OpsEvent(Base):
+    """Operational event for unified timeline (alerts, operator actions, data-path)."""
+
+    __tablename__ = "ops_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    source_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    event_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    payload: Mapped[Optional[dict]] = mapped_column(
+        JSONB(),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.utcnow,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_ops_events_source_time", "source_id", "event_time"),
+        Index("ix_ops_events_type_time", "event_type", "event_time"),
+    )
 
 
 class TelemetryAlertNote(Base):

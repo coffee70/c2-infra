@@ -73,11 +73,16 @@ def remove_from_watchlist(db: Session, telemetry_name: str) -> None:
         db.delete(entry)
 
 
-def _get_latest_value_and_ts(db: Session, telemetry_id) -> Optional[tuple[float, datetime]]:
-    """Get latest value and timestamp for a telemetry point."""
+def _get_latest_value_and_ts(
+    db: Session, telemetry_id, source_id: str = "default"
+) -> Optional[tuple[float, datetime]]:
+    """Get latest value and timestamp for a telemetry point, filtered by source."""
     stmt = (
         select(TelemetryData.timestamp, TelemetryData.value)
-        .where(TelemetryData.telemetry_id == telemetry_id)
+        .where(
+            TelemetryData.telemetry_id == telemetry_id,
+            TelemetryData.source_id == source_id,
+        )
         .order_by(desc(TelemetryData.timestamp))
         .limit(1)
     )
@@ -87,11 +92,16 @@ def _get_latest_value_and_ts(db: Session, telemetry_id) -> Optional[tuple[float,
     return None
 
 
-def _get_recent_for_sparkline(db: Session, telemetry_id, limit: int = SPARKLINE_POINTS) -> list[dict]:
-    """Get recent data points for sparkline (oldest first for chart)."""
+def _get_recent_for_sparkline(
+    db: Session, telemetry_id, source_id: str = "default", limit: int = SPARKLINE_POINTS
+) -> list[dict]:
+    """Get recent data points for sparkline (oldest first for chart), filtered by source."""
     stmt = (
         select(TelemetryData.timestamp, TelemetryData.value)
-        .where(TelemetryData.telemetry_id == telemetry_id)
+        .where(
+            TelemetryData.telemetry_id == telemetry_id,
+            TelemetryData.source_id == source_id,
+        )
         .order_by(desc(TelemetryData.timestamp))
         .limit(limit)
     )
@@ -118,7 +128,7 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
         if not meta:
             continue
 
-        stats = db.get(TelemetryStatistics, meta.id)
+        stats = db.get(TelemetryStatistics, (source_id, meta.id))
         if not stats:
             continue
 
@@ -127,7 +137,7 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
         if current:
             value, ts = float(current.value), current.generation_time
         else:
-            latest = _get_latest_value_and_ts(db, meta.id)
+            latest = _get_latest_value_and_ts(db, meta.id, source_id=source_id)
             if not latest:
                 continue
             value, ts = latest
@@ -138,7 +148,7 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
         red_high = float(meta.red_high) if meta.red_high is not None else None
         state, state_reason = _compute_state(value, z_score, red_low, red_high, std_dev)
 
-        sparkline_data = _get_recent_for_sparkline(db, meta.id)
+        sparkline_data = _get_recent_for_sparkline(db, meta.id, source_id=source_id)
 
         result.append({
             "name": meta.name,
@@ -158,9 +168,13 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
 
 def get_anomalies(db: Session, source_id: str = "default") -> dict[str, list[dict]]:
     """Get anomalous channels grouped by subsystem, optionally filtered by source."""
-    stmt = select(TelemetryMetadata, TelemetryStatistics).join(
-        TelemetryStatistics,
-        TelemetryMetadata.id == TelemetryStatistics.telemetry_id,
+    stmt = (
+        select(TelemetryMetadata, TelemetryStatistics)
+        .join(
+            TelemetryStatistics,
+            (TelemetryMetadata.id == TelemetryStatistics.telemetry_id)
+            & (TelemetryStatistics.source_id == source_id),
+        )
     )
     rows = db.execute(stmt).fetchall()
 
@@ -171,7 +185,7 @@ def get_anomalies(db: Session, source_id: str = "default") -> dict[str, list[dic
         if current:
             value, ts = float(current.value), current.generation_time
         else:
-            latest = _get_latest_value_and_ts(db, meta.id)
+            latest = _get_latest_value_and_ts(db, meta.id, source_id=source_id)
             if not latest:
                 continue
             value, ts = latest

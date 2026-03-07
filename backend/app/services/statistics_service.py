@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Optional
 
 import numpy as np
 from sqlalchemy import select
@@ -19,24 +20,41 @@ class StatisticsService:
     def __init__(self, db: Session) -> None:
         self._db = db
 
-    def recompute_all(self) -> int:
-        """Recompute statistics for all telemetry points. Returns count processed."""
+    def recompute_all(
+        self,
+        source_id: Optional[str] = None,
+        all_sources: bool = False,
+    ) -> int:
+        """Recompute statistics. source_id filters to one source; all_sources recomputes per source when source-aware. Default: single source 'default'."""
+        sources_to_process: list[str] = []
+        if all_sources:
+            stmt = select(TelemetryData.source_id).distinct()
+            sources_to_process = [r[0] for r in self._db.execute(stmt).fetchall()]
+        else:
+            sources_to_process = [source_id or "default"]
+
         stmt = select(TelemetryMetadata.id)
         meta_ids = [row[0] for row in self._db.execute(stmt).fetchall()]
         count = 0
-        for tid in meta_ids:
-            try:
-                self._recompute_one(tid)
-                count += 1
-            except Exception as e:
-                logger.warning("Failed to compute stats for %s: %s", tid, e)
+        for sid in sources_to_process:
+            for tid in meta_ids:
+                try:
+                    self._recompute_one(tid, source_id=sid)
+                    count += 1
+                except Exception as e:
+                    logger.warning(
+                        "Failed to compute stats for %s/%s: %s", sid, tid, e
+                    )
         logger.info("Recomputed statistics for %d telemetry points", count)
         return count
 
-    def _recompute_one(self, telemetry_id) -> None:
-        """Compute and upsert statistics for a single telemetry point."""
+    def _recompute_one(
+        self, telemetry_id, source_id: str = "default"
+    ) -> None:
+        """Compute and upsert statistics for a single telemetry point. source_id filters when telemetry_data is source-aware."""
         stmt = select(TelemetryData.value).where(
-            TelemetryData.telemetry_id == telemetry_id
+            TelemetryData.telemetry_id == telemetry_id,
+            TelemetryData.source_id == source_id,
         )
         rows = self._db.execute(stmt).fetchall()
         values = np.array([float(r[0]) for r in rows])
@@ -56,7 +74,8 @@ class StatisticsService:
         p95 = float(np.percentile(values, 95))
 
         n_samples = len(values)
-        existing = self._db.get(TelemetryStatistics, telemetry_id)
+        pk = (source_id, telemetry_id)
+        existing = self._db.get(TelemetryStatistics, pk)
         now = datetime.now(timezone.utc)
         if existing:
             existing.mean = Decimal(str(mean))
@@ -70,6 +89,7 @@ class StatisticsService:
             existing.last_computed_at = now
         else:
             stats = TelemetryStatistics(
+                source_id=source_id,
                 telemetry_id=telemetry_id,
                 mean=Decimal(str(mean)),
                 std_dev=Decimal(str(std_dev)),

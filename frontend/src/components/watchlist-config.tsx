@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { auditLog } from "@/lib/audit-log";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -68,10 +69,12 @@ export function WatchlistConfig() {
         body: JSON.stringify({ telemetry_name: name }),
       });
       if (res.ok) {
+        auditLog("watchlist.add", { telemetry_name: name });
         await fetchData();
         router.refresh();
       }
     } catch {
+      auditLog("watchlist.add", { telemetry_name: name, error: "Failed to add" });
       setError("Failed to add");
     } finally {
       setAddingName(null);
@@ -85,10 +88,12 @@ export function WatchlistConfig() {
         { method: "DELETE" }
       );
       if (res.ok) {
+        auditLog("watchlist.remove", { name });
         await fetchData();
         router.refresh();
       }
     } catch {
+      auditLog("watchlist.remove", { name, error: "Failed to remove" });
       setError("Failed to remove");
     }
   }

@@ -7,6 +7,8 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from app.lib.audit import audit_log
+
 router = APIRouter()
 
 SIMULATOR_URL = os.environ.get("SIMULATOR_URL", "http://simulator:8001")
@@ -44,16 +46,49 @@ async def simulator_status() -> dict[str, Any]:
     try:
         return await _proxy_get("/status")
     except httpx.ConnectError as e:
+        audit_log(
+            "simulator.status.proxy_failed",
+            origin="frontend",
+            destination="simulator",
+            error=str(e),
+            level="error",
+        )
         raise HTTPException(status_code=503, detail=f"Simulator unavailable: {e}")
 
 
 @router.post("/start")
 async def simulator_start(config: StartConfig) -> dict[str, Any]:
     """Start the simulator with given config."""
+    audit_log(
+        "simulator.start.received",
+        origin="frontend",
+        scenario=config.scenario,
+        duration=config.duration,
+        speed=config.speed,
+        source_id=config.source_id,
+    )
     try:
         body = config.model_dump(exclude_none=True)
-        return await _proxy_post("/start", body)
+        result = await _proxy_post("/start", body)
+        audit_log(
+            "simulator.start.proxied",
+            origin="frontend",
+            destination="simulator",
+            scenario=config.scenario,
+            duration=config.duration,
+            speed=config.speed,
+            source_id=config.source_id,
+            base_url=config.base_url,
+        )
+        return result
     except httpx.ConnectError as e:
+        audit_log(
+            "simulator.start.proxy_failed",
+            origin="frontend",
+            destination="simulator",
+            error=str(e),
+            level="error",
+        )
         raise HTTPException(status_code=503, detail=f"Simulator unavailable: {e}")
 
 
@@ -61,7 +96,9 @@ async def simulator_start(config: StartConfig) -> dict[str, Any]:
 async def simulator_pause() -> dict[str, Any]:
     """Pause the simulator."""
     try:
-        return await _proxy_post("/pause")
+        result = await _proxy_post("/pause")
+        audit_log("simulator.pause")
+        return result
     except httpx.ConnectError as e:
         raise HTTPException(status_code=503, detail=f"Simulator unavailable: {e}")
 
@@ -70,7 +107,9 @@ async def simulator_pause() -> dict[str, Any]:
 async def simulator_resume() -> dict[str, Any]:
     """Resume the simulator."""
     try:
-        return await _proxy_post("/resume")
+        result = await _proxy_post("/resume")
+        audit_log("simulator.resume")
+        return result
     except httpx.ConnectError as e:
         raise HTTPException(status_code=503, detail=f"Simulator unavailable: {e}")
 
@@ -79,6 +118,8 @@ async def simulator_resume() -> dict[str, Any]:
 async def simulator_stop() -> dict[str, Any]:
     """Stop the simulator."""
     try:
-        return await _proxy_post("/stop")
+        result = await _proxy_post("/stop")
+        audit_log("simulator.stop")
+        return result
     except httpx.ConnectError as e:
         raise HTTPException(status_code=503, detail=f"Simulator unavailable: {e}")

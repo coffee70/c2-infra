@@ -205,14 +205,14 @@ export function TrendChartAnalysis({
 
   const fetchData = useCallback(
     async (name: string, since: string, until: string | null) => {
-      let url = `${API_URL}/telemetry/${encodeURIComponent(name)}/recent?limit=${fetchLimit}&since=${encodeURIComponent(since)}`;
+      let url = `${API_URL}/telemetry/${encodeURIComponent(name)}/recent?limit=${fetchLimit}&since=${encodeURIComponent(since)}&source_id=${encodeURIComponent(sourceId)}`;
       if (until) url += `&until=${encodeURIComponent(until)}`;
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`Failed to fetch ${name}`);
       const json = await res.json();
       return (json.data || []) as DataPoint[];
     },
-    [fetchLimit]
+    [fetchLimit, sourceId]
   );
 
   useEffect(() => {

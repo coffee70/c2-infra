@@ -62,7 +62,7 @@ export type RealtimeMessage =
   | { type: "telemetry_update"; channel: RealtimeChannelUpdate }
   | { type: "snapshot_alerts"; active: TelemetryAlert[] }
   | { type: "alert_event"; event_type: string; alert: TelemetryAlert }
-  | { type: "feed_status"; source_id: string; connected: boolean }
+  | { type: "feed_status"; source_id: string; connected: boolean; state?: "connected" | "degraded" | "disconnected" }
   | { type: "hello_ack"; server_version: string }
   | { type: "error"; error: string };
 
@@ -94,13 +94,12 @@ export class RealtimeWsClient {
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
         this.send({ type: "hello", client_version: "1.0" });
-        if (this.subscriptions.watchlist.length > 0) {
-          this.send({
-            type: "subscribe_watchlist",
-            channels: this.subscriptions.watchlist,
-            source_id: this.subscriptions.sourceId,
-          });
-        }
+        // Always send subscribe_watchlist (empty channels = backend uses default watchlist)
+        this.send({
+          type: "subscribe_watchlist",
+          channels: this.subscriptions.watchlist,
+          source_id: this.subscriptions.sourceId,
+        });
         if (this.subscriptions.alerts) {
           this.send({
             type: "subscribe_alerts",

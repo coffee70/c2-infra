@@ -34,9 +34,10 @@ interface ExplainResponse {
 
 interface ExplanationBlockProps {
   channelName: string;
+  sourceId?: string;
 }
 
-export function ExplanationBlock({ channelName }: ExplanationBlockProps) {
+export function ExplanationBlock({ channelName, sourceId = "default" }: ExplanationBlockProps) {
   const [data, setData] = useState<ExplainResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -46,7 +47,7 @@ export function ExplanationBlock({ channelName }: ExplanationBlockProps) {
     setLoading(true);
     setError(false);
     fetch(
-      `${API_URL}/telemetry/${encodeURIComponent(channelName)}/explain`,
+      `${API_URL}/telemetry/${encodeURIComponent(channelName)}/explain?source_id=${encodeURIComponent(sourceId)}`,
       { cache: "no-store" }
     )
       .then((res) => {
@@ -67,7 +68,7 @@ export function ExplanationBlock({ channelName }: ExplanationBlockProps) {
     return () => {
       cancelled = true;
     };
-  }, [channelName]);
+  }, [channelName, sourceId]);
 
   if (loading) {
     return (

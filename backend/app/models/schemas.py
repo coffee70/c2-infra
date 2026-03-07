@@ -39,6 +39,7 @@ class TelemetryDataIngest(BaseModel):
 
     telemetry_name: str
     data: list[DataPoint]
+    source_id: str = "default"  # backward compatible; used when telemetry_data is source-aware
 
 
 class TelemetryDataResponse(BaseModel):
@@ -360,12 +361,36 @@ class WsAlertEvent(BaseModel):
     alert: TelemetryAlertSchema
 
 
+# --- Ops events (timeline) ---
+class OpsEventSchema(BaseModel):
+    """Single ops event for timeline API."""
+
+    id: str
+    source_id: str
+    event_time: str
+    event_type: str
+    severity: str
+    summary: str
+    entity_type: str
+    entity_id: Optional[str] = None
+    payload: Optional[dict] = None
+    created_at: str
+
+
+class OpsEventsResponse(BaseModel):
+    """Response for GET /ops/events."""
+
+    events: list[OpsEventSchema]
+    total: int
+
+
 class WsFeedStatus(BaseModel):
     """Feed health status (best-effort in dev/demo)."""
 
     type: str = "feed_status"
     source_id: str
     connected: bool
+    state: str = "disconnected"  # connected | degraded | disconnected
     last_reception_time: Optional[str] = None
     approx_rate_hz: Optional[float] = None
     drop_count: Optional[int] = None

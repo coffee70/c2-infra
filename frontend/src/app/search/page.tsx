@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { auditLog } from "@/lib/audit-log";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -136,6 +137,7 @@ export default function SearchPage() {
         await fetch(`${API_URL}/telemetry/watchlist/${encodeURIComponent(name)}`, {
           method: "DELETE",
         });
+        auditLog("watchlist.remove", { name });
         setFavorites((prev) => prev.filter((n) => n !== name));
       } else {
         await fetch(`${API_URL}/telemetry/watchlist`, {
@@ -143,9 +145,14 @@ export default function SearchPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ telemetry_name: name }),
         });
+        auditLog("watchlist.add", { telemetry_name: name });
         setFavorites((prev) => [...prev, name]);
       }
     } catch {
+      auditLog(isFav ? "watchlist.remove" : "watchlist.add", {
+        ...(isFav ? { name } : { telemetry_name: name }),
+        error: "Failed to update favorites",
+      });
       setFavoriteError("Failed to update favorites");
     }
   };
@@ -172,16 +179,25 @@ export default function SearchPage() {
         `${API_URL}/telemetry/search?${params.toString()}`
       );
       if (!res.ok) {
-        setError(
-          `Search failed: ${res.status === 500 ? "Server error" : res.status}`
-        );
+        const errMsg = res.status === 500 ? "Server error" : String(res.status);
+        auditLog("search", { q: query.trim(), error: errMsg });
+        setError(`Search failed: ${errMsg}`);
         setResults([]);
         return;
       }
       const data = await res.json();
-      setResults(data.results || []);
+      const resultsList = data.results || [];
+      auditLog("search", {
+        q: query.trim(),
+        subsystem: filterSubsystem || undefined,
+        anomalous_only: filterAnomalousOnly,
+        units: filterUnits || undefined,
+        result_count: resultsList.length,
+      });
+      setResults(resultsList);
     } catch (err) {
       console.error(err);
+      auditLog("search", { q: query.trim(), error: "Network error" });
       setError("Search failed: Network error");
       setResults([]);
     } finally {

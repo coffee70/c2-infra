@@ -7,7 +7,23 @@ from datetime import datetime, timezone
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
+from simulator.lib.audit import audit_log
+
+# Retry on timeout/connection errors; backoff avoids hammering a slow backend
+def _make_session() -> requests.Session:
+    s = requests.Session()
+    retries = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[502, 503, 504],
+        allowed_methods=["POST"],
+    )
+    s.mount("http://", HTTPAdapter(max_retries=retries))
+    s.mount("https://", HTTPAdapter(max_retries=retries))
+    return s
 from simulator.telemetry_definitions import (
     RATES_HZ,
     SCENARIOS,
@@ -75,6 +91,7 @@ class TelemetryStreamer:
         self._sim_elapsed = 0.0
         self._start_wall: float | None = None
         self._paused_at_sim: float = 0.0
+        self._session = _make_session()
 
     @property
     def state(self) -> str:
@@ -97,6 +114,7 @@ class TelemetryStreamer:
         batch_size = 20
         batch: list[dict[str, Any]] = []
         seq = 0
+        batch_num = 0
 
         while not self._stop_event.is_set():
             self._pause_event.wait()
@@ -111,6 +129,7 @@ class TelemetryStreamer:
             if self.duration > 0 and sim_elapsed >= self.duration:
                 with self._lock:
                     self._state = StreamerState.IDLE
+                audit_log("streamer.state", old_state="running", new_state="idle", reason="duration_reached")
                 break
 
             now = datetime.now(timezone.utc)
@@ -156,12 +175,38 @@ class TelemetryStreamer:
                 })
 
             if len(batch) >= batch_size:
+                batch_num += 1
                 try:
-                    r = requests.post(self.ingest_url, json={"events": batch}, timeout=5)
-                    if r.status_code != 200:
-                        pass
+                    r = self._session.post(
+                        self.ingest_url,
+                        json={"events": batch},
+                        timeout=(5, 30),  # connect 5s, read 30s
+                    )
+                    if r.status_code == 200:
+                        audit_log(
+                            "ingest.sent",
+                            direction="simulator_to_backend",
+                            count=len(batch),
+                            source_id=self.source_id,
+                            status_code=r.status_code,
+                        )
+                    else:
+                        audit_log(
+                            "ingest.error",
+                            level="warning",
+                            count=len(batch),
+                            source_id=self.source_id,
+                            status_code=r.status_code,
+                        )
                     batch = []
-                except requests.RequestException:
+                except requests.RequestException as e:
+                    audit_log(
+                        "ingest.error",
+                        level="warning",
+                        count=len(batch),
+                        source_id=self.source_id,
+                        error=str(e),
+                    )
                     batch = []
 
             jitter_sleep = 0.1 * (1 + (random.random() - 0.5) * self.jitter * 2)
@@ -169,12 +214,40 @@ class TelemetryStreamer:
 
         if batch:
             try:
-                requests.post(self.ingest_url, json={"events": batch}, timeout=5)
-            except Exception:
-                pass
+                r = self._session.post(
+                    self.ingest_url,
+                    json={"events": batch},
+                    timeout=(5, 30),
+                )
+                if r.status_code == 200:
+                    audit_log(
+                        "ingest.sent",
+                        direction="simulator_to_backend",
+                        count=len(batch),
+                        source_id=self.source_id,
+                        status_code=r.status_code,
+                    )
+                else:
+                    audit_log(
+                        "ingest.error",
+                        level="warning",
+                        count=len(batch),
+                        source_id=self.source_id,
+                        status_code=r.status_code,
+                    )
+            except Exception as e:
+                audit_log(
+                    "ingest.error",
+                    level="warning",
+                    count=len(batch),
+                    source_id=self.source_id,
+                    error=str(e),
+                )
 
         with self._lock:
+            old_state = self._state
             self._state = StreamerState.IDLE
+        audit_log("streamer.state", old_state=old_state, new_state="idle")
 
     def start(self) -> bool:
         with self._lock:
@@ -215,6 +288,7 @@ class TelemetryStreamer:
             self._pause_event.set()
         if self._thread:
             self._thread.join(timeout=2.0)
+        self._session.close()
         with self._lock:
             self._state = StreamerState.IDLE
             self._thread = None

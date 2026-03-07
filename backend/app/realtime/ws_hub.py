@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import WebSocket
@@ -9,6 +10,7 @@ from fastapi import WebSocket
 from app.models.schemas import (
     RealtimeChannelUpdate,
     TelemetryAlertSchema,
+    WsFeedStatus,
     WsSnapshotAlerts,
     WsSnapshotWatchlist,
     WsTelemetryUpdate,
@@ -16,6 +18,8 @@ from app.models.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+BROADCAST_QUEUE_MAXSIZE = 50  # Drop oldest when full to avoid event loop starvation
 
 
 class RealtimeWsHub:
@@ -25,10 +29,14 @@ class RealtimeWsHub:
         self._connections: dict[WebSocket, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._broadcast_queue: asyncio.Queue[RealtimeChannelUpdate] | None = None
+        self._drain_task: asyncio.Task[None] | None = None
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Set event loop for scheduling broadcasts from sync threads."""
         self._loop = loop
+        self._broadcast_queue = asyncio.Queue(maxsize=BROADCAST_QUEUE_MAXSIZE)
+        self._drain_task = asyncio.create_task(self._drain_broadcast_queue())
 
     async def connect(self, ws: WebSocket) -> None:
         """Accept connection and register."""
@@ -75,13 +83,69 @@ class RealtimeWsHub:
         return result
 
     def schedule_telemetry_update(self, update: RealtimeChannelUpdate) -> None:
-        """Schedule broadcast from sync context (e.g. processor thread)."""
+        """Enqueue broadcast from sync context. Single drain prevents event loop starvation."""
+        if self._loop is None or self._broadcast_queue is None:
+            return
+
+        def _enqueue():
+            try:
+                self._broadcast_queue.put_nowait(update)
+            except asyncio.QueueFull:
+                pass
+
+        self._loop.call_soon_threadsafe(_enqueue)
+
+    async def _drain_broadcast_queue(self) -> None:
+        """Single coroutine drains queue; prevents flooding event loop with broadcast tasks."""
+        if self._broadcast_queue is None:
+            return
+        while True:
+            try:
+                update = await self._broadcast_queue.get()
+                await self._do_broadcast_telemetry_update(update)
+                await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.exception("Broadcast drain error: %s", e)
+
+    def schedule_feed_status(self, status: dict) -> None:
+        """Schedule feed_status broadcast from sync context."""
         if self._loop is None:
             return
         asyncio.run_coroutine_threadsafe(
-            self.broadcast_telemetry_update(update),
+            self.broadcast_feed_status(status),
             self._loop,
         )
+
+    async def broadcast_feed_status(self, status: dict) -> None:
+        """Broadcast feed_status to all connected clients."""
+        if not self._connections:
+            return
+        ts = status.get("last_reception_time")
+        ts_str = None
+        if ts is not None:
+            try:
+                ts_str = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+            except (TypeError, OSError):
+                ts_str = str(ts)
+        msg = WsFeedStatus(
+            source_id=status["source_id"],
+            connected=status.get("connected", False),
+            state=status.get("state", "disconnected"),
+            last_reception_time=ts_str,
+            approx_rate_hz=status.get("approx_rate_hz"),
+            drop_count=status.get("drop_count"),
+        ).model_dump_json()
+        dead = []
+        for ws in list(self._connections.keys()):
+            try:
+                await ws.send_text(msg)
+            except Exception as e:
+                logger.warning("Feed status broadcast failed: %s", e)
+                dead.append(ws)
+        for ws in dead:
+            await self.disconnect(ws)
 
     def schedule_alert_event(
         self,
@@ -96,7 +160,7 @@ class RealtimeWsHub:
             self._loop,
         )
 
-    async def broadcast_telemetry_update(self, update: RealtimeChannelUpdate) -> None:
+    async def _do_broadcast_telemetry_update(self, update: RealtimeChannelUpdate) -> None:
         """Broadcast to clients subscribed to this channel and source."""
         targets = self._get_subscribed_connections(
             channel_name=update.name,
@@ -114,6 +178,10 @@ class RealtimeWsHub:
                 dead.append(ws)
         for ws in dead:
             await self.disconnect(ws)
+
+    async def broadcast_telemetry_update(self, update: RealtimeChannelUpdate) -> None:
+        """Legacy entry point; now delegates to queue-based drain."""
+        await self._do_broadcast_telemetry_update(update)
 
     async def broadcast_alert_event(
         self,
@@ -186,6 +254,16 @@ class RealtimeWsHub:
     def connection_count(self) -> int:
         """Return number of connected clients."""
         return len(self._connections)
+
+    async def stop(self) -> None:
+        """Cancel broadcast drain task."""
+        if self._drain_task is not None:
+            self._drain_task.cancel()
+            try:
+                await self._drain_task
+            except asyncio.CancelledError:
+                pass
+            self._drain_task = None
 
 
 _hub: RealtimeWsHub | None = None
