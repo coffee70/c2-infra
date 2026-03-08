@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { auditLog } from "@/lib/audit-log";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WatchlistCard } from "@/components/watchlist-card";
@@ -116,6 +117,8 @@ interface RealtimeOverviewWrapperProps {
   hasError: boolean;
   sources: TelemetrySource[];
   initialSourceId: string;
+  /** When set, we never sync sourceId to initialSourceId when it equals this (avoids reverting user selection to fallback while data loads). */
+  defaultSourceId?: string;
 }
 
 export function RealtimeOverviewWrapper({
@@ -124,6 +127,7 @@ export function RealtimeOverviewWrapper({
   hasError,
   sources,
   initialSourceId,
+  defaultSourceId,
 }: RealtimeOverviewWrapperProps) {
   const [channels, setChannels] = useState(initialChannels);
   const [anomalies, setAnomalies] = useState(initialAnomalies);
@@ -132,6 +136,30 @@ export function RealtimeOverviewWrapper({
   const [sourceId, setSourceId] = useState(initialSourceId);
   const lastUpdateAtRef = useRef<number | null>(null);
   const [client, setClient] = useState<RealtimeWsClient | null>(null);
+  const router = useRouter();
+  const pathname = usePathname();
+
+  useEffect(() => {
+    if (defaultSourceId !== undefined && initialSourceId === defaultSourceId) return;
+    setSourceId(initialSourceId);
+  }, [initialSourceId, defaultSourceId]);
+
+  const handleSourceChange = useCallback(
+    (newId: string) => {
+      setSourceId(newId);
+      if (pathname === "/overview") {
+        if (typeof window !== "undefined") {
+          try {
+            sessionStorage.setItem("overviewSourceId", newId);
+          } catch {
+            // ignore when storage unavailable (e.g. private browsing)
+          }
+        }
+        router.replace(`${pathname}?source=${encodeURIComponent(newId)}`);
+      }
+    },
+    [pathname, router]
+  );
 
   const LIVE_STALE_MS = 15000;
 
@@ -210,7 +238,7 @@ export function RealtimeOverviewWrapper({
     <div className="space-y-4">
       <ContextBanner
         sourceId={sourceId}
-        onSourceChange={setSourceId}
+        onSourceChange={handleSourceChange}
         sources={sources}
         activeAlertCount={totalAlerts}
       />

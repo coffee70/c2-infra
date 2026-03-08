@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Overview source selection now persists when navigating away and back (via URL `?source=` and sessionStorage so the nav Overview link restores your last selection).
+
 - **Simulator** nav link renamed to **Sources**; `/simulator` redirects to `/sources`
 - Simulator API: all routes (`/status`, `/start`, `/pause`, `/resume`, `/stop`) now require `source_id` query or body param; URL resolved from DB per source
 - Docs page: sticky side nav, centered article content

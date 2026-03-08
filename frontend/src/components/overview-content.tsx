@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { WatchlistConfig } from "@/components/watchlist-config";
 import { RealtimeOverviewWrapper } from "@/components/realtime-overview-wrapper";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -59,7 +60,14 @@ interface TelemetrySource {
   description?: string | null;
 }
 
+const OVERVIEW_SOURCE_STORAGE_KEY = "overviewSourceId";
+
 export function OverviewContent() {
+  const searchParams = useSearchParams();
+  const sourceFromUrl = searchParams.get("source");
+
+  const [storedSource, setStoredSource] = useState<string | null>(null);
+  const [storageChecked, setStorageChecked] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [channels, setChannels] = useState<OverviewChannel[]>([]);
@@ -72,7 +80,23 @@ export function OverviewContent() {
   });
   const [sources, setSources] = useState<TelemetrySource[]>([]);
 
+  const effectiveSource =
+    sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID;
+  const sourceReady = sourceFromUrl !== null || storageChecked;
+
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      setStoredSource(sessionStorage.getItem(OVERVIEW_SOURCE_STORAGE_KEY));
+    } catch {
+      setStoredSource(null);
+    }
+    setStorageChecked(true);
+  }, []);
+
+  useEffect(() => {
+    if (!sourceReady) return;
+
     let cancelled = false;
 
     async function load() {
@@ -81,10 +105,10 @@ export function OverviewContent() {
           "/telemetry/sources"
         );
         const overviewPromise = fetchWithTimeoutAndFallback(
-          `/telemetry/overview?source_id=${encodeURIComponent(DEFAULT_SOURCE_ID)}`
+          `/telemetry/overview?source_id=${encodeURIComponent(effectiveSource)}`
         );
         const anomaliesPromise = fetchWithTimeoutAndFallback(
-          `/telemetry/anomalies?source_id=${encodeURIComponent(DEFAULT_SOURCE_ID)}`
+          `/telemetry/anomalies?source_id=${encodeURIComponent(effectiveSource)}`
         );
 
         const [sourcesRes, overviewRes, anomaliesRes] = await Promise.all([
@@ -124,9 +148,9 @@ export function OverviewContent() {
 
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [effectiveSource, sourceReady]);
 
-  if (loading) {
+  if (!sourceReady || loading) {
     return (
       <div className="min-h-screen p-4 sm:p-6 lg:p-8 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -159,7 +183,12 @@ export function OverviewContent() {
           initialAnomalies={anomalies}
           hasError={!!error}
           sources={sources}
-          initialSourceId={DEFAULT_SOURCE_ID}
+          initialSourceId={
+            sources.some((s) => s.id === effectiveSource)
+              ? effectiveSource
+              : DEFAULT_SOURCE_ID
+          }
+          defaultSourceId={DEFAULT_SOURCE_ID}
         />
       </div>
     </div>

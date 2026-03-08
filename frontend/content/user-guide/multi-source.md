@@ -6,7 +6,7 @@ The platform supports multiple telemetry sources (vehicles and simulators). Each
 
 ## Source Selector
 
-In the **Context Banner** on the Overview (and other pages), you can switch between sources using the source selector dropdown. The list is grouped into **Vehicles** and **Simulators**.
+In the **Context Banner** on the Overview (and other pages), you can switch between sources using the source selector dropdown. The list is grouped into **Vehicles** and **Simulators**. On the Overview, the selected source is reflected in the URL (`?source=...`) and remembered for the session, so it persists when you switch to another tab (e.g. Sources) and click Overview again, or when you share the link.
 
 ## Per-Source Feed Health
 
