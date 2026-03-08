@@ -24,7 +24,7 @@ At the top of the Overview:
   - **Degraded** — no recent data for 15–60 seconds
   - **No data** — no data for 60+ seconds
 - **Approximate rate** — e.g. "~5 Hz" when connected
-- **Simulator status** — when the selected source is a simulator: connection pill (green when reachable, red when disconnected) and runtime state (Running, Paused, or Idle)
+- **Simulator status** — when the selected source is a simulator: a single status badge (Disconnected, Running, Paused, or Idle) with semantic color
 - **Source selector** — when multiple sources exist, switch between them; grouped by **Vehicles** and **Simulators** (see [Multi-Source Operations](/docs/multi-source))
 - **Alert counts** — active alerts by severity
 

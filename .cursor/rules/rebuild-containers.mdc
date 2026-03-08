@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Rebuild Containers After Changes
 
-When making changes (new features, bug fixes, refactors, etc.), **always rebuild the affected containers and restart them** before finishing. This ensures:
+**Before finishing any task that touches app code, you MUST rebuild the affected containers and restart them.** Do not skip this step. When making changes (new features, bug fixes, refactors, etc.), **always rebuild the affected containers and restart them** before finishing. This ensures:
 
 1. **Immediate verification** — You can open the browser and see changes without manual rebuilds
 2. **Build failure detection** — Catches compile/lint errors the agent might have missed
@@ -43,3 +43,5 @@ docker compose build && docker compose up -d
 3. Fix any build failures before considering the task done
 4. Run `docker compose up -d` for those services
 5. The user can then verify in the browser at http://localhost:3000 (frontend) or http://localhost:8000 (backend API)
+
+**Reminder:** Consider the task incomplete until you have run build + up -d for any service whose code you changed.

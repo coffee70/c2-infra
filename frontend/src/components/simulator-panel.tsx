@@ -16,7 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
+import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
@@ -270,11 +270,10 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-xl font-semibold tracking-tight">Telemetry Simulator</h2>
           <div className="flex items-center gap-2">
-            <Badge
-              variant={connected ? "success" : "destructive"}
-            >
-              {connected ? "Connected" : "Disconnected"}
-            </Badge>
+            <SimulatorStatusBadge
+              connected={connected}
+              state={status?.state}
+            />
             {onClose && (
               <Button variant="outline" size="sm" onClick={onClose}>
                 Close
@@ -296,21 +295,10 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
           <CardContent className="space-y-2">
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">State:</span>
-              <span
-                className={`font-medium capitalize ${
-                  !connected
-                    ? "text-muted-foreground"
-                    : state === "running"
-                    ? "text-green-500 dark:text-green-400"
-                    : state === "paused"
-                    ? "text-amber-500 dark:text-amber-400"
-                    : state === "unknown"
-                    ? "text-yellow-500 dark:text-yellow-400"
-                    : "text-muted-foreground"
-                }`}
-              >
-                {connected ? state : "—"}
-              </span>
+              <SimulatorStatusBadge
+                connected={connected}
+                state={status?.state}
+              />
             </div>
             {connected && state !== "idle" && elapsedDisplay != null && (
               <div className="flex items-center gap-2">

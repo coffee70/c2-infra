@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
 import {
   Dialog,
   DialogContent,
@@ -51,12 +51,41 @@ export default function SourcesPage() {
   const fetchSources = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/telemetry/sources`, { cache: "no-store" });
-      if (res.ok) {
-        const data = await res.json();
-        setSources(Array.isArray(data) ? data : []);
+      if (!res.ok) {
+        setSources([]);
+        setSimulatorStatuses({});
+        return;
       }
+      const data = await res.json();
+      const sourcesList = Array.isArray(data) ? data : [];
+      const sims = sourcesList.filter(
+        (s: TelemetrySource) => s.source_type === "simulator"
+      );
+
+      let initialStatuses: Record<string, SimulatorStatus> = {};
+      if (sims.length > 0) {
+        const results = await Promise.all(
+          sims.map(async (s: TelemetrySource) => {
+            try {
+              const r = await fetch(
+                `${API_URL}/simulator/status?source_id=${encodeURIComponent(s.id)}`,
+                { cache: "no-store" }
+              );
+              const status = r.ok ? await r.json() : { connected: false };
+              return [s.id, status] as const;
+            } catch {
+              return [s.id, { connected: false }] as const;
+            }
+          })
+        );
+        initialStatuses = Object.fromEntries(results);
+      }
+
+      setSources(sourcesList);
+      setSimulatorStatuses(sims.length > 0 ? initialStatuses : {});
     } catch {
       setSources([]);
+      setSimulatorStatuses({});
     } finally {
       setLoading(false);
     }
@@ -241,14 +270,10 @@ export default function SourcesPage() {
                       <div className="flex items-center justify-between gap-2 flex-wrap">
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{s.name}</span>
-                          <Badge variant={connected ? "success" : "destructive"} className="text-xs">
-                            {connected ? "Connected" : "Disconnected"}
-                          </Badge>
-                          {connected && status?.state && (
-                            <span className="text-xs text-muted-foreground capitalize">
-                              {status.state}
-                            </span>
-                          )}
+                          <SimulatorStatusBadge
+                            connected={connected}
+                            state={status?.state}
+                          />
                         </div>
                         <div className="flex gap-2">
                           {!isEditing ? (

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
 import {
   Select,
   SelectContent,
@@ -40,6 +41,9 @@ interface ContextBannerProps {
   sources?: TelemetrySource[];
   activeAlertCount?: number;
   alertCountBySeverity?: { warning?: number; caution?: number };
+  /** Pre-fetched simulator status for the initial source to avoid "Disconnected" flash. */
+  initialSimulatorSourceId?: string;
+  initialSimulatorStatus?: SimulatorStatus | null;
 }
 
 export function ContextBanner({
@@ -48,9 +52,16 @@ export function ContextBanner({
   sources = [],
   activeAlertCount = 0,
   alertCountBySeverity = {},
+  initialSimulatorSourceId,
+  initialSimulatorStatus,
 }: ContextBannerProps) {
   const [feedStatus, setFeedStatus] = useState<FeedStatus | null>(null);
-  const [simulatorStatus, setSimulatorStatus] = useState<SimulatorStatus | null>(null);
+  const [simulatorStatus, setSimulatorStatus] = useState<SimulatorStatus | null>(
+    () =>
+      initialSimulatorSourceId === sourceId && initialSimulatorStatus != null
+        ? initialSimulatorStatus
+        : null
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +89,13 @@ export function ContextBanner({
       setSimulatorStatus(null);
       return;
     }
+    const useInitial =
+      sourceId === initialSimulatorSourceId && initialSimulatorStatus != null;
+    if (useInitial) {
+      setSimulatorStatus(initialSimulatorStatus);
+    } else {
+      setSimulatorStatus(null);
+    }
     let cancelled = false;
     function fetchSimulator() {
       fetch(
@@ -98,7 +116,7 @@ export function ContextBanner({
       cancelled = true;
       clearInterval(id);
     };
-  }, [sourceId, isSimulator]);
+  }, [sourceId, isSimulator, initialSimulatorSourceId, initialSimulatorStatus]);
 
   const sourceLabel =
     sources.find((s) => s.id === sourceId)?.name || sourceId;
@@ -187,20 +205,13 @@ export function ContextBanner({
           </span>
         )}
       </div>
-      {isSimulator && simulatorStatus != null && (
+      {isSimulator && (
         <div className="flex items-center gap-2">
-          <span className="text-muted-foreground font-medium">Simulator:</span>
-          <Badge
-            variant={simulatorStatus.connected ? "success" : "destructive"}
-            className="text-xs"
-          >
-            {simulatorStatus.connected ? "Connected" : "Disconnected"}
-          </Badge>
-          {simulatorStatus.connected && simulatorStatus.state && (
-            <span className="capitalize text-muted-foreground">
-              {simulatorStatus.state}
-            </span>
-          )}
+          <span className="text-muted-foreground">Simulator:</span>
+          <SimulatorStatusBadge
+            connected={simulatorStatus?.connected ?? false}
+            state={simulatorStatus?.state}
+          />
         </div>
       )}
       {activeAlertCount > 0 && (

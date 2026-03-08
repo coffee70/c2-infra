@@ -58,6 +58,12 @@ interface TelemetrySource {
   id: string;
   name: string;
   description?: string | null;
+  source_type?: string;
+}
+
+interface SimulatorStatus {
+  connected: boolean;
+  state?: "idle" | "running" | "paused";
 }
 
 const OVERVIEW_SOURCE_STORAGE_KEY = "overviewSourceId";
@@ -79,6 +85,12 @@ export function OverviewContent() {
     other: [],
   });
   const [sources, setSources] = useState<TelemetrySource[]>([]);
+  const [initialSimulatorSourceId, setInitialSimulatorSourceId] = useState<
+    string | null
+  >(null);
+  const [initialSimulatorStatus, setInitialSimulatorStatus] = useState<
+    SimulatorStatus | null
+  >(null);
 
   const effectiveSource =
     sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID;
@@ -123,7 +135,29 @@ export function OverviewContent() {
         const overviewData = overviewRes.ok ? await overviewRes.json() : { channels: [] };
         const anomaliesData = anomaliesRes.ok ? await anomaliesRes.json() : { power: [], thermal: [], adcs: [], comms: [], other: [] };
 
-        setSources(Array.isArray(sourcesData) ? sourcesData : []);
+        const sourcesList = Array.isArray(sourcesData) ? sourcesData : [];
+        const isSimulatorSource =
+          sourcesList.some(
+            (s: TelemetrySource) =>
+              s.id === effectiveSource && s.source_type === "simulator"
+          );
+
+        let simSourceId: string | null = null;
+        let simStatus: SimulatorStatus | null = null;
+        if (isSimulatorSource) {
+          try {
+            const simRes = await fetchWithTimeoutAndFallback(
+              `/simulator/status?source_id=${encodeURIComponent(effectiveSource)}`
+            );
+            simStatus = simRes.ok ? await simRes.json() : { connected: false };
+            simSourceId = effectiveSource;
+          } catch {
+            simStatus = { connected: false };
+            simSourceId = effectiveSource;
+          }
+        }
+
+        setSources(sourcesList);
         setChannels(overviewData.channels || []);
         setAnomalies({
           power: anomaliesData.power || [],
@@ -132,6 +166,8 @@ export function OverviewContent() {
           comms: anomaliesData.comms || [],
           other: anomaliesData.other || [],
         });
+        setInitialSimulatorSourceId(simSourceId);
+        setInitialSimulatorStatus(simStatus);
         if (!overviewRes.ok || !anomaliesRes.ok) {
           setError("Some data failed to load");
         }
@@ -189,6 +225,8 @@ export function OverviewContent() {
               : DEFAULT_SOURCE_ID
           }
           defaultSourceId={DEFAULT_SOURCE_ID}
+          initialSimulatorSourceId={initialSimulatorSourceId}
+          initialSimulatorStatus={initialSimulatorStatus}
         />
       </div>
     </div>

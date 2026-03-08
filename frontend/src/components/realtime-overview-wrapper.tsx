@@ -111,6 +111,11 @@ interface TelemetrySource {
   description?: string | null;
 }
 
+interface SimulatorStatus {
+  connected: boolean;
+  state?: "idle" | "running" | "paused";
+}
+
 interface RealtimeOverviewWrapperProps {
   initialChannels: OverviewChannel[];
   initialAnomalies: AnomaliesData;
@@ -119,6 +124,9 @@ interface RealtimeOverviewWrapperProps {
   initialSourceId: string;
   /** When set, we never sync sourceId to initialSourceId when it equals this (avoids reverting user selection to fallback while data loads). */
   defaultSourceId?: string;
+  /** Pre-fetched simulator status for the initial source to avoid "Disconnected" flash. */
+  initialSimulatorSourceId?: string | null;
+  initialSimulatorStatus?: SimulatorStatus | null;
 }
 
 export function RealtimeOverviewWrapper({
@@ -128,6 +136,8 @@ export function RealtimeOverviewWrapper({
   sources,
   initialSourceId,
   defaultSourceId,
+  initialSimulatorSourceId = null,
+  initialSimulatorStatus = null,
 }: RealtimeOverviewWrapperProps) {
   const [channels, setChannels] = useState(initialChannels);
   const [anomalies, setAnomalies] = useState(initialAnomalies);
@@ -241,6 +251,8 @@ export function RealtimeOverviewWrapper({
         onSourceChange={handleSourceChange}
         sources={sources}
         activeAlertCount={totalAlerts}
+        initialSimulatorSourceId={initialSimulatorSourceId ?? undefined}
+        initialSimulatorStatus={initialSimulatorStatus ?? undefined}
       />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
