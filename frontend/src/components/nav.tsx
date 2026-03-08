@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Keyboard } from "lucide-react";
 import { OperatorModeToggle } from "@/components/operator-mode-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,6 +41,8 @@ export function Nav() {
             </Link>
           );
         })}
+      </div>
+      <div className="flex items-center gap-2">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
@@ -48,13 +51,13 @@ export function Nav() {
               className="h-8 text-muted-foreground hover:text-foreground"
               onClick={() => window.dispatchEvent(new CustomEvent("show-keyboard-shortcuts"))}
             >
-              ?
+              <Keyboard className="h-4 w-4" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Keyboard shortcuts</TooltipContent>
         </Tooltip>
+        <OperatorModeToggle />
       </div>
-      <OperatorModeToggle />
     </nav>
   );
 }
