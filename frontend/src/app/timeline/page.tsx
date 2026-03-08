@@ -10,7 +10,9 @@ import { Spinner } from "@/components/ui/spinner";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -33,6 +35,7 @@ interface OpsEventSchema {
 interface TelemetrySource {
   id: string;
   name: string;
+  source_type?: string;
 }
 
 const RANGE_OPTIONS = [
@@ -142,14 +145,41 @@ function TimelineContent() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {sources.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name}
-                    </SelectItem>
-                  ))}
-                  {sources.length === 0 && (
-                    <SelectItem value="default">Default</SelectItem>
-                  )}
+                  {(() => {
+                    const vehicles = sources.filter(
+                      (s) => (s.source_type ?? "vehicle") === "vehicle"
+                    );
+                    const simulators = sources.filter(
+                      (s) => s.source_type === "simulator"
+                    );
+                    return (
+                      <>
+                        {vehicles.length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel>Vehicles</SelectLabel>
+                            {vehicles.map((s) => (
+                              <SelectItem key={s.id} value={s.id}>
+                                {s.name}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        )}
+                        {simulators.length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel>Simulators</SelectLabel>
+                            {simulators.map((s) => (
+                              <SelectItem key={s.id} value={s.id}>
+                                {s.name}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        )}
+                        {sources.length === 0 && (
+                          <SelectItem value="default">Default</SelectItem>
+                        )}
+                      </>
+                    );
+                  })()}
                 </SelectContent>
               </Select>
             </div>

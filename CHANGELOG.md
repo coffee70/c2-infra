@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Constellation: Sources tab and multi-sim support**
+  - **Sources** tab (replaces Simulator): lists Vehicles and Simulators in separate sections
+  - Add-source wizard: add simulators with name and Base URL (server-reachable URL)
+  - Edit simulators: update name and Base URL from the Sources page
+  - Overview source selector grouped by **Vehicles** and **Simulators**
+  - Per-simulator backend proxy: all simulator routes require `source_id` and resolve URL from DB
+  - Two simulator containers (`simulator`, `simulator2`) in docker-compose for testing multi-sim
+- Simulator dual status: connection (reachable vs disconnected) and runtime state (idle/running/paused)
+  - Sources page (Manage panel): connection pill, Status card shows state and elapsed time; faster status polling (~2 s) and client-side elapsed tick
+  - Overview: when selected source is a simulator, Context Banner shows simulator connection pill and runtime state (Running, Paused, Idle)
+- Unified simulator status endpoint (`GET /simulator/status?source_id=...`): always returns 200 with `connected` and optional `state`/`config`/`sim_elapsed`; no 503 when simulator is unreachable
 - Stronger audit logs for simulator start flow to trace requests end-to-end:
   - `simulator.start.received` (backend): backend received start request from frontend
   - `simulator.start.proxied` (backend): backend successfully forwarded to simulator
@@ -27,10 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Simulator** nav link renamed to **Sources**; `/simulator` redirects to `/sources`
+- Simulator API: all routes (`/status`, `/start`, `/pause`, `/resume`, `/stop`) now require `source_id` query or body param; URL resolved from DB per source
 - Docs page: sticky side nav, centered article content
 
 ### Fixed
 
+- Trend Analysis "no data" when Overview has sparkline: recent endpoint now falls back to most recent points when the requested time range yields no data; range selector (15m, 1h, 6h, 24h, Custom) now stays visible so users can try different time ranges
+- Telemetry channel detail 404 for simulator sources: summary and explain endpoints now compute statistics on-the-fly when missing (e.g. new simulator sources that have data but no precomputed stats)
 - Feed status: API now exposes three-state `state` (connected/degraded/disconnected) so the context banner can show "No data" when a previously active source goes silent for >60s instead of staying "Degraded"
 - Removed unused `.cursor` volume mounts from backend and simulator in docker-compose
 - Overview default source set to `"default"` so the dashboard shows data after Quick Start (telemetry and backend APIs use `source_id=default` when none is provided)

@@ -6,15 +6,16 @@ Once you have historical data or synthetic data loaded, you can connect a real-t
 
 ## Option A: In-app Simulator
 
-1. Go to the **Simulator** page (nav link).
-2. Choose a scenario:
+1. Go to the **Sources** page (nav link). The page lists Vehicles and Simulators. Add a simulator with **Add source** → choose **Simulator** → enter a name and Base URL (e.g. `http://simulator:8001`). The server uses this URL to reach the simulator.
+2. Click **Manage** on a simulator to open its control panel on a dedicated page. The panel shows a connection pill (green when reachable, red when disconnected) and runtime state (Idle, Running, Paused) with elapsed time.
+3. Choose a scenario:
    - **Nominal** — normal operation
    - **Power sag** — voltage anomalies
    - **Thermal runaway** — temperature excursions
    - **Comm dropout** — communications issues
    - **Safe mode** — vehicle enters safe mode
-3. Adjust duration, speed, dropout, and jitter if desired.
-4. Click **Start**.
+4. Adjust duration, speed, dropout, and jitter if desired.
+5. Click **Start**.
 
 The simulator posts to the ingest API; the Overview will show live updates and the **Live** badge when connected.
 

@@ -1,5 +1,5 @@
-import { SimulatorPanel } from "@/components/simulator-panel";
+import { redirect } from "next/navigation";
 
 export default function SimulatorPage() {
-  return <SimulatorPanel />;
+  redirect("/sources");
 }

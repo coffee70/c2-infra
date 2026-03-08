@@ -1,6 +1,7 @@
 """Realtime snapshot and subscription helpers."""
 
 import logging
+import uuid
 from datetime import datetime
 
 from sqlalchemy import desc, select
@@ -143,6 +144,89 @@ def get_telemetry_sources(db: Session) -> list[dict]:
     stmt = select(TelemetrySource).order_by(TelemetrySource.id)
     rows = db.execute(stmt).scalars().all()
     return [
-        {"id": r.id, "name": r.name, "description": r.description}
+        {
+            "id": r.id,
+            "name": r.name,
+            "description": r.description,
+            "source_type": r.source_type,
+            "base_url": r.base_url,
+        }
         for r in rows
     ]
+
+
+def create_source(
+    db: Session,
+    source_type: str,
+    name: str,
+    *,
+    description: str | None = None,
+    base_url: str | None = None,
+) -> dict:
+    """Create a new telemetry source. Returns the created source dict."""
+    if source_type not in ("vehicle", "simulator"):
+        raise ValueError("source_type must be 'vehicle' or 'simulator'")
+    if source_type == "simulator" and not base_url:
+        raise ValueError("base_url is required for simulator sources")
+    prefix = "sim_" if source_type == "simulator" else "veh_"
+    source_id = f"{prefix}{uuid.uuid4().hex[:8]}"
+    src = TelemetrySource(
+        id=source_id,
+        name=name,
+        description=description,
+        source_type=source_type,
+        base_url=base_url if source_type == "simulator" else None,
+    )
+    db.add(src)
+    db.commit()
+    db.refresh(src)
+    return {
+        "id": src.id,
+        "name": src.name,
+        "description": src.description,
+        "source_type": src.source_type,
+        "base_url": src.base_url,
+    }
+
+
+def update_source(
+    db: Session,
+    source_id: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    base_url: str | None = None,
+) -> dict | None:
+    """Update a telemetry source. Returns updated source dict or None if not found."""
+    src = db.get(TelemetrySource, source_id)
+    if not src:
+        return None
+    if name is not None:
+        src.name = name
+    if description is not None:
+        src.description = description
+    if base_url is not None and src.source_type == "simulator":
+        src.base_url = base_url
+    db.commit()
+    db.refresh(src)
+    return {
+        "id": src.id,
+        "name": src.name,
+        "description": src.description,
+        "source_type": src.source_type,
+        "base_url": src.base_url,
+    }
+
+
+def get_source_by_id(db: Session, source_id: str) -> dict | None:
+    """Get a single source by id."""
+    src = db.get(TelemetrySource, source_id)
+    if not src:
+        return None
+    return {
+        "id": src.id,
+        "name": src.name,
+        "description": src.description,
+        "source_type": src.source_type,
+        "base_url": src.base_url,
+    }

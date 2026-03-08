@@ -451,18 +451,6 @@ export function TrendChartAnalysis({
     );
   }
 
-  if (data.length === 0) {
-    return (
-      <div className="flex h-[300px] items-center justify-center">
-        <EmptyState
-          icon="chart"
-          title="No data in selected time range"
-          description="Try a different time range or check if the channel has recent data."
-        />
-      </div>
-    );
-  }
-
   const rangeAriaLabels: Record<string, string> = {
     "15m": "Last 15 minutes",
     "1h": "Last 1 hour",
@@ -689,6 +677,15 @@ export function TrendChartAnalysis({
         role="img"
         aria-label={`Trend chart for ${channelName} over selected time range`}
       >
+        {data.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <EmptyState
+              icon="chart"
+              title="No data in selected time range"
+              description="Try a different time range (e.g. 24h) or check if the channel has recent data."
+            />
+          </div>
+        ) : (
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={displayData}
@@ -884,6 +881,7 @@ export function TrendChartAnalysis({
             )}
           </ComposedChart>
         </ResponsiveContainer>
+        )}
       </div>
     </div>
   );

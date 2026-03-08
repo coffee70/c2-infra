@@ -394,3 +394,21 @@ class WsFeedStatus(BaseModel):
     last_reception_time: Optional[str] = None
     approx_rate_hz: Optional[float] = None
     drop_count: Optional[int] = None
+
+
+# --- Sources (constellation) ---
+class SourceCreate(BaseModel):
+    """Request body for POST /telemetry/sources."""
+
+    source_type: str = Field(..., description="vehicle | simulator")
+    name: str
+    description: Optional[str] = None
+    base_url: Optional[str] = None  # required for simulator
+
+
+class SourceUpdate(BaseModel):
+    """Request body for PATCH /telemetry/sources/{id}."""
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+    base_url: Optional[str] = None  # for simulators

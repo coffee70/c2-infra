@@ -5,7 +5,9 @@ import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -20,10 +22,16 @@ interface FeedStatus {
   approx_rate_hz: number | null;
 }
 
+interface SimulatorStatus {
+  connected: boolean;
+  state?: "idle" | "running" | "paused";
+}
+
 interface TelemetrySource {
   id: string;
   name: string;
   description?: string | null;
+  source_type?: string;
 }
 
 interface ContextBannerProps {
@@ -42,6 +50,7 @@ export function ContextBanner({
   alertCountBySeverity = {},
 }: ContextBannerProps) {
   const [feedStatus, setFeedStatus] = useState<FeedStatus | null>(null);
+  const [simulatorStatus, setSimulatorStatus] = useState<SimulatorStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,6 +69,36 @@ export function ContextBanner({
       clearInterval(id);
     };
   }, [sourceId]);
+
+  const isSimulator =
+    sources.find((s) => s.id === sourceId)?.source_type === "simulator";
+
+  useEffect(() => {
+    if (!isSimulator) {
+      setSimulatorStatus(null);
+      return;
+    }
+    let cancelled = false;
+    function fetchSimulator() {
+      fetch(
+        `${API_URL}/simulator/status?source_id=${encodeURIComponent(sourceId)}`,
+        { cache: "no-store" }
+      )
+        .then((r) => (r.ok ? r.json() : { connected: false }))
+        .then((data) => {
+          if (!cancelled && data) setSimulatorStatus(data);
+        })
+        .catch(() => {
+          if (!cancelled) setSimulatorStatus({ connected: false });
+        });
+    }
+    fetchSimulator();
+    const id = setInterval(fetchSimulator, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [sourceId, isSimulator]);
 
   const sourceLabel =
     sources.find((s) => s.id === sourceId)?.name || sourceId;
@@ -81,11 +120,38 @@ export function ContextBanner({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {sources.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
+              {(() => {
+                const vehicles = sources.filter(
+                  (s) => (s.source_type ?? "vehicle") === "vehicle"
+                );
+                const simulators = sources.filter(
+                  (s) => s.source_type === "simulator"
+                );
+                return (
+                  <>
+                    {vehicles.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel>Vehicles</SelectLabel>
+                        {vehicles.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
+                    {simulators.length > 0 && (
+                      <SelectGroup>
+                        <SelectLabel>Simulators</SelectLabel>
+                        {simulators.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    )}
+                  </>
+                );
+              })()}
             </SelectContent>
           </Select>
         ) : (
@@ -121,6 +187,22 @@ export function ContextBanner({
           </span>
         )}
       </div>
+      {isSimulator && simulatorStatus != null && (
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground font-medium">Simulator:</span>
+          <Badge
+            variant={simulatorStatus.connected ? "success" : "destructive"}
+            className="text-xs"
+          >
+            {simulatorStatus.connected ? "Connected" : "Disconnected"}
+          </Badge>
+          {simulatorStatus.connected && simulatorStatus.state && (
+            <span className="capitalize text-muted-foreground">
+              {simulatorStatus.state}
+            </span>
+          )}
+        </div>
+      )}
       {activeAlertCount > 0 && (
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">Alerts:</span>

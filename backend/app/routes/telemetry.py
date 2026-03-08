@@ -18,6 +18,8 @@ from app.models.schemas import (
     ExplainResponse,
     RecentDataPoint,
     RelatedChannel,
+    SourceCreate,
+    SourceUpdate,
     StatisticsResponse,
     OverviewChannel,
     OverviewResponse,
@@ -42,7 +44,11 @@ from app.services.overview_service import (
     get_watchlist,
     remove_from_watchlist,
 )
-from app.services.realtime_service import get_telemetry_sources
+from app.services.realtime_service import (
+    create_source,
+    get_telemetry_sources,
+    update_source,
+)
 from app.utils.subsystem import infer_subsystem
 from app.services.statistics_service import StatisticsService
 from app.services.telemetry_service import TelemetryService, _compute_state
@@ -176,6 +182,52 @@ def list_sources(db: Session = Depends(get_db)):
     return get_telemetry_sources(db)
 
 
+@router.post("/sources")
+def create_source_route(
+    body: SourceCreate,
+    db: Session = Depends(get_db),
+):
+    """Create a new telemetry source (simulator only for now)."""
+    if body.source_type != "simulator":
+        raise HTTPException(
+            status_code=400,
+            detail="Only simulator sources can be created via this endpoint",
+        )
+    try:
+        result = create_source(
+            db,
+            source_type=body.source_type,
+            name=body.name,
+            description=body.description,
+            base_url=body.base_url,
+        )
+        audit_log("sources.create", source_id=result["id"], name=body.name)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.patch("/sources/{source_id}")
+def update_source_route(
+    source_id: str,
+    body: SourceUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update a telemetry source (name, description, base_url for simulators)."""
+    updates = body.model_dump(exclude_unset=True)
+    result = update_source(
+        db,
+        source_id=source_id,
+        name=updates.get("name"),
+        description=updates.get("description"),
+        base_url=updates.get("base_url"),
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    audit_log("sources.update", source_id=source_id)
+    return result
+
+
 @router.get("/watchlist", response_model=WatchlistResponse)
 def list_watchlist(db: Session = Depends(get_db)):
     """List watchlist entries."""
@@ -280,6 +332,12 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
         raise ValueError(f"Telemetry not found: {name}")
 
     stats_row = db.get(TelemetryStatistics, (source_id, meta.id))
+    if not stats_row:
+        # Compute stats on-the-fly when missing (e.g. new simulator source)
+        stats_service = StatisticsService(db)
+        stats_service._recompute_one(meta.id, source_id=source_id)
+        db.flush()
+        stats_row = db.get(TelemetryStatistics, (source_id, meta.id))
     if not stats_row:
         raise ValueError(f"Statistics not computed for: {name}")
 
@@ -418,6 +476,9 @@ def get_recent(
             raise HTTPException(status_code=400, detail="Invalid until format, use ISO8601")
     try:
         rows = _get_recent_values_db_only(db, name, limit=limit, since=since_dt, until=until_dt, source_id=source_id)
+        # If time filter yields no data but channel has data, return most recent points (like Overview sparkline)
+        if not rows and (since_dt is not None or until_dt is not None):
+            rows = _get_recent_values_db_only(db, name, limit=limit, source_id=source_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return RecentDataResponse(

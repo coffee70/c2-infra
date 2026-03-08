@@ -57,5 +57,17 @@ services:
     depends_on:
       - backend
 
+  simulator2:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    container_name: telemetry-simulator-2
+    ports:
+      - "8002:8001"
+    environment:
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:

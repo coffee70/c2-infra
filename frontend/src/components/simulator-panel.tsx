@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
@@ -53,8 +54,9 @@ const SCENARIOS = [
 ] as const;
 
 interface SimulatorStatus {
-  state: "idle" | "running" | "paused";
-  config: {
+  connected: boolean;
+  state?: "idle" | "running" | "paused";
+  config?: {
     scenario: string;
     duration: number;
     speed: number;
@@ -63,10 +65,15 @@ interface SimulatorStatus {
     source_id: string;
     base_url: string;
   } | null;
-  sim_elapsed: number;
+  sim_elapsed?: number;
 }
 
-export function SimulatorPanel() {
+interface SimulatorPanelProps {
+  sourceId: string;
+  onClose?: () => void;
+}
+
+export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
   const [status, setStatus] = useState<SimulatorStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +87,9 @@ export function SimulatorPanel() {
   const statusInFlightRef = useRef(false);
   const consecutiveStatusFailuresRef = useRef(0);
   const lastLoggedStateRef = useRef<string | null>(null);
+  const lastSimElapsedRef = useRef<number>(0);
+  const lastFetchTimeRef = useRef<number>(0);
+  const [displayElapsed, setDisplayElapsed] = useState<number | null>(null);
 
   const fetchStatus = useCallback(async () => {
     if (statusInFlightRef.current) {
@@ -88,15 +98,19 @@ export function SimulatorPanel() {
     statusInFlightRef.current = true;
     try {
       const { response: res } = await fetchApiWithFallback(
-        "/simulator/status",
+        `/simulator/status?source_id=${encodeURIComponent(sourceId)}`,
         { cache: "no-store" }
       );
       if (!res.ok) throw new Error(res.statusText);
-      const data = await res.json();
+      const data: SimulatorStatus = await res.json();
       setStatus(data);
       consecutiveStatusFailuresRef.current = 0;
       setError(null);
-      if (lastLoggedStateRef.current !== data.state) {
+      if (data.connected && data.sim_elapsed != null) {
+        lastSimElapsedRef.current = data.sim_elapsed;
+        lastFetchTimeRef.current = Date.now();
+      }
+      if (data.connected && data.state && lastLoggedStateRef.current !== data.state) {
         lastLoggedStateRef.current = data.state;
         auditLog("simulator.status.fetched", {
           state: data.state,
@@ -105,19 +119,36 @@ export function SimulatorPanel() {
       }
     } catch (e) {
       consecutiveStatusFailuresRef.current += 1;
+      setStatus({ connected: false });
       if (consecutiveStatusFailuresRef.current >= 2) {
         setError("Simulator unavailable");
       }
     } finally {
       statusInFlightRef.current = false;
     }
-  }, []);
+  }, [sourceId]);
 
   useEffect(() => {
     fetchStatus();
-    const id = setInterval(fetchStatus, 10000);
+    const id = setInterval(fetchStatus, 2000);
     return () => clearInterval(id);
   }, [fetchStatus]);
+
+  useEffect(() => {
+    if (!status?.connected || status.state !== "running" || status.sim_elapsed == null) {
+      return;
+    }
+    const speed = status.config?.speed ?? 1;
+    const tick = () => {
+      const elapsed =
+        lastSimElapsedRef.current +
+        ((Date.now() - lastFetchTimeRef.current) / 1000) * speed;
+      setDisplayElapsed(elapsed);
+    };
+    tick();
+    const id = setInterval(tick, 200);
+    return () => clearInterval(id);
+  }, [status?.connected, status?.state, status?.sim_elapsed, status?.config?.speed]);
 
   async function handleStart() {
     setLoading(true);
@@ -141,7 +172,7 @@ export function SimulatorPanel() {
             speed,
             drop_prob: dropProb,
             jitter,
-            source_id: "simulator",
+            source_id: sourceId,
           }),
         },
       );
@@ -171,7 +202,7 @@ export function SimulatorPanel() {
     setError(null);
     try {
       const { response: res } = await fetchApiWithFallback(
-        "/simulator/pause",
+        `/simulator/pause?source_id=${encodeURIComponent(sourceId)}`,
         { method: "POST" },
       );
       if (!res.ok) throw new Error(await res.text());
@@ -190,7 +221,7 @@ export function SimulatorPanel() {
     setError(null);
     try {
       const { response: res } = await fetchApiWithFallback(
-        "/simulator/resume",
+        `/simulator/resume?source_id=${encodeURIComponent(sourceId)}`,
         { method: "POST" },
       );
       if (!res.ok) throw new Error(await res.text());
@@ -209,7 +240,7 @@ export function SimulatorPanel() {
     setError(null);
     try {
       const { response: res } = await fetchApiWithFallback(
-        "/simulator/stop",
+        `/simulator/stop?source_id=${encodeURIComponent(sourceId)}`,
         { method: "POST" },
       );
       if (!res.ok) throw new Error(await res.text());
@@ -223,14 +254,33 @@ export function SimulatorPanel() {
     }
   }
 
-  const state = status?.state ?? "unknown";
-  const canEdit = state === "idle" || state === "unknown";
+  const connected = status?.connected === true;
+  const state = status?.state ?? (connected ? "idle" : "unknown");
+  const canEdit = connected && (state === "idle" || state === "unknown");
+  const elapsedDisplay =
+    state === "running"
+      ? (displayElapsed ?? status?.sim_elapsed ?? 0)
+      : status?.sim_elapsed;
+
+  const isEmbedded = onClose != null;
 
   return (
-    <div className="min-h-screen p-4 sm:p-6 lg:p-8">
-      <div className="max-w-2xl mx-auto space-y-8">
-        <div className="space-y-1">
-          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Telemetry Simulator</h1>
+    <div className={isEmbedded ? "space-y-6 border rounded-lg p-6 bg-card" : "space-y-6"}>
+      <div className={isEmbedded ? "space-y-6" : "space-y-8"}>
+        <div className="flex items-center justify-between gap-4">
+          <h2 className="text-xl font-semibold tracking-tight">Telemetry Simulator</h2>
+          <div className="flex items-center gap-2">
+            <Badge
+              variant={connected ? "success" : "destructive"}
+            >
+              {connected ? "Connected" : "Disconnected"}
+            </Badge>
+            {onClose && (
+              <Button variant="outline" size="sm" onClick={onClose}>
+                Close
+              </Button>
+            )}
+          </div>
         </div>
 
         {error && (
@@ -248,7 +298,9 @@ export function SimulatorPanel() {
               <span className="text-sm text-muted-foreground">State:</span>
               <span
                 className={`font-medium capitalize ${
-                  state === "running"
+                  !connected
+                    ? "text-muted-foreground"
+                    : state === "running"
                     ? "text-green-500 dark:text-green-400"
                     : state === "paused"
                     ? "text-amber-500 dark:text-amber-400"
@@ -257,13 +309,13 @@ export function SimulatorPanel() {
                     : "text-muted-foreground"
                 }`}
               >
-                {state}
+                {connected ? state : "—"}
               </span>
             </div>
-            {state !== "idle" && status?.sim_elapsed != null && (
+            {connected && state !== "idle" && elapsedDisplay != null && (
               <div className="flex items-center gap-2">
                 <span className="text-sm text-muted-foreground">Elapsed:</span>
-                <span className="font-mono">{status.sim_elapsed.toFixed(1)}s</span>
+                <span className="font-mono">{elapsedDisplay.toFixed(1)}s</span>
               </div>
             )}
           </CardContent>
@@ -367,7 +419,7 @@ export function SimulatorPanel() {
           <CardContent className="flex flex-wrap gap-2">
             <Button
               onClick={handleStart}
-              disabled={loading || (state !== "idle" && state !== "unknown")}
+              disabled={!connected || loading || (state !== "idle" && state !== "unknown")}
               variant="default"
             >
               {loading && state === "idle" ? (
@@ -381,21 +433,21 @@ export function SimulatorPanel() {
             </Button>
             <Button
               onClick={handlePause}
-              disabled={loading || state !== "running"}
+              disabled={!connected || loading || state !== "running"}
               variant="outline"
             >
               Pause
             </Button>
             <Button
               onClick={handleResume}
-              disabled={loading || state !== "paused"}
+              disabled={!connected || loading || state !== "paused"}
               variant="outline"
             >
               Resume
             </Button>
             <Button
               onClick={handleStop}
-              disabled={loading || state === "idle"}
+              disabled={!connected || loading || state === "idle"}
               variant="outline"
             >
               Stop

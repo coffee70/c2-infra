@@ -376,6 +376,13 @@ class TelemetryService:
             raise ValueError(f"Telemetry not found: {name}")
 
         stats_row = self._db.get(TelemetryStatistics, (source_id, meta.id))
+        if not stats_row:
+            from app.services.statistics_service import StatisticsService
+
+            stats_service = StatisticsService(self._db)
+            stats_service._recompute_one(meta.id, source_id=source_id)
+            self._db.flush()
+            stats_row = self._db.get(TelemetryStatistics, (source_id, meta.id))
         recent_row = self.get_recent_value_with_timestamp(name, source_id=source_id)
         recent_value = recent_row[0] if recent_row else None  # (value, timestamp)
         last_timestamp = recent_row[1].isoformat() if recent_row else None
