@@ -34,4 +34,4 @@ Channels with current state outside Normal appear in the anomalies queue (and in
 
 ## Edit Watchlist
 
-Use **Edit watchlist** to add or remove channels. Use [Search](/docs/investigating-channels) to find channels by meaning (e.g. "voltage") and add them to the watchlist.
+Use **Edit watchlist** to open the configure modal: add or remove channels, and see how many are on the list and how many are available. Order in the modal matches the Overview cards. Use [Search](/docs/investigating-channels) to find channels by meaning (e.g. "voltage") and add them to the watchlist.
