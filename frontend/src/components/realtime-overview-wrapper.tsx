@@ -6,7 +6,10 @@ import { auditLog } from "@/lib/audit-log";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { WatchlistCard } from "@/components/watchlist-card";
 import { EventConsole } from "@/components/event-console";
-import { ContextBanner } from "@/components/context-banner";
+import {
+  ContextBanner,
+  type AlertSummary,
+} from "@/components/context-banner";
 import { NowPanel } from "@/components/now-panel";
 import { EmptyState } from "@/components/empty-state";
 import {
@@ -69,6 +72,14 @@ function alertToEntry(a: TelemetryAlert): AnomalyEntry & { id: string } {
   };
 }
 
+const SUBSYSTEM_LABELS: Record<string, string> = {
+  power: "Power",
+  thermal: "Thermal",
+  adcs: "ADCS",
+  comms: "Comms",
+  other: "Other",
+};
+
 function alertsToAnomaliesData(active: TelemetryAlert[]): AnomaliesData {
   const known = ["power", "thermal", "adcs", "comms"] as const;
   const result: AnomaliesData = {
@@ -88,6 +99,26 @@ function alertsToAnomaliesData(active: TelemetryAlert[]): AnomaliesData {
     if (arr) arr.push(entry);
   }
   return result;
+}
+
+const ALERT_PREVIEW_MAX = 5;
+
+function anomaliesToAlertSummaries(data: AnomaliesData): AlertSummary[] {
+  const groups: { entries: AnomalyEntry[]; label: string }[] = [
+    { entries: data.power, label: SUBSYSTEM_LABELS.power },
+    { entries: data.thermal, label: SUBSYSTEM_LABELS.thermal },
+    { entries: data.adcs, label: SUBSYSTEM_LABELS.adcs },
+    { entries: data.comms, label: SUBSYSTEM_LABELS.comms },
+    { entries: data.other ?? [], label: SUBSYSTEM_LABELS.other },
+  ];
+  const out: AlertSummary[] = [];
+  for (const { entries, label } of groups) {
+    for (const e of entries) {
+      if (out.length >= ALERT_PREVIEW_MAX) return out;
+      out.push({ channelName: e.name, subsystem: label });
+    }
+  }
+  return out;
 }
 
 function channelUpdateToOverview(ch: RealtimeChannelUpdate): OverviewChannel {
@@ -244,6 +275,8 @@ export function RealtimeOverviewWrapper({
     anomalies.comms.length +
     (anomalies.other?.length ?? 0);
 
+  const alertSummaries = anomaliesToAlertSummaries(anomalies);
+
   return (
     <div className="space-y-4">
       <ContextBanner
@@ -251,6 +284,8 @@ export function RealtimeOverviewWrapper({
         onSourceChange={handleSourceChange}
         sources={sources}
         activeAlertCount={totalAlerts}
+        scrollToAlertsId="events-console"
+        alertSummaries={alertSummaries}
         initialSimulatorSourceId={initialSimulatorSourceId ?? undefined}
         initialSimulatorStatus={initialSimulatorStatus ?? undefined}
       />

@@ -26,11 +26,11 @@ At the top of the Overview:
 - **Approximate rate** — e.g. "~5 Hz" when connected
 - **Simulator status** — when the selected source is a simulator: a single status badge (Disconnected, Running, Paused, or Idle) with semantic color
 - **Source selector** — when multiple sources exist, switch between them; grouped by **Vehicles** and **Simulators** (see [Multi-Source Operations](/docs/multi-source))
-- **Alert counts** — active alerts by severity
+- **Alerts** — active alert count; click the count to scroll to the **Events Console** on the same page, or open the dropdown to see a short preview of alerts (subsystem and channel name). **Other** in the preview means the channel is not classified as Power, Thermal, ADCS, or Comms. Use **View all in Events Console** to jump to the full list.
 
 ## Anomalies Queue
 
-Channels with current state outside Normal appear in the anomalies queue, grouped by subsystem (Power, Thermal, ADCS, Comms, Other). Click an entry to open the channel detail.
+Channels with current state outside Normal appear in the anomalies queue (and in the context banner alert preview), grouped by subsystem: **Power**, **Thermal**, **ADCS**, **Comms**, or **Other**. **Other** is used for channels that don't belong to one of the four main subsystems. Click an entry to open the channel detail.
 
 ## Edit Watchlist
 

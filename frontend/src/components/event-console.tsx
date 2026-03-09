@@ -124,6 +124,7 @@ export function EventConsole({
   return (
     <>
       <Card
+        id="events-console"
         className={
           totalCount > 0 ? "border-l-4 border-l-destructive/50" : undefined
         }
