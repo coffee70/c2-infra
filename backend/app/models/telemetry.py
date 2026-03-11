@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -251,3 +251,54 @@ class TelemetryAlertNote(Base):
     author: Mapped[str] = mapped_column(Text, nullable=False)
     note_text: Mapped[str] = mapped_column(Text, nullable=False)
     note_type: Mapped[str] = mapped_column(Text, nullable=False)  # resolution, comment
+
+
+class PositionChannelMapping(Base):
+    """Per-source mapping from telemetry channels to position vectors for Earth view."""
+
+    __tablename__ = "position_channel_mappings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    source_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # gps_lla | ecef | eci
+    frame_type: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # GPS LLA channels
+    lat_channel_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    lon_channel_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    alt_channel_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Cartesian channels (ECEF/ECI)
+    x_channel_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    y_channel_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    z_channel_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.utcnow,
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_position_channel_mappings_source_active",
+            "source_id",
+            "active",
+        ),
+    )

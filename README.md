@@ -260,6 +260,7 @@ curl -X POST "http://localhost:8000/telemetry/watchlist" \
 | `OPENAI_API_KEY` | OpenAI API key (optional; mock used if empty) |
 | `OPENAI_BASE_URL` | Custom API base (e.g., Ollama) |
 | `NEXT_PUBLIC_API_URL` | Backend URL for frontend (default: http://localhost:8000) |
+| `CORS_ORIGINS` | Backend: comma-separated allowed CORS origins (default: http://localhost:3000,http://127.0.0.1:3000). Set to your frontend URL(s) when deploying (e.g. `https://app.example.com`). |
 
 ## Project Structure
 

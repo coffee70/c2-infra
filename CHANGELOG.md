@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Planning** page and nav tab with full-screen 3D Earth view and source selector; use the Planning tab for globe-based position visualization (Overview is data-only).
+- 3D Earth visualization and position mapping
+  - Backend `PositionChannelMapping` model, coordinate helpers, and `/telemetry/position/*` APIs to expose latest per-source positions in a canonical latitude/longitude/altitude form.
+  - Frontend Earth view on the **Planning** page: full-viewport globe with overlay source selector, live/stale indication, and **position history trail** (recent path per source as a polyline in addition to the current position point).
+  - Operator-facing **Position mapping** UI on the Planning page (overlay control) to configure which telemetry channels (e.g. `GPS_LAT`/`GPS_LON`/`GPS_ALT` or XYZ) should be treated as position for each source.
 - **Constellation: Sources tab and multi-sim support**
   - **Sources** tab (replaces Simulator): lists Vehicles and Simulators in separate sections
   - Add-source wizard: add simulators with name and Base URL (server-reachable URL)
@@ -38,10 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Cesium static assets:** No longer committed; `frontend/public/cesium` is in `.gitignore` and is copied from `node_modules/cesium/Build/Cesium` at build time (`prebuild` / `predev` script). Removes 392+ vendored files from the repo and keeps assets in sync with the installed `cesium` package. If your branch already had these files tracked, run `git rm -r --cached frontend/public/cesium` once.
+- **CORS:** Allowed origins are configurable via the `CORS_ORIGINS` environment variable (comma-separated list). Default is `http://localhost:3000,http://127.0.0.1:3000` for local development; set to your frontend URL(s) when deploying (e.g. `https://app.example.com`).
+- **Simulator GPS telemetry:** Simulator now emits orbit-driven position for `GPS_LAT`, `GPS_LON`, and `GPS_ALT` (simple circular LEO model) so the Planning Earth view shows a time-varying trajectory instead of random noise.
+- Overview reverted to a data-only layout: watchlist, feed health, anomalies, and Event Console only; no Earth on Overview (use the **Planning** tab for the full-screen 3D Earth view).
+- **Position mapping** moved from Overview to Planning and merged into the Earth view card: a single **left-side card** on Planning (“Earth view”) now includes source visibility, live/stale indicator, and per-source position mapping—no separate modal or button.
+- **Planning Earth view card UX:** “Show on globe” is a multi-select dropdown (no per-source checkboxes). “Position mapping” is a per-source list with expandable rows; you can configure frame and channels for any source independently of whether it’s currently shown on the globe.
 - **Configure watchlist modal:** Clearer structure (description, section counts), error and success feedback (Alert for errors, loading on remove, brief "Added" state after add), icon remove button with aria-label, primary Done button in footer, slightly wider modal (max-w-lg), and accessibility improvements (DialogDescription, section headings).
 - **Context banner alerts:** On Overview, the Alerts count in the context banner is clickable: it scrolls to the Events Console. A dropdown on the count shows a short preview of active alerts (subsystem and channel) with a "View all in Events Console" action.
 - **Simulator status display:** Overview context banner, Sources page (Simulators list), and Manage simulator panel now show a single status badge per simulator (Disconnected, Running, Paused, or Idle) with consistent semantic colors instead of separate connection and run-state indicators. Context banner "Simulator:" label styling aligned with Feed and Alerts.
 - Overview source selection now persists when navigating away and back (via URL `?source=` and sessionStorage so the nav Overview link restores your last selection).
+- Planning "Show on globe" selection now persists when navigating away and back (sessionStorage key `planningShowOnGlobeIds`).
 
 - **Simulator** nav link renamed to **Sources**; `/simulator` redirects to `/sources`
 - Simulator API: all routes (`/status`, `/start`, `/pause`, `/resume`, `/stop`) now require `source_id` query or body param; URL resolved from DB per source

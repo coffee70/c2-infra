@@ -8,13 +8,21 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.config import get_settings
 from app.lib.audit import audit_log
 from app.lib.logging_setup import configure_logging
-from app.routes import ops, realtime, simulator, telemetry
+from app.routes import ops, position, realtime, simulator, telemetry
 
 configure_logging()
 logger = logging.getLogger(__name__)
+
+# CORS origins: from CORS_ORIGINS env (comma-separated). Default includes localhost for local dev.
+CORS_ORIGINS = get_settings().get_cors_origins_list()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -97,11 +105,55 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+
+def _cors_headers(request: Request) -> dict:
+    origin = request.headers.get("origin")
+    if origin not in CORS_ORIGINS:
+        origin = CORS_ORIGINS[0] if CORS_ORIGINS else ""
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+    }
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_with_cors(request: Request, exc: StarletteHTTPException):
+    """Add CORS headers to HTTPException responses."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=_cors_headers(request),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_with_cors(request: Request, exc: RequestValidationError):
+    """Add CORS headers to validation error responses."""
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+        headers=_cors_headers(request),
+    )
+
+
+@app.exception_handler(Exception)
+async def add_cors_to_exception_response(request: Request, exc: Exception):
+    """Ensure CORS headers are present on exception responses so the client can read the error."""
+    logger.exception("Unhandled exception: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+        headers=_cors_headers(request),
+    )
 
 
 @app.middleware("http")
@@ -128,6 +180,7 @@ async def audit_request_middleware(request: Request, call_next):
 
 
 app.include_router(telemetry.router, prefix="/telemetry", tags=["telemetry"])
+app.include_router(position.router, prefix="/telemetry", tags=["position"])
 app.include_router(ops.router, prefix="/ops", tags=["ops"])
 app.include_router(realtime.router, prefix="/telemetry/realtime", tags=["realtime"])
 app.include_router(simulator.router, prefix="/simulator", tags=["simulator"])

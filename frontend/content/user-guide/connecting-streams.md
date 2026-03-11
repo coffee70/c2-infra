@@ -17,7 +17,7 @@ Once you have historical data or synthetic data loaded, you can connect a real-t
 4. Adjust duration, speed, dropout, and jitter if desired.
 5. Click **Start**.
 
-The simulator posts to the ingest API; the Overview will show live updates and the **Live** badge when connected.
+The simulator posts to the ingest API; the Overview will show live updates and the **Live** badge when connected. To see the simulator’s position and trail on the 3D globe, go to the **Planning** tab, add the simulator to **Show on globe**, and configure **Position mapping** (frame and channels, e.g. GPS LLA with `GPS_LAT`, `GPS_LON`, `GPS_ALT`) for that source—see [Monitoring the Overview](/docs/monitoring-overview#workflow-simulator-on-the-planning-globe).
 
 ## Option B: External Mock Streamer
 

@@ -228,3 +228,14 @@ body[data-operator-mode="large-type"] .text-xs {
     @apply bg-background text-foreground;
   }
 }
+
+/* Cesium Planning globe: ensure viewer and canvas fill container (Cesium docs) */
+.cesium-viewer,
+.cesium-viewer .cesium-widget,
+.cesium-viewer .cesium-widget canvas {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+}

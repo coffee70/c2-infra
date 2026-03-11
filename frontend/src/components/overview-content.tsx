@@ -209,11 +209,12 @@ export function OverviewContent() {
         )}
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Operator Overview</h1>
+            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+              Operator Overview
+            </h1>
           </div>
           <WatchlistConfig />
         </div>
-
         <RealtimeOverviewWrapper
           initialChannels={channels}
           initialAnomalies={anomalies}

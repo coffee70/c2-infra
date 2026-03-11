@@ -11,6 +11,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from simulator.lib.audit import audit_log
+from simulator.orbit import position_at_time
+from simulator.telemetry_definitions import (
+    RATES_HZ,
+    SCENARIOS,
+    TELEMETRY_DEFINITIONS,
+)
 
 # Retry on timeout/connection errors; backoff avoids hammering a slow backend
 def _make_session() -> requests.Session:
@@ -24,11 +30,13 @@ def _make_session() -> requests.Session:
     s.mount("http://", HTTPAdapter(max_retries=retries))
     s.mount("https://", HTTPAdapter(max_retries=retries))
     return s
-from simulator.telemetry_definitions import (
-    RATES_HZ,
-    SCENARIOS,
-    TELEMETRY_DEFINITIONS,
-)
+
+# Default circular LEO orbit for GPS position telemetry
+_ORBIT_PERIOD_SEC = 90.0 * 60.0  # ~90 min
+_ORBIT_INCLINATION_DEG = 51.6
+_ORBIT_ALT_M = 400_000.0
+_ORBIT_NOISE_DEG = 0.01
+_ORBIT_NOISE_M = 10.0
 
 
 def get_subsystem(name: str) -> str:
@@ -142,6 +150,13 @@ class TelemetryStreamer:
                 time.sleep(0.05)
                 continue
 
+            lat_deg, lon_deg, alt_m = position_at_time(
+                sim_elapsed,
+                period_sec=_ORBIT_PERIOD_SEC,
+                inclination_deg=_ORBIT_INCLINATION_DEG,
+                alt_m=_ORBIT_ALT_M,
+            )
+
             for row in TELEMETRY_DEFINITIONS:
                 name, mean, std = row[0], row[3], row[4]
                 rate = get_rate(name)
@@ -149,7 +164,14 @@ class TelemetryStreamer:
                 if random.random() > rate * dt:
                     continue
 
-                value = random.gauss(mean, std)
+                if name == "GPS_LAT":
+                    value = lat_deg + random.gauss(0, _ORBIT_NOISE_DEG)
+                elif name == "GPS_LON":
+                    value = lon_deg + random.gauss(0, _ORBIT_NOISE_DEG)
+                elif name == "GPS_ALT":
+                    value = alt_m + random.gauss(0, _ORBIT_NOISE_M)
+                else:
+                    value = random.gauss(mean, std)
                 for ev in events:
                     if ev["t0"] <= sim_elapsed < ev["t0"] + ev.get("duration", 999):
                         if name in ev["channels"]:

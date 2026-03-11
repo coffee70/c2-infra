@@ -13,6 +13,7 @@ import {
 
 const NAV_LINKS = [
   { href: "/overview", label: "Overview" },
+  { href: "/planning", label: "Planning" },
   { href: "/timeline", label: "Timeline" },
   { href: "/search", label: "Search" },
   { href: "/sources", label: "Sources" },

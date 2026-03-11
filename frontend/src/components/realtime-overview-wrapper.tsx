@@ -289,18 +289,17 @@ export function RealtimeOverviewWrapper({
         initialSimulatorSourceId={initialSimulatorSourceId ?? undefined}
         initialSimulatorStatus={initialSimulatorStatus ?? undefined}
       />
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div className="lg:col-span-2">
+      <div className="space-y-4">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
               <CardTitle>Watchlist / Console</CardTitle>
               <div className="flex items-center gap-2">
                 {live && (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 dark:bg-green-500/30 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400" />
-                  Live
-                </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 dark:bg-green-500/30 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400" />
+                    Live
+                  </span>
                 )}
               </div>
             </div>
@@ -334,8 +333,6 @@ export function RealtimeOverviewWrapper({
             )}
           </CardContent>
         </Card>
-      </div>
-      <div className="space-y-4">
         <NowPanel sourceId={sourceId} sinceMinutes={15} />
         <EventConsole
           anomalies={anomalies}
@@ -362,7 +359,6 @@ export function RealtimeOverviewWrapper({
               : undefined
           }
         />
-      </div>
       </div>
     </div>
   );

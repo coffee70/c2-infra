@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- Schema ingestion ---
@@ -412,3 +412,59 @@ class SourceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     base_url: Optional[str] = None  # for simulators
+
+
+# --- Position mapping and samples ---
+class PositionChannelMappingSchema(BaseModel):
+    """Per-source mapping from telemetry channels to position vectors."""
+
+    model_config = {"from_attributes": True}
+
+    id: str
+    source_id: str
+    frame_type: str  # gps_lla | ecef | eci
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def coerce_id_to_str(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, UUID):
+            return str(v)
+        return v
+    lat_channel_name: Optional[str] = None
+    lon_channel_name: Optional[str] = None
+    alt_channel_name: Optional[str] = None
+    x_channel_name: Optional[str] = None
+    y_channel_name: Optional[str] = None
+    z_channel_name: Optional[str] = None
+    active: bool = True
+
+
+class PositionChannelMappingUpsert(BaseModel):
+    """Create or update a position mapping for a source."""
+
+    source_id: str
+    frame_type: str  # gps_lla | ecef | eci
+    lat_channel_name: Optional[str] = None
+    lon_channel_name: Optional[str] = None
+    alt_channel_name: Optional[str] = None
+    x_channel_name: Optional[str] = None
+    y_channel_name: Optional[str] = None
+    z_channel_name: Optional[str] = None
+    active: bool = True
+
+
+class PositionSample(BaseModel):
+    """Canonical geodetic position sample for Earth view."""
+
+    source_id: str
+    source_name: str
+    source_type: str
+    lat_deg: Optional[float] = None
+    lon_deg: Optional[float] = None
+    alt_m: Optional[float] = None
+    timestamp: Optional[str] = None
+    valid: bool = False
+    frame_type: str
+    raw_channels: Optional[dict[str, Optional[float]]] = None
