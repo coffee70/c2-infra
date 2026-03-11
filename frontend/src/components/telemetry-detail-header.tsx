@@ -53,6 +53,7 @@ interface TelemetryDetailHeaderProps {
   stateReason?: string | null;
   zScore?: number | null;
   lastTimestamp?: string | null;
+  description?: string | null;
 }
 
 export function TelemetryDetailHeader({
@@ -63,6 +64,7 @@ export function TelemetryDetailHeader({
   stateReason,
   zScore,
   lastTimestamp,
+  description,
 }: TelemetryDetailHeaderProps) {
   const [copied, setCopied] = useState<string | null>(null);
   const [copyFailedKey, setCopyFailedKey] = useState<string | null>(null);
@@ -92,21 +94,28 @@ export function TelemetryDetailHeader({
   return (
     <header className="sticky top-14 z-10 py-4 mb-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b">
       <div className="flex flex-wrap items-center justify-between gap-4 px-4 sm:px-6">
-        <div className="flex flex-wrap items-center gap-3 min-w-0">
-          <h1 className="text-lg font-semibold truncate" title={name}>
-            {name}
-            {units ? ` (${units})` : ""}
-          </h1>
-          <Badge variant={stateVariant} className="shrink-0 text-xs">
-            {statusLabel}
-          </Badge>
-          <span className="text-lg font-medium tabular-nums shrink-0">
-            {valueWithUnits}
-          </span>
-          {lastTimestamp && (
-            <span className="text-sm text-muted-foreground shrink-0">
-              {formatTimeAgo(lastTimestamp)}
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <h1 className="text-lg font-semibold truncate" title={name}>
+              {name}
+              {units ? ` (${units})` : ""}
+            </h1>
+            <Badge variant={stateVariant} className="shrink-0 text-xs">
+              {statusLabel}
+            </Badge>
+            <span className="text-lg font-medium tabular-nums shrink-0">
+              {valueWithUnits}
             </span>
+            {lastTimestamp && (
+              <span className="text-sm text-muted-foreground shrink-0">
+                {formatTimeAgo(lastTimestamp)}
+              </span>
+            )}
+          </div>
+          {description && (
+            <p className="text-sm text-muted-foreground line-clamp-2">
+              {description}
+            </p>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">

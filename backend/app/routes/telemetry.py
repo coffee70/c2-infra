@@ -474,19 +474,46 @@ def get_recent(
             until_dt = datetime.fromisoformat(until.replace("Z", "+00:00"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid until format, use ISO8601")
+    requested_time_filter = since_dt is not None or until_dt is not None
     try:
-        rows = _get_recent_values_db_only(db, name, limit=limit, since=since_dt, until=until_dt, source_id=source_id)
-        # If time filter yields no data but channel has data, return most recent points (like Overview sparkline)
-        if not rows and (since_dt is not None or until_dt is not None):
+        rows = _get_recent_values_db_only(
+            db,
+            name,
+            limit=limit,
+            since=since_dt,
+            until=until_dt,
+            source_id=source_id,
+        )
+        fallback_to_recent = False
+        if not rows and requested_time_filter:
+            # Time filter yielded no data but the channel may still have history.
+            # Fall back to most recent points and surface that explicitly via metadata.
             rows = _get_recent_values_db_only(db, name, limit=limit, source_id=source_id)
+            fallback_to_recent = bool(rows)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+    data_points = [
+        RecentDataPoint(
+            timestamp=r[0].isoformat(),
+            value=r[1],
+        )
+        for r in reversed(rows)
+    ]
+
+    effective_since = data_points[0].timestamp if data_points else None
+    effective_until = data_points[-1].timestamp if data_points else None
+
+    # applied_time_filter indicates that a user-specified time window returned data
+    # without falling back to the unfiltered "most recent" range.
+    applied_time_filter = bool(data_points) and requested_time_filter and not fallback_to_recent
+
     return RecentDataResponse(
-        data=[
-            RecentDataPoint(
-                timestamp=r[0].isoformat(),
-                value=r[1],
-            )
-            for r in reversed(rows)
-        ]
+        data=data_points,
+        requested_since=since if since else None,
+        requested_until=until if until else None,
+        effective_since=effective_since,
+        effective_until=effective_until,
+        applied_time_filter=applied_time_filter,
+        fallback_to_recent=fallback_to_recent,
     )

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Telemetry detail page vertical layout with **Summary**, **Live & Trends**, **History**, and **Explanation & Events** sections, so operators can focus on summary, live behavior, history, or context without excessive scrolling.
+- Per-channel **Telemetry History** tab backed by `/telemetry/{name}/recent` with time-range presets, UTC/local toggle, filter, table copy, and export of the visible range to CSV, JSON, and a Parquet-ready text stub for offline and agent-driven analysis.
 - **Planning** page and nav tab with full-screen 3D Earth view and source selector; use the Planning tab for globe-based position visualization (Overview is data-only).
 - 3D Earth visualization and position mapping
   - Backend `PositionChannelMapping` model, coordinate helpers, and `/telemetry/position/*` APIs to expose latest per-source positions in a canonical latitude/longitude/altitude form.

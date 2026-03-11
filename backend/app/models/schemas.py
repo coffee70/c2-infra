@@ -127,6 +127,12 @@ class RecentDataResponse(BaseModel):
     """Response for GET /telemetry/{name}/recent."""
 
     data: list[RecentDataPoint]
+    requested_since: Optional[str] = None
+    requested_until: Optional[str] = None
+    effective_since: Optional[str] = None
+    effective_until: Optional[str] = None
+    applied_time_filter: bool = False
+    fallback_to_recent: bool = False
 
 
 # --- Recompute stats ---
