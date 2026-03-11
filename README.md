@@ -8,8 +8,9 @@ A **spacecraft telemetry monitoring and analysis platform** for mission operatio
 - **Computes statistics** (mean, std dev, z-score) and detects anomalies (Normal/Caution/Warning)
 - **Semantic search** — find channels by meaning (e.g., "voltage", "temperature") instead of exact names
 - **LLM explanations** — contextual, human-readable summaries of each channel and its current state
-- **Live dashboard** — watchlist of key channels with sparklines, state badges, and an anomalies queue
+- **Live dashboard** — watchlist of key channels with sparklines, state badges, anomalies queue, and an events console for Ack/Resolve
 - **Real-time streaming** — WebSocket support for live telemetry and alerts with Ack/Resolve workflows
+- **Multi-source & feed health** — monitor multiple telemetry sources and feed health as described in the user guide
 - **Simulator** — mock vehicle streamer with scenarios (nominal, power sag, thermal runaway, etc.) for testing
 
 Designed for spacecraft ground operations, mission control dashboards, and teams that need to monitor and interpret large numbers of telemetry channels with AI-assisted context.

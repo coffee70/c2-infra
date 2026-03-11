@@ -1,0 +1,20 @@
+---
+description: Keep README titles and content accurate with the current application
+alwaysApply: true
+---
+
+# Keep README Accurate
+
+- **Always update README files** when making meaningful changes to the application’s behavior, architecture, or primary workflows.
+- **Verify titles first**:
+  - Root `README.md` title must accurately describe what the overall platform does.
+  - Any package-level README (e.g. `frontend/README.md`) must describe that package’s current role in the system.
+- **Check for drift** whenever you add or change:
+  - Major user-facing features or pages
+  - Core workflows (e.g., how operators start, monitor, or investigate telemetry)
+  - Deployment, configuration, or runtime topology
+- **Prefer high-level behavior over implementation details** — make sure the README explains what the system does and how operators/developers interact with it, not just which technologies are used.
+- **Keep onboarding paths correct**:
+  - Ensure quick start instructions match the current recommended path (e.g., Docker vs. local dev).
+  - Link to the user guide in `frontend/content/user-guide` when relevant instead of duplicating details.
+
