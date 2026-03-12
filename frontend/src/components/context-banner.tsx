@@ -50,6 +50,8 @@ export interface AlertSummary {
 
 interface ContextBannerProps {
   sourceId: string;
+  /** When set (e.g. current run id), feed-status polling uses this for live indicator; otherwise sourceId. */
+  feedSourceId?: string;
   onSourceChange?: (sourceId: string) => void;
   sources?: TelemetrySource[];
   activeAlertCount?: number;
@@ -67,8 +69,24 @@ function scrollToAlerts(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 }
 
+/** Resolve run id to source id for URL/banner. simulator-{scenario}-{ts} -> simulator; {source_id}-{ts} -> source_id. */
+export function runIdToSourceId(runId: string): string {
+  const match = runId.match(/^(.+)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?$/);
+  if (!match) return runId;
+  const prefix = match[1]!;
+  if (prefix.startsWith("simulator-")) return "simulator";
+  return prefix;
+}
+
+/** Label when sourceId is not in sources list (e.g. legacy run id); prefer resolving to source. */
+function fallbackSourceLabel(sourceId: string): string {
+  const source = runIdToSourceId(sourceId);
+  return source !== sourceId ? `${source} (run)` : sourceId;
+}
+
 export function ContextBanner({
   sourceId,
+  feedSourceId,
   onSourceChange,
   sources = [],
   activeAlertCount = 0,
@@ -86,10 +104,11 @@ export function ContextBanner({
         : null
   );
 
+  const effectiveFeedId = feedSourceId ?? sourceId;
   useEffect(() => {
     let cancelled = false;
     function fetchStatus() {
-      fetch(`${API_URL}/ops/feed-status?source_id=${encodeURIComponent(sourceId)}`)
+      fetch(`${API_URL}/ops/feed-status?source_id=${encodeURIComponent(effectiveFeedId)}`)
         .then((r) => r.ok ? r.json() : null)
         .then((data) => {
           if (!cancelled && data) setFeedStatus(data);
@@ -102,7 +121,7 @@ export function ContextBanner({
       cancelled = true;
       clearInterval(id);
     };
-  }, [sourceId]);
+  }, [effectiveFeedId]);
 
   const isSimulator =
     sources.find((s) => s.id === sourceId)?.source_type === "simulator";
@@ -142,7 +161,7 @@ export function ContextBanner({
   }, [sourceId, isSimulator, initialSimulatorSourceId, initialSimulatorStatus]);
 
   const sourceLabel =
-    sources.find((s) => s.id === sourceId)?.name || sourceId;
+    sources.find((s) => s.id === sourceId)?.name ?? fallbackSourceLabel(sourceId);
   const feedState =
     (feedStatus?.state as "connected" | "degraded" | "disconnected" | undefined) ??
     (feedStatus?.connected
@@ -156,7 +175,10 @@ export function ContextBanner({
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground font-medium">Source:</span>
         {sources.length > 1 && onSourceChange ? (
-          <Select value={sourceId} onValueChange={onSourceChange}>
+          <Select
+            value={sources.some((s) => s.id === sourceId) ? sourceId : runIdToSourceId(sourceId)}
+            onValueChange={onSourceChange}
+          >
             <SelectTrigger className="h-8 w-auto min-w-[120px] text-xs">
               <SelectValue />
             </SelectTrigger>

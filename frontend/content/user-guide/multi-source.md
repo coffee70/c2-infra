@@ -2,11 +2,11 @@
 
 **Workflow:** Multiple streams → switch context
 
-The platform supports multiple telemetry sources (vehicles and simulators). Each source has its own feed health and data. Sources are kept distinct so you can monitor several spacecraft or simulators without mixing them up.
+The platform supports multiple telemetry sources (vehicles and simulators). A **source** is one row in the source list (e.g. a vehicle or a simulator). Each source can have multiple **runs** (one execution/stream). A run belongs to exactly one source. Data is keyed by run: for vehicles the run is usually the source id; for simulators each start creates a new run (e.g. `sim_abc12345-2026-03-11T19-03-00Z`).
 
 ## Source Selector
 
-In the **Context Banner** on the Overview (and other pages), you can switch between sources using the source selector dropdown. The list is grouped into **Vehicles** and **Simulators**. On the Overview, the selected source is reflected in the URL (`?source=...`) and remembered for the session, so it persists when you switch to another tab (e.g. Sources) and click Overview again, or when you share the link.
+In the **Context Banner** on the Overview and Telemetry Detail pages, you switch between **sources** only (vehicles and simulators). The dropdown lists only registered sources (no individual runs). The URL uses the source id (`?source=...`). The app resolves the source’s **current run** (e.g. newest) for Overview data, Summary, Live & Trends, and the default run in the History tab.
 
 ## Per-Source Feed Health
 
@@ -37,6 +37,10 @@ The **Timeline** page shows ops events for the selected source. Filter by source
 5. Click **Create**.
 
 The simulator appears in the Simulators list. Click **Manage** to open its control panel and start, pause, or stop it.
+
+## Simulator runs (fresh slate per run)
+
+Each time you **start** a simulator from the Sources page, the platform creates a **new run** for that source (run id = source id + timestamp). You are taken to the **Overview** with that **source** selected; the Overview (and Telemetry Detail) then show data for that source’s **current run** (the newest run, including the one you just started). All data (History, Trends, copy/export) is scoped to runs of the selected source. On Telemetry Detail, the **Run** dropdown in the History tab lists only runs for that source so you can narrow the table to a specific run (e.g. "Run started at 2026-03-11 19:03 UTC").
 
 ## Adding a Vehicle
 

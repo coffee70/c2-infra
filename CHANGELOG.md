@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OpenStatus time picker:** Custom date/time selection (History custom start, Trend Analysis custom range) now uses the [OpenStatus time-picker](https://github.com/openstatusHQ/time-picker) for time input: keyboard navigation, arrow keys, and consistent styling instead of the browser default.
+
+- **Source and run hierarchy:** A **source** is a vehicle or simulator (from the source list). Each source can have multiple **runs** (one execution). The **Context Banner** is the only place to change source; it lists only sources (no runs). URL and banner use source id only (`?source=...`). Overview and Telemetry Detail resolve the source’s **current run** (newest) for data. The **History** tab has a **Run** dropdown scoped to the selected source so you can narrow the table to a specific run (e.g. "Run started at 2026-03-11 19:03 UTC").
+- **Simulator run id per source:** When you start a simulator with a registered source id (e.g. from Sources → Manage → Start), the simulator creates a run id `{source_id}-{timestamp}` so runs are tied to that source.
+- **Backend:** `GET /telemetry/{name}/runs?source_id=...` returns runs for a source that have data for that channel; `GET /telemetry/sources/{source_id}/runs` returns runs for a source (any channel). Used for Run dropdown and to resolve current run.
+- **Search Telemetry source filter:** On the Search page, a **Source** dropdown in Filters lets you restrict search to a specific vehicle or simulator; results and current values are scoped to that source. The selected source is reflected in the URL (`/search?source=...`) for sharing.
 - Telemetry detail page vertical layout with **Summary**, **Live & Trends**, **History**, and **Explanation & Events** sections, so operators can focus on summary, live behavior, history, or context without excessive scrolling.
 - Per-channel **Telemetry History** tab backed by `/telemetry/{name}/recent` with time-range presets, UTC/local toggle, filter, table copy, and export of the visible range to CSV, JSON, and a Parquet-ready text stub for offline and agent-driven analysis.
 - **Planning** page and nav tab with full-screen 3D Earth view and source selector; use the Planning tab for globe-based position visualization (Overview is data-only).

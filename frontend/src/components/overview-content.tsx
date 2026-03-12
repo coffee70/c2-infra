@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
+import { runIdToSourceId } from "@/components/context-banner";
 import { WatchlistConfig } from "@/components/watchlist-config";
 import { RealtimeOverviewWrapper } from "@/components/realtime-overview-wrapper";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -69,6 +70,7 @@ interface SimulatorStatus {
 const OVERVIEW_SOURCE_STORAGE_KEY = "overviewSourceId";
 
 export function OverviewContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const sourceFromUrl = searchParams.get("source");
 
@@ -91,9 +93,19 @@ export function OverviewContent() {
   const [initialSimulatorStatus, setInitialSimulatorStatus] = useState<
     SimulatorStatus | null
   >(null);
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
 
-  const effectiveSource =
+  let effectiveSource =
     sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID;
+  if (effectiveSource && /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?$/.test(effectiveSource)) {
+    effectiveSource = runIdToSourceId(effectiveSource);
+    if (typeof window !== "undefined") {
+      try {
+        sessionStorage.setItem(OVERVIEW_SOURCE_STORAGE_KEY, effectiveSource);
+      } catch {}
+      router.replace(`/overview?source=${encodeURIComponent(effectiveSource)}`);
+    }
+  }
   const sourceReady = sourceFromUrl !== null || storageChecked;
 
   useEffect(() => {
@@ -116,31 +128,43 @@ export function OverviewContent() {
         const sourcesPromise = fetchWithTimeoutAndFallback(
           "/telemetry/sources"
         );
-        const overviewPromise = fetchWithTimeoutAndFallback(
-          `/telemetry/overview?source_id=${encodeURIComponent(effectiveSource)}`
-        );
-        const anomaliesPromise = fetchWithTimeoutAndFallback(
-          `/telemetry/anomalies?source_id=${encodeURIComponent(effectiveSource)}`
+        const runsPromise = fetchWithTimeoutAndFallback(
+          `/telemetry/sources/${encodeURIComponent(effectiveSource)}/runs`
         );
 
-        const [sourcesRes, overviewRes, anomaliesRes] = await Promise.all([
+        const [sourcesRes, runsRes] = await Promise.all([
           sourcesPromise,
+          runsPromise,
+        ]);
+
+        if (cancelled) return;
+
+        const sourcesList = sourcesRes.ok ? await sourcesRes.json() : [];
+        const runsData = runsRes.ok ? await runsRes.json() : { sources: [] };
+        const runsList = Array.isArray(runsData.sources) ? runsData.sources : [];
+        const effectiveRunId = runsList[0]?.source_id ?? effectiveSource;
+
+        const overviewPromise = fetchWithTimeoutAndFallback(
+          `/telemetry/overview?source_id=${encodeURIComponent(effectiveRunId)}`
+        );
+        const anomaliesPromise = fetchWithTimeoutAndFallback(
+          `/telemetry/anomalies?source_id=${encodeURIComponent(effectiveRunId)}`
+        );
+
+        const [overviewRes, anomaliesRes] = await Promise.all([
           overviewPromise,
           anomaliesPromise,
         ]);
 
         if (cancelled) return;
 
-        const sourcesData = sourcesRes.ok ? await sourcesRes.json() : [];
         const overviewData = overviewRes.ok ? await overviewRes.json() : { channels: [] };
         const anomaliesData = anomaliesRes.ok ? await anomaliesRes.json() : { power: [], thermal: [], adcs: [], comms: [], other: [] };
 
-        const sourcesList = Array.isArray(sourcesData) ? sourcesData : [];
-        const isSimulatorSource =
-          sourcesList.some(
-            (s: TelemetrySource) =>
-              s.id === effectiveSource && s.source_type === "simulator"
-          );
+        const isSimulatorSource = Array.isArray(sourcesList) && sourcesList.some(
+          (s: TelemetrySource) =>
+            s.id === effectiveSource && s.source_type === "simulator"
+        );
 
         let simSourceId: string | null = null;
         let simStatus: SimulatorStatus | null = null;
@@ -157,7 +181,7 @@ export function OverviewContent() {
           }
         }
 
-        setSources(sourcesList);
+        setSources(Array.isArray(sourcesList) ? sourcesList : []);
         setChannels(overviewData.channels || []);
         setAnomalies({
           power: anomaliesData.power || [],
@@ -166,6 +190,7 @@ export function OverviewContent() {
           comms: anomaliesData.comms || [],
           other: anomaliesData.other || [],
         });
+        setCurrentRunId(effectiveRunId);
         setInitialSimulatorSourceId(simSourceId);
         setInitialSimulatorStatus(simStatus);
         if (!overviewRes.ok || !anomaliesRes.ok) {
@@ -220,11 +245,8 @@ export function OverviewContent() {
           initialAnomalies={anomalies}
           hasError={!!error}
           sources={sources}
-          initialSourceId={
-            sources.some((s) => s.id === effectiveSource)
-              ? effectiveSource
-              : DEFAULT_SOURCE_ID
-          }
+          initialSourceId={effectiveSource || DEFAULT_SOURCE_ID}
+          feedSourceId={currentRunId ?? undefined}
           defaultSourceId={DEFAULT_SOURCE_ID}
           initialSimulatorSourceId={initialSimulatorSourceId}
           initialSimulatorStatus={initialSimulatorStatus}

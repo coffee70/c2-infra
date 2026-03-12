@@ -153,6 +153,8 @@ interface RealtimeOverviewWrapperProps {
   hasError: boolean;
   sources: TelemetrySource[];
   initialSourceId: string;
+  /** Current run id for feed status and live subscription (when source has multiple runs). */
+  feedSourceId?: string;
   /** When set, we never sync sourceId to initialSourceId when it equals this (avoids reverting user selection to fallback while data loads). */
   defaultSourceId?: string;
   /** Pre-fetched simulator status for the initial source to avoid "Disconnected" flash. */
@@ -166,6 +168,7 @@ export function RealtimeOverviewWrapper({
   hasError,
   sources,
   initialSourceId,
+  feedSourceId,
   defaultSourceId,
   initialSimulatorSourceId = null,
   initialSimulatorStatus = null,
@@ -179,6 +182,7 @@ export function RealtimeOverviewWrapper({
   const [client, setClient] = useState<RealtimeWsClient | null>(null);
   const router = useRouter();
   const pathname = usePathname();
+  const effectiveRunId = feedSourceId ?? sourceId;
 
   useEffect(() => {
     if (defaultSourceId !== undefined && initialSourceId === defaultSourceId) return;
@@ -253,10 +257,10 @@ export function RealtimeOverviewWrapper({
   useEffect(() => {
     if (!client) return;
     const channelNames = initialChannels.map((ch) => ch.name);
-    // Always subscribe: when channels empty, backend defaults to watchlist and sends snapshot
-    client.subscribeWatchlist(channelNames, sourceId);
-    client.subscribeAlerts(sourceId);
-  }, [client, sourceId, initialChannels]);
+    // Subscribe to current run so live updates match overview data
+    client.subscribeWatchlist(channelNames, effectiveRunId);
+    client.subscribeAlerts(effectiveRunId);
+  }, [client, effectiveRunId, initialChannels]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -281,6 +285,7 @@ export function RealtimeOverviewWrapper({
     <div className="space-y-4">
       <ContextBanner
         sourceId={sourceId}
+        feedSourceId={feedSourceId}
         onSourceChange={handleSourceChange}
         sources={sources}
         activeAlertCount={totalAlerts}

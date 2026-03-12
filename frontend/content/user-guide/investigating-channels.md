@@ -8,6 +8,7 @@ When you see an anomaly or want to understand a telemetry channel, follow this f
 
 Go to **Search** and enter a semantic query (e.g. "voltage", "temperature", "speed"). The platform uses semantic search, so you find channels by meaning, not exact names.
 
+- Choose **Source** to search within a specific vehicle or simulator run (e.g. a single sim run or feed); results and current values are scoped to that source. The URL updates so you can share a link to search in that source.
 - Filter by subsystem, units, anomalous status, or recent activity
 - Add a channel to the watchlist
 - Click a result to open the channel detail page
@@ -21,12 +22,15 @@ The page is organized into **vertical tabs** so you can quickly switch between d
 - **Summary** – current value, state badge (Normal, Caution, Warning), compact statistics (P5/P95, min/max, sample count), and description.
 - **Live & Trends** – live time-series view plus the full **Trend Analysis** chart with range presets (15m, 1h, 6h, 24h, Custom), UTC/local toggle, comparison channels, and zoom controls.
 - **History** – a tabular view of archived samples for this channel:
+  - Choose **Run** to restrict the table (and copy/export) to a specific run of the selected source. The dropdown lists only runs that belong to the source in the Context Banner, labeled by start time (e.g. "Run started at 2026-03-11 19:03 UTC"). Defaults to the current run (newest for that source).
   - Select a time range (15 min, 1 hr, 6 hr, 24 hr, or custom start time).
   - See a sortable table of timestamp and value (with units), with a UTC/local time toggle.
-  - Filter rows by timestamp or value.
+  - Filter rows by value. If the selected time window has no data, a banner explains that the table is showing the most recent samples instead.
   - Use the toolbar to **copy the table**, or export the visible range to **CSV**, **JSON**, or a Parquet-friendly text stub for data-science workflows.
   - Copy an individual row to the clipboard or **flag** samples you want to keep an eye on; flagged samples are highlighted for the current session.
 - **Explanation & Events** – AI explanation plus recent ops events (alerts opened, acked, resolved) for that channel.
+
+**Source and run:** The **Context Banner** is the only place to change the **source** (vehicle or simulator). The whole page is for that source. Summary, Live & Trends, and the default run in History use the source’s **current run** (e.g. newest). In the History tab, the **Run** dropdown lists only runs for that source so you can narrow the table to a chosen run (e.g. to export one orbit).
 
 ## 3. LLM Explanation
 

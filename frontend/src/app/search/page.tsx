@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
+import { runIdToSourceId } from "@/components/context-banner";
 import { auditLog } from "@/lib/audit-log";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -51,6 +53,24 @@ interface WatchlistEntry {
   display_order: number;
 }
 
+interface TelemetrySource {
+  id: string;
+  name: string;
+  description?: string | null;
+  source_type?: string;
+}
+
+/** Friendly label for ephemeral simulator run source_ids. */
+function formatRunSourceLabel(sourceId: string): string {
+  if (!sourceId.startsWith("simulator-")) return sourceId;
+  const rest = sourceId.slice("simulator-".length);
+  const lastDash = rest.lastIndexOf("-");
+  const scenario = lastDash > 0 ? rest.slice(0, lastDash).replace(/-/g, " ") : rest;
+  const ts = lastDash > 0 ? rest.slice(lastDash + 1) : "";
+  if (ts) return `Sim run: ${scenario} (${ts})`;
+  return `Sim run: ${scenario}`;
+}
+
 function matchConfidenceLabel(score: number): string {
   const pct = score * 100;
   if (pct >= 80) return "High";
@@ -60,7 +80,14 @@ function matchConfidenceLabel(score: number): string {
 
 import { getRecentChannels } from "@/lib/recent-telemetry";
 
-export default function SearchPage() {
+const DEFAULT_SOURCE_ID = "default";
+
+function SearchPageContent() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const sourceFromUrl = searchParams.get("source");
+
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -70,6 +97,8 @@ export default function SearchPage() {
   // Filters
   const [subsystems, setSubsystems] = useState<string[]>([]);
   const [units, setUnits] = useState<string[]>([]);
+  const [sources, setSources] = useState<TelemetrySource[]>([]);
+  const [filterSourceId, setFilterSourceId] = useState<string>(DEFAULT_SOURCE_ID);
   const [filterSubsystem, setFilterSubsystem] = useState<string>("");
   const [filterUnits, setFilterUnits] = useState<string>("");
   const [filterAnomalousOnly, setFilterAnomalousOnly] = useState(false);
@@ -84,9 +113,10 @@ export default function SearchPage() {
 
   const loadFilterOptions = useCallback(async () => {
     try {
-      const [subRes, unitsRes] = await Promise.all([
+      const [subRes, unitsRes, sourcesRes] = await Promise.all([
         fetch(`${API_URL}/telemetry/subsystems`),
         fetch(`${API_URL}/telemetry/units`),
+        fetch(`${API_URL}/telemetry/sources`, { cache: "no-store" }),
       ]);
       if (subRes.ok) {
         const d = await subRes.json();
@@ -96,10 +126,30 @@ export default function SearchPage() {
         const d = await unitsRes.json();
         setUnits(d.units || []);
       }
+      if (sourcesRes.ok) {
+        const data = await sourcesRes.json();
+        setSources(Array.isArray(data) ? data : []);
+      }
     } catch {
       // ignore
     }
   }, []);
+
+  // Sync source filter from URL; normalize run IDs to source IDs and clean URL (match Overview behavior).
+  useEffect(() => {
+    if (!sourceFromUrl || !sourceFromUrl.trim()) return;
+    const raw = sourceFromUrl.trim();
+    const isRunId = /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?$/.test(raw);
+    const sourceId = isRunId ? runIdToSourceId(raw) : raw;
+    setFilterSourceId(sourceId);
+    if (isRunId) {
+      router.replace(
+        sourceId === DEFAULT_SOURCE_ID
+          ? pathname
+          : `${pathname}?source=${encodeURIComponent(sourceId)}`
+      );
+    }
+  }, [sourceFromUrl, pathname, router]);
 
   const loadFavorites = useCallback(async () => {
     setFavoritesLoading(true);
@@ -128,6 +178,22 @@ export default function SearchPage() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, []);
+
+  const sourceOptions = useMemo(() => {
+    const byId = new Map(sources.map((s) => [s.id, s]));
+    if (filterSourceId && !byId.has(filterSourceId)) {
+      byId.set(filterSourceId, {
+        id: filterSourceId,
+        name: formatRunSourceLabel(filterSourceId),
+      });
+    }
+    if (!byId.has(DEFAULT_SOURCE_ID)) {
+      byId.set(DEFAULT_SOURCE_ID, { id: DEFAULT_SOURCE_ID, name: "Default" });
+    }
+    return Array.from(byId.values()).sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+    );
+  }, [sources, filterSourceId]);
 
   const toggleFavorite = async (name: string) => {
     const isFav = favorites.includes(name);
@@ -169,6 +235,7 @@ export default function SearchPage() {
     setError(null);
     try {
       const params = new URLSearchParams({ q: query.trim() });
+      params.set("source_id", filterSourceId || DEFAULT_SOURCE_ID);
       if (filterSubsystem) params.set("subsystem", filterSubsystem);
       if (filterAnomalousOnly) params.set("anomalous_only", "true");
       if (filterUnits) params.set("units", filterUnits);
@@ -189,6 +256,7 @@ export default function SearchPage() {
       const resultsList = data.results || [];
       auditLog("search", {
         q: query.trim(),
+        source_id: filterSourceId || undefined,
         subsystem: filterSubsystem || undefined,
         anomalous_only: filterAnomalousOnly,
         units: filterUnits || undefined,
@@ -286,6 +354,33 @@ export default function SearchPage() {
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-4 items-center">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="filter-source" className="text-sm font-medium">
+                  Source
+                </Label>
+                <Select
+                  value={filterSourceId || DEFAULT_SOURCE_ID}
+                  onValueChange={(v) => {
+                    const next = v || DEFAULT_SOURCE_ID;
+                    setFilterSourceId(next);
+                    const url = next === DEFAULT_SOURCE_ID
+                      ? pathname
+                      : `${pathname}?source=${encodeURIComponent(next)}`;
+                    router.replace(url);
+                  }}
+                >
+                  <SelectTrigger id="filter-source" className="h-9 w-auto min-w-[180px]">
+                    <SelectValue placeholder="Source" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sourceOptions.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.name || s.id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="flex items-center gap-2">
                 <Label htmlFor="filter-subsystem" className="text-sm font-medium">
                   Subsystem
@@ -482,5 +577,13 @@ export default function SearchPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen p-4 flex items-center justify-center"><Spinner /></div>}>
+      <SearchPageContent />
+    </Suspense>
   );
 }

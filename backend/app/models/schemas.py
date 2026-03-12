@@ -135,6 +135,19 @@ class RecentDataResponse(BaseModel):
     fallback_to_recent: bool = False
 
 
+class ChannelSourceItem(BaseModel):
+    """Source that has data for a channel; label is display-friendly (e.g. 'Run started at 2026-03-11 19:03 UTC')."""
+
+    source_id: str
+    label: str
+
+
+class ChannelSourcesResponse(BaseModel):
+    """Response for GET /telemetry/{name}/sources."""
+
+    sources: list[ChannelSourceItem]
+
+
 # --- Recompute stats ---
 class RecomputeStatsResponse(BaseModel):
     """Response for POST /telemetry/recompute-stats."""

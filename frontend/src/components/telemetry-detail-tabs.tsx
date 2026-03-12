@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter, usePathname } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TelemetryDetailHeader } from "@/components/telemetry-detail-header";
 import { TelemetryDetailLive } from "@/components/telemetry-detail-live";
@@ -61,22 +62,55 @@ type TabId = "summary" | "live" | "history" | "explanation";
 interface TelemetryDetailTabsProps {
   explain: ExplainResponse;
   recentData: RecentPoint[];
+  /** Source (from banner / URL); only telemetry_sources ids. */
   sourceId: string;
+  /** Run id used for Summary/Live/Explain and default for History (newest run for source). */
+  currentRunId: string;
   decodedName: string;
+}
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+interface TelemetrySource {
+  id: string;
+  name: string;
+  description?: string | null;
+  source_type?: string;
 }
 
 export function TelemetryDetailTabs({
   explain,
   recentData,
   sourceId,
+  currentRunId,
   decodedName,
 }: TelemetryDetailTabsProps) {
   const [activeTab, setActiveTab] = useState<TabId>("summary");
+  const [sources, setSources] = useState<TelemetrySource[]>([]);
+  const router = useRouter();
+  const pathname = usePathname();
+
+  useEffect(() => {
+    fetch(`${API_URL}/telemetry/sources`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: TelemetrySource[]) => setSources(Array.isArray(list) ? list : []))
+      .catch(() => setSources([]));
+  }, []);
+
+  const handleSourceChange = (newSourceId: string) => {
+    if (newSourceId === sourceId) return;
+    router.replace(`${pathname}?source=${encodeURIComponent(newSourceId)}`);
+  };
 
   return (
     <div className="px-4 py-8 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-6xl space-y-6">
-        <ContextBanner sourceId={sourceId} />
+        <ContextBanner
+          sourceId={sourceId}
+          feedSourceId={currentRunId}
+          onSourceChange={handleSourceChange}
+          sources={sources}
+        />
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
@@ -296,7 +330,7 @@ export function TelemetryDetailTabs({
                 >
                 <TelemetryDetailLive
                   channelName={explain.name}
-                  sourceId={sourceId}
+                  sourceId={currentRunId}
                   initialValue={explain.recent_value}
                   initialUnits={explain.units}
                   initialLastTimestamp={explain.last_timestamp}
@@ -314,7 +348,7 @@ export function TelemetryDetailTabs({
                   <CardContent>
                     <TrendChartAnalysis
                       channelName={decodedName}
-                      sourceId={sourceId}
+                      sourceId={currentRunId}
                       units={explain.units}
                       bounds={{
                         p5: explain.statistics.p5,
@@ -342,6 +376,7 @@ export function TelemetryDetailTabs({
                 <TelemetryHistoryTable
                   channelName={decodedName}
                   sourceId={sourceId}
+                  defaultRunId={currentRunId}
                   units={explain.units}
                 />
                 </div>
@@ -355,11 +390,11 @@ export function TelemetryDetailTabs({
                 >
                 <ExplanationBlock
                   channelName={decodedName}
-                  sourceId={sourceId}
+                  sourceId={currentRunId}
                 />
                 <ChannelRecentEvents
                   channelName={decodedName}
-                  sourceId={sourceId}
+                  sourceId={currentRunId}
                   sinceMinutes={60}
                 />
                 </div>

@@ -14,7 +14,6 @@ import {
   ComposedChart,
 } from "recharts";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/empty-state";
@@ -34,6 +33,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { CustomTimestampPicker } from "@/components/custom-timestamp-picker";
 import { ChevronDownIcon } from "lucide-react";
 
 const API_URL =
@@ -99,11 +99,6 @@ function formatInterval(ms: number): string {
   return `~${(ms / 60000).toFixed(1)} min`;
 }
 
-function toDatetimeLocal(d: Date): string {
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 const POINTS_PER_PIXEL = 2;
 const MIN_DISPLAY_POINTS = 100;
 
@@ -156,8 +151,8 @@ export function TrendChartAnalysis({
   const [compareChannel, setCompareChannel] = useState<string | null>(null);
   const [channelList, setChannelList] = useState<string[]>([]);
   const [rangeMinutes, setRangeMinutes] = useState<number>(60);
-  const [customStart, setCustomStart] = useState<string>("");
-  const [customEnd, setCustomEnd] = useState<string>("");
+  const [customStart, setCustomStart] = useState<string | null>(null);
+  const [customEnd, setCustomEnd] = useState<string | null>(null);
   const [useCustomRange, setUseCustomRange] = useState(false);
   const [timeRangePct, setTimeRangePct] = useState<[number, number]>([0, 100]);
   const [zoomRefetch, setZoomRefetch] = useState<{ since: string; until: string } | null>(null);
@@ -187,7 +182,7 @@ export function TrendChartAnalysis({
     if (useCustomRange && !customStart) {
       const since = new Date();
       since.setMinutes(since.getMinutes() - 60);
-      return { sinceDate: since.toISOString(), untilDate: null };
+      return { sinceDate: since.toISOString(), untilDate: customEnd ?? null };
     }
     const since = new Date();
     since.setMinutes(since.getMinutes() - rangeMinutes);
@@ -492,28 +487,30 @@ export function TrendChartAnalysis({
               setUseCustomRange(true);
               const now = new Date();
               const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-              setCustomStart(toDatetimeLocal(oneHourAgo));
-              setCustomEnd(toDatetimeLocal(now));
+              setCustomStart(oneHourAgo.toISOString());
+              setCustomEnd(now.toISOString());
             }}
           >
             Custom
           </Button>
           {useCustomRange && (
             <span className="inline-flex items-center gap-2 text-sm">
-              <Input
-                type="datetime-local"
+              <CustomTimestampPicker
                 value={customStart}
-                onChange={(e) => setCustomStart(e.target.value)}
-                className="h-9 w-40 text-sm"
+                onChange={setCustomStart}
+                placeholder="Start"
+                id="trend-custom-start"
                 aria-label="Custom range start"
+                className="h-8 w-48 justify-start text-left font-normal text-xs"
               />
               <span className="text-muted-foreground">to</span>
-              <Input
-                type="datetime-local"
+              <CustomTimestampPicker
                 value={customEnd}
-                onChange={(e) => setCustomEnd(e.target.value)}
-                className="h-9 w-40 text-sm"
+                onChange={setCustomEnd}
+                placeholder="End"
+                id="trend-custom-end"
                 aria-label="Custom range end"
+                className="h-8 w-48 justify-start text-left font-normal text-xs"
               />
             </span>
           )}

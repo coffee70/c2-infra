@@ -1,6 +1,7 @@
 """FastAPI simulator service with start/pause/resume/stop."""
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -13,6 +14,15 @@ app = FastAPI(title="Telemetry Simulator", version="1.0.0")
 
 _streamer: TelemetryStreamer | None = None
 
+# Default source_id sent by callers when they want a unique run; we replace it with a per-run ID.
+DEFAULT_SOURCE_ID = "simulator"
+
+
+def _generate_run_source_id(scenario: str) -> str:
+    """Generate a unique source_id for this simulation run (e.g. simulator-nominal-2026-03-11T19-03-00Z)."""
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+    return f"simulator-{scenario}-{ts}"
+
 
 class StartConfig(BaseModel):
     scenario: str = Field(default="nominal", description="Scenario: nominal, power_sag, thermal_runaway, comm_dropout, safe_mode")
@@ -20,7 +30,7 @@ class StartConfig(BaseModel):
     speed: float = Field(default=1.0, ge=0.1, description="Time speed factor")
     drop_prob: float = Field(default=0.0, ge=0, le=1, description="Link dropout probability")
     jitter: float = Field(default=0.1, ge=0, le=1, description="Inter-sample jitter")
-    source_id: str = Field(default="simulator", description="Source ID for ingest")
+    source_id: str = Field(default=DEFAULT_SOURCE_ID, description="Source ID for ingest; omit or use 'simulator' for a unique run ID")
     base_url: str | None = Field(default=None, description="Backend ingest URL (default: BACKEND_URL env)")
 
 
@@ -57,7 +67,7 @@ def get_status() -> dict[str, Any]:
 
 @app.post("/start")
 def start(config: StartConfig) -> dict[str, Any]:
-    """Start the simulator with given config."""
+    """Start the simulator with given config. Returns resolved source_id (unique per run if not provided)."""
     audit_log(
         "simulator.start.received",
         origin="backend",
@@ -73,6 +83,12 @@ def start(config: StartConfig) -> dict[str, Any]:
     if _streamer is not None:
         _streamer.stop()
         _streamer = None
+    # Per-run source_id: default -> simulator-{scenario}-{ts}; registered id -> {source_id}-{ts}.
+    if config.source_id == DEFAULT_SOURCE_ID:
+        resolved_source_id = _generate_run_source_id(config.scenario)
+    else:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        resolved_source_id = f"{config.source_id}-{ts}"
     _streamer = TelemetryStreamer(
         base_url=base_url,
         scenario=config.scenario,
@@ -80,7 +96,7 @@ def start(config: StartConfig) -> dict[str, Any]:
         speed=config.speed,
         drop_prob=config.drop_prob,
         jitter=config.jitter,
-        source_id=config.source_id,
+        source_id=resolved_source_id,
     )
     if not _streamer.start():
         audit_log("simulator.start.failed", reason="TelemetryStreamer.start() returned False", level="error")
@@ -91,10 +107,15 @@ def start(config: StartConfig) -> dict[str, Any]:
         scenario=config.scenario,
         duration=config.duration,
         speed=config.speed,
-        source_id=config.source_id,
+        source_id=resolved_source_id,
         base_url=base_url,
     )
-    return {"status": "started", "state": _streamer.state}
+    return {
+        "status": "started",
+        "state": _streamer.state,
+        "source_id": resolved_source_id,
+        "run_label": f"{config.scenario} ({resolved_source_id.split('-')[-1]})",
+    }
 
 
 @app.post("/pause")

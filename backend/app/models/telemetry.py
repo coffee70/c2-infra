@@ -36,7 +36,10 @@ class TelemetryMetadata(Base):
 
 
 class TelemetryData(Base):
-    """Time-series telemetry data (TimescaleDB hypertable)."""
+    """Time-series telemetry data (TimescaleDB hypertable).
+    source_id scopes data per stream; it may be ephemeral (e.g. simulator run IDs
+    like simulator-nominal-2026-03-11T19) and is not required to exist in telemetry_sources.
+    """
 
     __tablename__ = "telemetry_data"
 

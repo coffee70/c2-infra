@@ -20,9 +20,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
-import { CalendarIcon, CheckIcon, CopyIcon, FlagIcon, FlagOffIcon } from "lucide-react";
+import { CustomTimestampPicker } from "@/components/custom-timestamp-picker";
+import { CheckIcon, CopyIcon, FlagIcon, FlagOffIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const API_URL =
@@ -42,9 +41,18 @@ interface HistoryPoint {
   value: number;
 }
 
+/** Source that has data for this channel; label is display-friendly (e.g. "Run started at 2026-03-11 19:03 UTC"). */
+interface ChannelSource {
+  source_id: string;
+  label: string;
+}
+
 interface TelemetryHistoryTableProps {
   channelName: string;
+  /** Source (banner source id); runs dropdown is scoped to this source. */
   sourceId: string;
+  /** Default run to select (e.g. current run for Summary/Live); table and exports use selected run. */
+  defaultRunId?: string;
   units?: string | null;
 }
 
@@ -110,8 +118,10 @@ function triggerDownload(filename: string, mime: string, data: BlobPart) {
 export function TelemetryHistoryTable({
   channelName,
   sourceId,
+  defaultRunId,
   units,
 }: TelemetryHistoryTableProps) {
+  const effectiveDefaultRun = defaultRunId ?? sourceId;
   const [rangeMinutes, setRangeMinutes] = useState<TimePreset>(60);
   const [customSince, setCustomSince] = useState<string | null>(null);
   const [useCustom, setUseCustom] = useState(false);
@@ -123,6 +133,29 @@ export function TelemetryHistoryTable({
   const [downloadMeta, setDownloadMeta] = useState<DownloadMeta>({});
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [runs, setRuns] = useState<ChannelSource[]>([]);
+  const [selectedRunId, setSelectedRunId] = useState<string>(effectiveDefaultRun);
+
+  useEffect(() => {
+    setSelectedRunId(effectiveDefaultRun);
+  }, [effectiveDefaultRun]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(
+      `${API_URL}/telemetry/${encodeURIComponent(channelName)}/runs?source_id=${encodeURIComponent(sourceId)}`,
+      { cache: "no-store" },
+    )
+      .then((r) => (r.ok ? r.json() : { sources: [] }))
+      .then((data: { sources?: ChannelSource[] }) => {
+        if (!cancelled)
+          setRuns(Array.isArray(data.sources) ? data.sources : []);
+      })
+      .catch(() => {
+        if (!cancelled) setRuns([]);
+      });
+    return () => { cancelled = true; };
+  }, [channelName, sourceId]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -159,7 +192,7 @@ export function TelemetryHistoryTable({
         );
         url.searchParams.set("limit", String(limit));
         url.searchParams.set("since", sinceIso);
-        url.searchParams.set("source_id", sourceId);
+        url.searchParams.set("source_id", selectedRunId);
 
         const res = await fetch(url.toString(), { cache: "no-store" });
         if (!res.ok) {
@@ -200,16 +233,44 @@ export function TelemetryHistoryTable({
     return () => {
       isCancelled = true;
     };
-  }, [channelName, sourceId, rangeMinutes, useCustom, customSince]);
+  }, [channelName, selectedRunId, rangeMinutes, useCustom, customSince]);
 
+  /** Parse ">10", "< 0", ">=5", "<=", "42" etc. and filter rows by numeric comparison or substring. */
   const filteredRows = useMemo(() => {
     let next = rows;
-    if (valueFilter.trim()) {
-      const q = valueFilter.trim().toLowerCase();
-      next = next.filter((r) =>
-        String(r.value).toLowerCase().includes(q),
-      );
+    const raw = valueFilter.trim();
+    if (!raw) return next;
+
+    const opMatch = raw.match(/^\s*(>=|<=|>|<|==?)\s*(-?\d*\.?\d+)\s*$/);
+    if (opMatch) {
+      const op = opMatch[1];
+      const num = Number(opMatch[2]);
+      if (Number.isFinite(num)) {
+        next = next.filter((r) => {
+          const v = Number(r.value);
+          if (!Number.isFinite(v)) return false;
+          switch (op) {
+            case ">":
+              return v > num;
+            case "<":
+              return v < num;
+            case ">=":
+              return v >= num;
+            case "<=":
+              return v <= num;
+            case "=":
+            case "==":
+              return v === num;
+            default:
+              return false;
+          }
+        });
+        return next;
+      }
     }
+
+    const q = raw.toLowerCase();
+    next = next.filter((r) => String(r.value).toLowerCase().includes(q));
     return next;
   }, [rows, valueFilter]);
 
@@ -223,10 +284,10 @@ export function TelemetryHistoryTable({
 
   const handleExportCsv = () => {
     if (!filteredRows.length) return;
-    const csv = buildCsv(filteredRows, channelName, sourceId);
+    const csv = buildCsv(filteredRows, channelName, selectedRunId);
     const { sinceIso, untilIso } = downloadMeta;
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = sourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = selectedRunId.replace(/[^a-zA-Z0-9_-]+/g, "_");
     const suffix =
       sinceIso && untilIso
         ? `${sinceIso}_${untilIso}`
@@ -241,11 +302,11 @@ export function TelemetryHistoryTable({
     if (!filteredRows.length) return;
     const payload = {
       channel_name: channelName,
-      source_id: sourceId,
+      source_id: selectedRunId,
       points: filteredRows,
     };
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = sourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = selectedRunId.replace(/[^a-zA-Z0-9_-]+/g, "_");
     const filename = `${safeChannel}_${safeSource}_history.json`;
     triggerDownload(
       filename,
@@ -256,7 +317,7 @@ export function TelemetryHistoryTable({
 
   const handleExportParquet = () => {
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = sourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = selectedRunId.replace(/[^a-zA-Z0-9_-]+/g, "_");
     const filename = `${safeChannel}_${safeSource}_history.parquet.txt`;
     const note =
       "# Parquet export\n" +
@@ -273,8 +334,32 @@ export function TelemetryHistoryTable({
   const appliedTimeFilter = downloadMeta.appliedTimeFilter ?? false;
   const fallbackToRecent = downloadMeta.fallbackToRecent ?? false;
 
+  const runOptions = useMemo(() => {
+    const byId = new Map(runs.map((s) => [s.source_id, s]));
+    if (selectedRunId && !byId.has(selectedRunId)) {
+      byId.set(selectedRunId, {
+        source_id: selectedRunId,
+        label:
+          /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/.test(selectedRunId)
+            ? (() => {
+                const m = selectedRunId.match(
+                  /-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/,
+                );
+                return m
+                  ? `Run started at ${m[1]} ${m[2]}:${m[3]} UTC`
+                  : selectedRunId;
+              })()
+            : selectedRunId,
+      });
+    }
+    // Preserve newest-first order (by source_id desc) to match backend; label sort would put older dates first.
+    return Array.from(byId.values()).sort((a, b) =>
+      b.source_id.localeCompare(a.source_id, undefined, { sensitivity: "base" }),
+    );
+  }, [runs, selectedRunId]);
+
   const handleCopyRow = async (point: HistoryPoint) => {
-    const line = `channel=${channelName} source=${sourceId} timestamp=${point.timestamp} value=${point.value}`;
+    const line = `channel=${channelName} source=${selectedRunId} timestamp=${point.timestamp} value=${point.value}`;
     await navigator.clipboard.writeText(line);
     setCopiedKey(point.timestamp);
     setTimeout(() => {
@@ -336,7 +421,7 @@ export function TelemetryHistoryTable({
                 }
               }}
             >
-              <SelectTrigger className="h-8 w-[140px] text-xs">
+              <SelectTrigger size="sm" className="w-[140px] text-xs">
                 <SelectValue placeholder="Range" />
               </SelectTrigger>
               <SelectContent>
@@ -349,96 +434,48 @@ export function TelemetryHistoryTable({
               </SelectContent>
             </Select>
             {useCustom && (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className={cn(
-                      "h-8 w-48 justify-start text-left font-normal text-xs",
-                      !customSince && "text-muted-foreground",
-                    )}
-                  >
-                    <CalendarIcon className="mr-2 h-3.5 w-3.5" />
-                    {customSince
-                      ? new Date(customSince).toLocaleString(undefined, {
-                          timeZone: "UTC",
-                          year: "numeric",
-                          month: "short",
-                          day: "2-digit",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "Custom start time"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="flex flex-col gap-3 p-3" align="start">
-                  <Calendar
-                    selected={customSince ? new Date(customSince) : undefined}
-                    onSelect={(date) => {
-                      if (!date) {
-                        setCustomSince(null);
-                        return;
-                      }
-                      const iso = new Date(date.getTime()).toISOString().slice(0, 10);
-                      const existing = customSince
-                        ? new Date(customSince)
-                        : new Date();
-                      const combined = new Date(
-                        `${iso}T${existing.toISOString().slice(11, 19)}Z`,
-                      );
-                      setCustomSince(combined.toISOString());
-                    }}
-                  />
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor="history-custom-time" className="text-[11px] text-muted-foreground">
-                      Time (UTC)
-                    </Label>
-                    <Input
-                      id="history-custom-time"
-                      type="time"
-                      className="h-8 w-28 text-xs"
-                      value={
-                        customSince
-                          ? new Date(customSince).toISOString().slice(11, 16)
-                          : ""
-                      }
-                      onChange={(e) => {
-                        const time = e.target.value;
-                        if (!time) {
-                          setCustomSince(null);
-                          return;
-                        }
-                        const base = customSince ? new Date(customSince) : new Date();
-                        const isoDate = base.toISOString().slice(0, 10);
-                        const combined = new Date(`${isoDate}T${time}:00Z`);
-                        setCustomSince(combined.toISOString());
-                      }}
-                    />
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="h-8 text-[11px]"
-                      onClick={() => setCustomSince(null)}
-                    >
-                      Clear
-                    </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
+              <CustomTimestampPicker
+                value={customSince}
+                onChange={setCustomSince}
+                placeholder="Custom start time"
+                id="history-custom-time"
+                aria-label="Custom start time"
+                className={cn(
+                  "h-8 w-48 justify-start text-left font-normal text-xs",
+                  !customSince && "text-muted-foreground",
+                )}
+              />
             )}
           </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
+          <div className="flex flex-col gap-1">
+            <Label htmlFor="history-run" className="text-[11px] text-muted-foreground">
+              Run
+            </Label>
+            <Select
+              value={selectedRunId}
+              onValueChange={setSelectedRunId}
+            >
+              <SelectTrigger id="history-run" className="h-8 w-[200px] text-xs">
+                <SelectValue placeholder="Run" />
+              </SelectTrigger>
+              <SelectContent>
+                {runOptions.map((s) => (
+                  <SelectItem key={s.source_id} value={s.source_id}>
+                    {s.label || s.source_id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="flex flex-col gap-1">
             <Label htmlFor="history-value-filter" className="text-[11px] text-muted-foreground">
               Filter by value
             </Label>
             <Input
               id="history-value-filter"
-              placeholder="e.g. &gt; 10, 42, 0.5"
+              placeholder="e.g. &lt;0, &gt;10, 42"
               value={valueFilter}
               onChange={(e) => setValueFilter(e.target.value)}
               className="h-8 w-full max-w-[180px] text-xs"

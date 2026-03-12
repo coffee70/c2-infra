@@ -180,12 +180,15 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
         const text = await res.text();
         throw new Error(text || res.statusText);
       }
+      const data = await res.json() as { source_id?: string; run_label?: string; status?: string };
+      const resolvedSourceId = data?.source_id;
       auditLog("simulator.start", {
         scenario,
         duration: runForever ? 0 : duration,
         speed,
         drop_prob: dropProb,
         jitter,
+        resolvedSourceId,
       });
       fetchStatus(); // fire-and-forget; polling will update state
     } catch (e) {
