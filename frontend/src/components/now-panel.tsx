@@ -49,13 +49,17 @@ function formatTimeAgo(iso: string): string {
 }
 
 export function NowPanel({ sourceId, sinceMinutes = 15 }: NowPanelProps) {
-  const [events, setEvents] = useState<OpsEventSchema[]>([]);
-  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<string>("all");
+  const requestKey = `${sourceId}:${sinceMinutes}:${filter}`;
+  const [result, setResult] = useState<{
+    requestKey: string;
+    events: OpsEventSchema[];
+  }>({ requestKey: "", events: [] });
+  const loading = result.requestKey !== requestKey;
+  const events = loading ? [] : result.events;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     const params = new URLSearchParams({
       source_id: sourceId,
       since_minutes: String(sinceMinutes),
@@ -75,19 +79,24 @@ export function NowPanel({ sourceId, sinceMinutes = 15 }: NowPanelProps) {
       .then((r) => (r.ok ? r.json() : { events: [], total: 0 }))
       .then((data) => {
         if (!cancelled) {
-          setEvents(data.events || []);
+          setResult({
+            requestKey,
+            events: data.events || [],
+          });
         }
       })
       .catch(() => {
-        if (!cancelled) setEvents([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setResult({
+            requestKey,
+            events: [],
+          });
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [sourceId, sinceMinutes, filter]);
+  }, [filter, requestKey, sinceMinutes, sourceId]);
 
   return (
     <Card>

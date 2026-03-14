@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import { Trash2, Check } from "lucide-react";
 import { auditLog } from "@/lib/audit-log";
 import { Button } from "@/components/ui/button";
@@ -24,8 +23,11 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const ADD_RESULTS_CAP = 30;
 const ADDED_SUCCESS_MS = 1500;
 
-export function WatchlistConfig() {
-  const router = useRouter();
+interface WatchlistConfigProps {
+  onChanged?: () => void | Promise<void>;
+}
+
+export function WatchlistConfig({ onChanged }: WatchlistConfigProps) {
   const [open, setOpen] = useState(false);
   const [entries, setEntries] = useState<{ name: string; display_order: number }[]>([]);
   const [allNames, setAllNames] = useState<string[]>([]);
@@ -62,7 +64,7 @@ export function WatchlistConfig() {
         const l = await listRes.json();
         setAllNames(l.names || []);
       }
-    } catch (e) {
+    } catch {
       setError("Failed to load");
     } finally {
       setLoading(false);
@@ -87,7 +89,7 @@ export function WatchlistConfig() {
         setAddedName(name);
         setTimeout(clearAddedFlash, ADDED_SUCCESS_MS);
         await fetchData();
-        router.refresh();
+        await onChanged?.();
       } else {
         setError("Failed to add");
       }
@@ -110,7 +112,7 @@ export function WatchlistConfig() {
       if (res.ok) {
         auditLog("watchlist.remove", { name });
         await fetchData();
-        router.refresh();
+        await onChanged?.();
       } else {
         setError("Failed to remove");
       }

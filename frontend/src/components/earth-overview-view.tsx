@@ -13,8 +13,18 @@ import {
   type PositionChannelMapping,
   type PositionHistoryEntry,
 } from "@/lib/position-client";
+import {
+  fetchOrbitStatus,
+  type OrbitStatus,
+} from "@/lib/orbit-client";
+import {
+  fetchSimulatorRuntimeStatus,
+  type SimulatorRuntimeStatus,
+} from "@/lib/simulator-runtime";
+import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -111,6 +121,10 @@ export function EarthOverviewView({
   const [savingSourceId, setSavingSourceId] = useState<string | null>(null);
   const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
   const [mappingError, setMappingError] = useState<string | null>(null);
+  const [orbitStatusBySource, setOrbitStatusBySource] = useState<Record<string, OrbitStatus>>({});
+  const [simulatorRuntimeBySource, setSimulatorRuntimeBySource] = useState<
+    Record<string, SimulatorRuntimeStatus>
+  >({});
 
   const loadAllMappings = useCallback(async () => {
     setAllMappingsLoading(true);
@@ -133,6 +147,136 @@ export function EarthOverviewView({
     if (sources.length === 0) return;
     loadAllMappings();
   }, [sources.length, loadAllMappings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const simulatorIds = selectedIds.filter(
+        (id) => sources.find((source) => source.id === id)?.source_type === "simulator"
+      );
+      if (simulatorIds.length === 0) {
+        if (!cancelled) setSimulatorRuntimeBySource({});
+        return;
+      }
+
+      const entries = await Promise.all(
+        simulatorIds.map(async (sourceId) => {
+          try {
+            const status = await fetchSimulatorRuntimeStatus(sourceId);
+            return [sourceId, status] as const;
+          } catch {
+            return [sourceId, { connected: false }] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      setSimulatorRuntimeBySource(
+        Object.fromEntries(entries) as Record<string, SimulatorRuntimeStatus>
+      );
+    }
+    load();
+    const interval = setInterval(load, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedIds, sources]);
+
+  const effectiveRunIdBySource = useMemo(() => {
+    const next: Record<string, string> = {};
+    for (const source of sources) {
+      const runtime = simulatorRuntimeBySource[source.id];
+      const activeRunId =
+        source.source_type === "simulator" &&
+        runtime?.connected === true &&
+        runtime.state != null &&
+        runtime.state !== "idle"
+          ? runtime.config?.source_id ?? null
+          : null;
+      next[source.id] = activeRunId ?? source.id;
+    }
+    return next;
+  }, [sources, simulatorRuntimeBySource]);
+
+  const logicalSourceIdByOrbitSourceId = useMemo(() => {
+    const next: Record<string, string> = {};
+    for (const sourceId of selectedIds) {
+      next[sourceId] = sourceId;
+      const effectiveRunId = effectiveRunIdBySource[sourceId] ?? sourceId;
+      next[effectiveRunId] = sourceId;
+    }
+    return next;
+  }, [effectiveRunIdBySource, selectedIds]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (selectedIds.length === 0) {
+        setOrbitStatusBySource({});
+        return;
+      }
+
+      const entries = await Promise.all(
+        selectedIds.map(async (sourceId) => {
+          try {
+            const data = await fetchOrbitStatus(sourceId);
+            const status = data?.[sourceId];
+            if (!status) {
+              return [sourceId, null] as const;
+            }
+            return [
+              sourceId,
+              {
+                ...status,
+                source_id: sourceId,
+              },
+            ] as const;
+          } catch {
+            return [sourceId, null] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      const next: Record<string, OrbitStatus> = {};
+      for (const [sourceId, status] of entries) {
+        if (status) next[sourceId] = status;
+      }
+      setOrbitStatusBySource(next);
+    }
+    load();
+    const interval = setInterval(load, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedIds]);
+
+  useEffect(() => {
+    const client = new RealtimeWsClient();
+    const handler = (msg: { type: string; source_id?: string; status?: string; reason?: string; orbit_type?: string | null; perigee_km?: number | null; apogee_km?: number | null; eccentricity?: number | null; velocity_kms?: number | null; period_sec?: number | null }) => {
+      if (msg.type === "orbit_status" && msg.source_id != null) {
+        const logicalSourceId = logicalSourceIdByOrbitSourceId[msg.source_id];
+        if (!logicalSourceId) return;
+        setOrbitStatusBySource((prev) => ({
+          ...prev,
+          [logicalSourceId]: {
+            source_id: logicalSourceId,
+            status: msg.status ?? "",
+            reason: msg.reason ?? "",
+            orbit_type: msg.orbit_type ?? null,
+            perigee_km: msg.perigee_km ?? null,
+            apogee_km: msg.apogee_km ?? null,
+            eccentricity: msg.eccentricity ?? null,
+            velocity_kms: msg.velocity_kms ?? null,
+            period_sec: msg.period_sec ?? null,
+          },
+        }));
+      }
+    };
+    client.subscribe(handler);
+    client.connect();
+    return () => client.disconnect();
+  }, [logicalSourceIdByOrbitSourceId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -371,6 +515,31 @@ export function EarthOverviewView({
                 </div>
               </CardHeader>
               <CardContent className="pt-0 space-y-5">
+                {/* Orbit anomaly banner: when any visible + mapped source has orbit anomaly */}
+                {(() => {
+                  const anomalySources = selectedIds.filter((id) => {
+                    const m = mappingsBySource[id];
+                    const st = orbitStatusBySource[id];
+                    if (!m || !st) return false;
+                    const s = st.status;
+                    return s !== "VALID" && s !== "INSUFFICIENT_DATA";
+                  });
+                  if (anomalySources.length === 0) return null;
+                  const first = anomalySources[0];
+                  const src = sources.find((s) => s.id === first);
+                  const st = orbitStatusBySource[first];
+                  return (
+                    <Alert variant="destructive" className="py-2">
+                      <AlertDescription className="text-xs">
+                        <span className="font-medium">Orbit anomaly</span>
+                        {src && st && (
+                          <> — {src.name}: {st.reason || st.status}</>
+                        )}
+                      </AlertDescription>
+                    </Alert>
+                  );
+                })()}
+
                 {/* Section 1: Which sources are shown on the globe (independent of config) */}
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-muted-foreground">Show on globe</p>
@@ -448,6 +617,20 @@ export function EarthOverviewView({
                               <span className="ml-auto truncate text-[11px] text-muted-foreground">
                                 {m ? mappingSummary(m) : "Not configured"}
                               </span>
+                              {m && (() => {
+                                const st = orbitStatusBySource[src.id];
+                                if (!st) return null;
+                                const isAnomaly = st.status !== "VALID" && st.status !== "INSUFFICIENT_DATA";
+                                return (
+                                  <Badge
+                                    variant={isAnomaly ? "destructive" : "secondary"}
+                                    className="ml-1.5 text-[9px] shrink-0"
+                                    title={st.reason || st.status}
+                                  >
+                                    {isAnomaly ? st.status.replace(/_/g, " ") : (st.orbit_type ?? "OK")}
+                                  </Badge>
+                                );
+                              })()}
                             </CollapsibleTrigger>
                             <CollapsibleContent>
                               <div className="mt-3 space-y-3 rounded-md border border-border bg-muted/30 p-3">

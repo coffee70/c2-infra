@@ -25,7 +25,13 @@ def _generate_run_source_id(scenario: str) -> str:
 
 
 class StartConfig(BaseModel):
-    scenario: str = Field(default="nominal", description="Scenario: nominal, power_sag, thermal_runaway, comm_dropout, safe_mode")
+    scenario: str = Field(
+        default="nominal",
+        description=(
+            "Scenario: nominal, power_sag, thermal_runaway, comm_dropout, safe_mode, "
+            "orbit_nominal, orbit_decay, orbit_highly_elliptical, orbit_suborbital, orbit_escape"
+        ),
+    )
     duration: float = Field(default=300, ge=0, description="Duration in seconds (0 = infinite)")
     speed: float = Field(default=1.0, ge=0.1, description="Time speed factor")
     drop_prob: float = Field(default=0.0, ge=0, le=1, description="Link dropout probability")

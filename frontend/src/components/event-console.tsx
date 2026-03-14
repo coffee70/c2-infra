@@ -67,6 +67,7 @@ interface AnomaliesData {
   adcs: AnomalyEntry[];
   comms: AnomalyEntry[];
   other?: AnomalyEntry[];
+  orbit?: AnomalyEntry[];
 }
 
 interface EventConsoleProps {
@@ -100,7 +101,8 @@ export function EventConsole({
     anomalies.thermal.length +
     anomalies.adcs.length +
     anomalies.comms.length +
-    (anomalies.other?.length ?? 0);
+    (anomalies.other?.length ?? 0) +
+    (anomalies.orbit?.length ?? 0);
 
   const handleResolve = () => {
     if (resolveModal && onResolve) {
@@ -119,6 +121,7 @@ export function EventConsole({
     { key: "adcs", entries: anomalies.adcs, label: SUBSYSTEM_LABELS.adcs },
     { key: "comms", entries: anomalies.comms, label: SUBSYSTEM_LABELS.comms },
     { key: "other", entries: anomalies.other ?? [], label: SUBSYSTEM_LABELS.other },
+    { key: "orbit", entries: anomalies.orbit ?? [], label: "Orbit" },
   ];
 
   return (
@@ -179,9 +182,11 @@ export function EventConsole({
                                 <div className="flex items-center justify-between gap-2">
                                   <Link
                                     href={
-                                      sourceId && sourceId !== "default"
-                                        ? `/telemetry/${encodeURIComponent(entry.name)}?source=${encodeURIComponent(sourceId)}`
-                                        : `/telemetry/${encodeURIComponent(entry.name)}`
+                                      entry.name.startsWith("Orbit: ")
+                                        ? "/planning"
+                                        : sourceId && sourceId !== "default"
+                                          ? `/telemetry/${encodeURIComponent(entry.name)}?source=${encodeURIComponent(sourceId)}`
+                                          : `/telemetry/${encodeURIComponent(entry.name)}`
                                     }
                                     className="font-medium text-sm text-primary hover:underline underline-offset-4 truncate flex-1 min-w-0"
                                   >

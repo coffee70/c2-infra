@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Dedicated pool for measurement processing; avoids exhausting FastAPI's default pool
 _PROCESSOR_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="realtime-processor")
+_MEASUREMENT_CONSUMER_COUNT = 4
 
 # Type aliases for handlers
 MeasurementHandler = Callable[[MeasurementEvent], None]
@@ -31,7 +32,8 @@ class InProcessEventBus:
         self._alert_handlers: list[AlertHandler] = []
         self._measurement_queue: asyncio.Queue[MeasurementEvent] = asyncio.Queue()
         self._alert_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._consumer_task: asyncio.Task[None] | None = None
+        self._measurement_tasks: list[asyncio.Task[None]] = []
+        self._alert_task: asyncio.Task[None] | None = None
 
     def publish_measurement(self, event: MeasurementEvent) -> bool:
         """Publish a measurement event (non-blocking). Returns False if dropped."""
@@ -77,17 +79,22 @@ class InProcessEventBus:
 
     async def _process_measurements(self) -> None:
         """Process measurement queue and fan out to handlers (handlers run in dedicated pool)."""
-        event_count = 0
+        loop = asyncio.get_running_loop()
         while True:
             try:
                 event = await self._measurement_queue.get()
-                event_count += 1
-                for h in self._measurement_handlers:
-                    try:
-                        loop = asyncio.get_event_loop()
-                        await loop.run_in_executor(_PROCESSOR_EXECUTOR, lambda e=event: h(e))
-                    except Exception as e:
-                        logger.exception("Measurement handler error: %s", e)
+                try:
+                    futures = [
+                        loop.run_in_executor(_PROCESSOR_EXECUTOR, handler, event)
+                        for handler in self._measurement_handlers
+                    ]
+                    if futures:
+                        results = await asyncio.gather(*futures, return_exceptions=True)
+                        for result in results:
+                            if isinstance(result, Exception):
+                                logger.exception("Measurement handler error: %s", result)
+                finally:
+                    self._measurement_queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -98,11 +105,14 @@ class InProcessEventBus:
         while True:
             try:
                 event = await self._alert_queue.get()
-                for h in self._alert_handlers:
-                    try:
-                        h(event)
-                    except Exception as e:
-                        logger.exception("Alert handler error: %s", e)
+                try:
+                    for h in self._alert_handlers:
+                        try:
+                            h(event)
+                        except Exception as e:
+                            logger.exception("Alert handler error: %s", e)
+                finally:
+                    self._alert_queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -110,24 +120,25 @@ class InProcessEventBus:
 
     def start(self) -> None:
         """Start background consumers."""
-        if self._consumer_task is not None:
+        if self._measurement_tasks or self._alert_task is not None:
             return
-        self._consumer_task = asyncio.create_task(self._run_consumers())
+        self._measurement_tasks = [
+            asyncio.create_task(self._process_measurements())
+            for _ in range(_MEASUREMENT_CONSUMER_COUNT)
+        ]
+        self._alert_task = asyncio.create_task(self._process_alerts())
         logger.info("Realtime event bus started")
-
-    async def _run_consumers(self) -> None:
-        """Run both consumers concurrently."""
-        await asyncio.gather(
-            self._process_measurements(),
-            self._process_alerts(),
-        )
 
     def stop(self) -> None:
         """Stop background consumers."""
-        if self._consumer_task is not None:
-            self._consumer_task.cancel()
-            self._consumer_task = None
-            logger.info("Realtime event bus stopped")
+        if self._alert_task is not None:
+            self._alert_task.cancel()
+            self._alert_task = None
+        if self._measurement_tasks:
+            for task in self._measurement_tasks:
+                task.cancel()
+            self._measurement_tasks = []
+        logger.info("Realtime event bus stopped")
 
 
 _bus: InProcessEventBus | None = None

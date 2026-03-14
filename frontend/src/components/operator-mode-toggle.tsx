@@ -42,13 +42,11 @@ const MODE_LABELS: Record<OperatorMode, string> = {
 };
 
 export function OperatorModeToggle() {
-  const [mode, setMode] = useState<OperatorMode>("default");
+  const [mode, setMode] = useState<OperatorMode>(() => getStoredMode());
 
   useEffect(() => {
-    const stored = getStoredMode();
-    setMode(stored);
-    applyMode(stored);
-  }, []);
+    applyMode(mode);
+  }, [mode]);
 
   const setModeAndStore = (m: OperatorMode) => {
     setMode(m);

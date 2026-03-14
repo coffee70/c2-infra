@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated vendor bundle copied from node_modules at build/dev time.
+    "public/cesium/**",
+    // Build helper script is a small Node CJS utility, not browser app code.
+    "scripts/copy-cesium.js",
   ]),
 ]);
 

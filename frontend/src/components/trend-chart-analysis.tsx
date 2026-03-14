@@ -161,8 +161,11 @@ export function TrendChartAnalysis({
 
   const [data, setData] = useState<DataPoint[]>([]);
   const [compareData, setCompareData] = useState<DataPoint[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadState, setLoadState] = useState<{
+    requestKey: string;
+    error: string | null;
+  }>({ requestKey: "", error: null });
+  const [nowTs, setNowTs] = useState(() => Date.now());
 
   const { sinceDate, untilDate } = useMemo(() => {
     if (zoomRefetch) {
@@ -188,6 +191,9 @@ export function TrendChartAnalysis({
     since.setMinutes(since.getMinutes() - rangeMinutes);
     return { sinceDate: since.toISOString(), untilDate: null };
   }, [useCustomRange, customStart, customEnd, rangeMinutes, zoomRefetch]);
+  const loadRequestKey = `${channelName}:${compareChannel ?? ""}:${sinceDate ?? ""}:${untilDate ?? ""}`;
+  const loading = loadState.requestKey !== loadRequestKey;
+  const error = loading ? null : loadState.error;
 
   const fetchLimit = useMemo(() => {
     if (zoomRefetch) return 1000;
@@ -212,8 +218,6 @@ export function TrendChartAnalysis({
 
   useEffect(() => {
     if (!sinceDate) return;
-    setLoading(true);
-    setError(null);
     Promise.all([
       fetchData(channelName, sinceDate, untilDate),
       compareChannel
@@ -232,10 +236,15 @@ export function TrendChartAnalysis({
         setCompareData(compare);
         setTimeRangePct([0, 100]);
         setZoomRefetch(null);
+        setLoadState({ requestKey: loadRequestKey, error: null });
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
-      .finally(() => setLoading(false));
-  }, [channelName, compareChannel, sinceDate, untilDate, fetchData]);
+      .catch((e) =>
+        setLoadState({
+          requestKey: loadRequestKey,
+          error: e instanceof Error ? e.message : "Failed to load",
+        })
+      );
+  }, [channelName, compareChannel, fetchData, loadRequestKey, sinceDate, untilDate]);
 
   useEffect(() => {
     const el = chartContainerRef.current;
@@ -286,6 +295,11 @@ export function TrendChartAnalysis({
     client.subscribeWatchlist([channelName], sourceId);
     return () => client.disconnect();
   }, [channelName, sourceId, fetchLimit]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const timeOpts = useMemo(
     () => ({
@@ -384,7 +398,6 @@ export function TrendChartAnalysis({
 
   const sampleInterval = useMemo(() => medianInterval(data), [data]);
   const lastPoint = displayData.length > 0 ? displayData[displayData.length - 1] : null;
-  const now = Date.now();
   const lastReceivedAt =
     lastPoint?.receptionTime
       ? new Date(lastPoint.receptionTime).getTime()
@@ -393,7 +406,7 @@ export function TrendChartAnalysis({
         : lastTimestamp
           ? new Date(lastTimestamp).getTime()
           : null;
-  const gapMs = lastReceivedAt != null ? now - lastReceivedAt : null;
+  const gapMs = lastReceivedAt != null ? nowTs - lastReceivedAt : null;
   const possibleGap = sampleInterval != null && gapMs != null && gapMs > 2 * sampleInterval;
 
   const tooltipContent = useCallback(
@@ -455,7 +468,7 @@ export function TrendChartAnalysis({
 
   const isZoomed = timeRangePct[0] > 0 || timeRangePct[1] < 100;
   const dataMaxTime = chartData.length > 0 ? new Date(chartData[chartData.length - 1].timestamp).getTime() : 0;
-  const isLiveData = lastPoint && dataMaxTime > 0 && Date.now() - dataMaxTime < 60_000;
+  const isLiveData = lastPoint && dataMaxTime > 0 && nowTs - dataMaxTime < 60_000;
 
   return (
     <div className="space-y-3 overflow-visible">
@@ -697,7 +710,7 @@ export function TrendChartAnalysis({
             <XAxis
               dataKey="time"
               tick={{ fontSize: 12 }}
-              tickFormatter={(v, i) => {
+              tickFormatter={(v) => {
                 const idx = displayData.findIndex((d) => d.time === v);
                 if (idx < 0) return v;
                 return new Date(displayData[idx].timestamp).toLocaleString(undefined, {

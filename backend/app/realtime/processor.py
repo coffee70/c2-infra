@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 from collections import deque
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -20,6 +21,7 @@ from app.models.schemas import (
     TelemetryAlertSchema,
 )
 from app.models.telemetry import (
+    PositionChannelMapping,
     TelemetryAlert,
     TelemetryCurrent,
     TelemetryData,
@@ -30,6 +32,11 @@ from app.lib.audit import audit_log
 from app.realtime.bus import get_realtime_bus
 from app.realtime.feed_health import get_feed_health_tracker
 from app.services.ops_events_service import write_event as write_ops_event
+from app.services.source_run_service import (
+    get_cached_active_run_id,
+    register_active_run,
+    run_id_to_source_id,
+)
 from app.services.telemetry_service import _compute_state
 from app.utils.subsystem import infer_subsystem
 
@@ -37,6 +44,8 @@ logger = logging.getLogger(__name__)
 
 DEBOUNCE_CONSECUTIVE = 2
 SPARKLINE_POINTS = 30
+ORBIT_MAPPINGS_CACHE_TTL_SEC = 30
+ORBIT_POSITION_TIMESTAMP_WINDOW_SEC = 2.0
 
 # Type for telemetry update handler
 TelemetryUpdateHandler = type("TelemetryUpdateHandler", (), {})
@@ -45,6 +54,31 @@ TelemetryUpdateHandler = type("TelemetryUpdateHandler", (), {})
 def _parse_time(s: str) -> datetime:
     """Parse RFC3339 string to datetime."""
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _get_orbit_mappings(db: Session) -> dict[str, tuple[str, str, str]]:
+    """Return source_id -> (lat_channel, lon_channel, alt_channel) for gps_lla mappings."""
+    stmt = (
+        select(
+            PositionChannelMapping.source_id,
+            PositionChannelMapping.lat_channel_name,
+            PositionChannelMapping.lon_channel_name,
+            PositionChannelMapping.alt_channel_name,
+        )
+        .where(PositionChannelMapping.active.is_(True))
+        .where(PositionChannelMapping.frame_type == "gps_lla")
+        .where(PositionChannelMapping.lat_channel_name.isnot(None))
+        .where(PositionChannelMapping.lon_channel_name.isnot(None))
+    )
+    rows = db.execute(stmt).fetchall()
+    out: dict[str, tuple[str, str, str]] = {}
+    for r in rows:
+        lat = r[1] or ""
+        lon = r[2] or ""
+        alt = r[3] or ""
+        if lat and lon:
+            out[r[0]] = (lat, lon, alt)
+    return out
 
 
 class RealtimeProcessor:
@@ -56,6 +90,16 @@ class RealtimeProcessor:
         self._state_history_lock = threading.Lock()
         self._telemetry_update_handlers: list = []
         self._bus = get_realtime_bus()
+        self._sparkline_history: dict[tuple[str, str], deque[RecentDataPoint]] = {}
+        self._sparkline_history_lock = threading.Lock()
+        # Orbit: sources with position mapping -> (lat, lon, alt) channel names
+        self._orbit_mappings: dict[str, tuple[str, str, str]] = {}
+        self._orbit_mappings_at: float = 0.0
+        self._orbit_mappings_lock = threading.Lock()
+        self._orbit_active_input_source: dict[str, str] = {}
+        # Per-source position buffer for orbit, grouped by generation timestamp.
+        self._orbit_position_buffer: dict[str, dict] = {}
+        self._orbit_buffer_lock = threading.Lock()
 
     def _get_state_history(self, source_id: str, channel: str) -> deque[str]:
         """Get or create state history for source+channel (keeps last N). Caller must hold _state_history_lock."""
@@ -63,6 +107,23 @@ class RealtimeProcessor:
         if key not in self._state_history:
             self._state_history[key] = deque(maxlen=DEBOUNCE_CONSECUTIVE)
         return self._state_history[key]
+
+    def _append_sparkline_point(
+        self,
+        source_id: str,
+        channel: str,
+        point: RecentDataPoint,
+    ) -> list[RecentDataPoint]:
+        """Maintain a small in-memory sparkline cache for realtime WebSocket updates."""
+        key = (source_id, channel)
+        with self._sparkline_history_lock:
+            history = self._sparkline_history.get(key)
+            if history is None:
+                history = deque(maxlen=SPARKLINE_POINTS)
+                self._sparkline_history[key] = history
+            if not history or history[-1].timestamp != point.timestamp or history[-1].value != point.value:
+                history.append(point)
+            return list(history)
 
     def _on_measurement(self, event: MeasurementEvent) -> None:
         """Handle a measurement event (runs in thread pool)."""
@@ -83,6 +144,7 @@ class RealtimeProcessor:
     ) -> None:
         """Process single measurement: validate, persist, update current, check alerts."""
         source_id = event.source_id or "default"
+        register_active_run(source_id)
         get_feed_health_tracker().record_reception(source_id)
 
         meta = db.execute(
@@ -172,21 +234,11 @@ class RealtimeProcessor:
                 )
             )
 
-        # Sparkline data
-        spark_stmt = (
-            select(TelemetryData.timestamp, TelemetryData.value)
-            .where(
-                TelemetryData.telemetry_id == meta.id,
-                TelemetryData.source_id == source_id,
-            )
-            .order_by(desc(TelemetryData.timestamp))
-            .limit(SPARKLINE_POINTS)
+        sparkline_data = self._append_sparkline_point(
+            source_id,
+            meta.name,
+            RecentDataPoint(timestamp=gen_time.isoformat(), value=event.value),
         )
-        spark_rows = db.execute(spark_stmt).fetchall()
-        sparkline_data = [
-            RecentDataPoint(timestamp=r[0].isoformat(), value=float(r[1]))
-            for r in reversed(spark_rows)
-        ]
 
         subsystem = infer_subsystem(event.channel_name, meta)
 
@@ -322,6 +374,9 @@ class RealtimeProcessor:
         # Broadcast telemetry update
         self._broadcast_telemetry_update(update)
 
+        # Orbit: if this source has a position mapping and channel is lat/lon/alt, buffer and maybe push
+        self._maybe_submit_orbit_sample(db, source_id, event.channel_name, event.value, gen_time)
+
     def _publish_alert_event(
         self,
         event_type: str,
@@ -361,6 +416,87 @@ class RealtimeProcessor:
             resolution_code=alert.resolution_code,
         )
         self._bus.publish_alert({"type": event_type, "alert": schema.model_dump()})
+
+    def _maybe_submit_orbit_sample(
+        self,
+        db: Session,
+        source_id: str,
+        channel_name: str,
+        value: float,
+        gen_time: datetime,
+    ) -> None:
+        """If source has position mapping and this is lat/lon/alt, buffer and maybe push to orbit module."""
+        now = time.time()
+        with self._orbit_mappings_lock:
+            if now - self._orbit_mappings_at > ORBIT_MAPPINGS_CACHE_TTL_SEC:
+                self._orbit_mappings = _get_orbit_mappings(db)
+                self._orbit_mappings_at = now
+            mappings = self._orbit_mappings
+        logical_source_id = run_id_to_source_id(source_id)
+        cached_run_id = get_cached_active_run_id(logical_source_id)
+        if cached_run_id is not None and cached_run_id != source_id:
+            return
+        if logical_source_id not in mappings:
+            return
+        lat_name, lon_name, alt_name = mappings[logical_source_id]
+        should_reset_source = False
+        with self._orbit_buffer_lock:
+            active_input_source = self._orbit_active_input_source.get(logical_source_id)
+            if active_input_source is not None and active_input_source != source_id:
+                should_reset_source = True
+                self._orbit_position_buffer.pop(logical_source_id, None)
+            self._orbit_active_input_source[logical_source_id] = source_id
+        if should_reset_source:
+            from app.orbit import reset_source as reset_orbit_source
+
+            reset_orbit_source(logical_source_id)
+        slot: Optional[str] = None
+        if channel_name == lat_name:
+            slot = "lat"
+        elif channel_name == lon_name:
+            slot = "lon"
+        elif channel_name == alt_name:
+            slot = "alt"
+        if slot is None:
+            return
+        ts_unix = gen_time.timestamp()
+        with self._orbit_buffer_lock:
+            if logical_source_id not in self._orbit_position_buffer:
+                self._orbit_position_buffer[logical_source_id] = {
+                    "samples": {},
+                    "last_pushed_ts": 0.0,
+                }
+            buf = self._orbit_position_buffer[logical_source_id]
+            last_pushed = buf["last_pushed_ts"]
+            if ts_unix <= last_pushed:
+                return
+            samples_by_ts = buf["samples"]
+            for sample_ts in list(samples_by_ts.keys()):
+                if sample_ts <= last_pushed or ts_unix - sample_ts > ORBIT_POSITION_TIMESTAMP_WINDOW_SEC:
+                    samples_by_ts.pop(sample_ts, None)
+            sample = samples_by_ts.setdefault(
+                ts_unix,
+                {"lat": None, "lon": None, "alt": None},
+            )
+            sample[slot] = value
+            lat = sample["lat"]
+            lon = sample["lon"]
+            alt = sample["alt"]
+            alt_ready = alt_name == "" or alt is not None
+            if lat is None or lon is None or not alt_ready:
+                return
+            alt_val = alt if alt is not None else 0.0
+        try:
+            from app.orbit import submit_position_sample
+
+            submit_position_sample(logical_source_id, ts_unix, lat, lon, alt_val)
+            with self._orbit_buffer_lock:
+                if logical_source_id in self._orbit_position_buffer:
+                    buf = self._orbit_position_buffer[logical_source_id]
+                    buf["last_pushed_ts"] = ts_unix
+                    buf["samples"].pop(ts_unix, None)
+        except Exception as e:
+            logger.exception("Orbit submit_position_sample error for %s: %s", logical_source_id, e)
 
     def _broadcast_telemetry_update(self, update: RealtimeChannelUpdate) -> None:
         """Broadcast to registered handlers (e.g. WebSocket hub)."""

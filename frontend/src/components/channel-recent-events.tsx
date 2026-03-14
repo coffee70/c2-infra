@@ -46,12 +46,16 @@ export function ChannelRecentEvents({
   sourceId = "default",
   sinceMinutes = 60,
 }: ChannelRecentEventsProps) {
-  const [events, setEvents] = useState<OpsEventSchema[]>([]);
-  const [loading, setLoading] = useState(true);
+  const requestKey = `${channelName}:${sourceId}:${sinceMinutes}`;
+  const [result, setResult] = useState<{
+    requestKey: string;
+    events: OpsEventSchema[];
+  }>({ requestKey: "", events: [] });
+  const loading = result.requestKey !== requestKey;
+  const events = loading ? [] : result.events;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
     const params = new URLSearchParams({
       source_id: sourceId,
       since_minutes: String(sinceMinutes),
@@ -61,18 +65,25 @@ export function ChannelRecentEvents({
     fetch(`${API_URL}/ops/events?${params}`)
       .then((r) => (r.ok ? r.json() : { events: [] }))
       .then((data) => {
-        if (!cancelled) setEvents(data.events || []);
+        if (!cancelled) {
+          setResult({
+            requestKey,
+            events: data.events || [],
+          });
+        }
       })
       .catch(() => {
-        if (!cancelled) setEvents([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setResult({
+            requestKey,
+            events: [],
+          });
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [channelName, sourceId, sinceMinutes]);
+  }, [channelName, requestKey, sinceMinutes, sourceId]);
 
   if (loading) {
     return (

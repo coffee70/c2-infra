@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { auditLog } from "@/lib/audit-log";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Spinner } from "@/components/ui/spinner";
 import { WatchlistCard } from "@/components/watchlist-card";
 import { EventConsole } from "@/components/event-console";
 import {
@@ -12,24 +13,22 @@ import {
 } from "@/components/context-banner";
 import { NowPanel } from "@/components/now-panel";
 import { EmptyState } from "@/components/empty-state";
+import { TelemetryAlert, type RealtimeMessage } from "@/lib/realtime-ws-client";
 import {
-  RealtimeWsClient,
-  RealtimeChannelUpdate,
-  TelemetryAlert,
-} from "@/lib/realtime-ws-client";
-
-const API_URL =
-  process.env.API_SERVER_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
-  "http://localhost:8000";
+  RealtimeTelemetryProvider,
+  useRealtimeTelemetry,
+  type InitialChannelInput,
+} from "@/lib/realtime-telemetry-context";
+import { fetchOrbitStatus, type OrbitStatus } from "@/lib/orbit-client";
+import { type SimulatorRuntimeStatus } from "@/lib/simulator-runtime";
 
 interface OverviewChannel {
   name: string;
   units?: string | null;
   description?: string | null;
   subsystem_tag: string;
-  current_value: number;
-  last_timestamp: string;
+  current_value: number | null;
+  last_timestamp: string | null;
   state: string;
   state_reason?: string | null;
   z_score?: number | null;
@@ -55,6 +54,7 @@ interface AnomaliesData {
   adcs: AnomalyEntry[];
   comms: AnomalyEntry[];
   other?: AnomalyEntry[];
+  orbit?: AnomalyEntry[];
 }
 
 function alertToEntry(a: TelemetryAlert): AnomalyEntry & { id: string } {
@@ -80,7 +80,34 @@ const SUBSYSTEM_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-function alertsToAnomaliesData(active: TelemetryAlert[]): AnomaliesData {
+interface TelemetrySourceForOrbit {
+  id: string;
+  name: string;
+}
+
+function orbitAnomalyEntries(
+  orbitStatusBySource: Record<string, OrbitStatus>,
+  sources: TelemetrySourceForOrbit[]
+): AnomalyEntry[] {
+  const entries: AnomalyEntry[] = [];
+  for (const src of sources) {
+    const st = orbitStatusBySource[src.id];
+    if (!st) continue;
+    if (st.status === "VALID" || st.status === "INSUFFICIENT_DATA") continue;
+    entries.push({
+      name: `Orbit: ${src.name}`,
+      current_value: 0,
+      last_timestamp: new Date().toISOString(),
+      state_reason: st.reason || st.status,
+    });
+  }
+  return entries;
+}
+
+function alertsToAnomaliesData(
+  active: TelemetryAlert[],
+  orbitAnomalies: AnomalyEntry[] = []
+): AnomaliesData {
   const known = ["power", "thermal", "adcs", "comms"] as const;
   const result: AnomaliesData = {
     power: [],
@@ -88,6 +115,7 @@ function alertsToAnomaliesData(active: TelemetryAlert[]): AnomaliesData {
     adcs: [],
     comms: [],
     other: [],
+    orbit: orbitAnomalies,
   };
   for (const a of active) {
     const entry = alertToEntry(a);
@@ -110,6 +138,7 @@ function anomaliesToAlertSummaries(data: AnomaliesData): AlertSummary[] {
     { entries: data.adcs, label: SUBSYSTEM_LABELS.adcs },
     { entries: data.comms, label: SUBSYSTEM_LABELS.comms },
     { entries: data.other ?? [], label: SUBSYSTEM_LABELS.other },
+    { entries: data.orbit ?? [], label: "Orbit" },
   ];
   const out: AlertSummary[] = [];
   for (const { entries, label } of groups) {
@@ -121,18 +150,31 @@ function anomaliesToAlertSummaries(data: AnomaliesData): AlertSummary[] {
   return out;
 }
 
-function channelUpdateToOverview(ch: RealtimeChannelUpdate): OverviewChannel {
+/** Map LiveChannelState to OverviewChannel for the grid. */
+function liveStateToOverviewChannel(c: {
+  name: string;
+  value: number | null;
+  lastTimestamp: string | null;
+  state: string;
+  stateReason: string | null;
+  zScore: number | null;
+  units?: string | null;
+  description?: string | null;
+  subsystem_tag: string;
+  liveData: { timestamp: string; value: number }[];
+  sparkline_data: { timestamp: string; value: number }[];
+}): OverviewChannel {
   return {
-    name: ch.name,
-    units: ch.units,
-    description: ch.description,
-    subsystem_tag: ch.subsystem_tag,
-    current_value: ch.current_value,
-    last_timestamp: ch.generation_time,
-    state: ch.state,
-    state_reason: ch.state_reason,
-    z_score: ch.z_score,
-    sparkline_data: ch.sparkline_data,
+    name: c.name,
+    units: c.units,
+    description: c.description,
+    subsystem_tag: c.subsystem_tag,
+    current_value: c.value,
+    last_timestamp: c.lastTimestamp,
+    state: c.state,
+    state_reason: c.stateReason,
+    z_score: c.zScore,
+    sparkline_data: c.liveData.length > 0 ? c.liveData : c.sparkline_data,
   };
 }
 
@@ -140,11 +182,6 @@ interface TelemetrySource {
   id: string;
   name: string;
   description?: string | null;
-}
-
-interface SimulatorStatus {
-  connected: boolean;
-  state?: "idle" | "running" | "paused";
 }
 
 interface RealtimeOverviewWrapperProps {
@@ -159,39 +196,99 @@ interface RealtimeOverviewWrapperProps {
   defaultSourceId?: string;
   /** Pre-fetched simulator status for the initial source to avoid "Disconnected" flash. */
   initialSimulatorSourceId?: string | null;
-  initialSimulatorStatus?: SimulatorStatus | null;
+  initialSimulatorStatus?: SimulatorRuntimeStatus | null;
+  simulatorStatus?: SimulatorRuntimeStatus | null;
+  isSwitchingRuns?: boolean;
+  showSwitchingIndicator?: boolean;
 }
 
-export function RealtimeOverviewWrapper({
-  initialChannels,
+export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
+  const {
+    initialChannels,
+    initialSourceId,
+    feedSourceId,
+  } = props;
+  const effectiveRunId = feedSourceId ?? initialSourceId;
+  const channelNames = useMemo(
+    () => initialChannels.map((ch) => ch.name),
+    [initialChannels]
+  );
+  const initialChannelsForProvider: InitialChannelInput[] = useMemo(
+    () =>
+      initialChannels.map((ch) => ({
+        name: ch.name,
+        current_value: ch.current_value,
+        last_timestamp: ch.last_timestamp,
+        state: ch.state,
+        state_reason: ch.state_reason ?? null,
+        z_score: ch.z_score ?? null,
+        units: ch.units,
+        description: ch.description,
+        subsystem_tag: ch.subsystem_tag,
+        sparkline_data: ch.sparkline_data,
+      })),
+    [initialChannels]
+  );
+
+  return (
+    <RealtimeTelemetryProvider
+      channelNames={channelNames}
+      sourceId={effectiveRunId}
+      initialChannels={initialChannelsForProvider}
+    >
+      <RealtimeOverviewContent {...props} />
+    </RealtimeTelemetryProvider>
+  );
+}
+
+function RealtimeOverviewContent({
   initialAnomalies,
-  hasError,
   sources,
   initialSourceId,
   feedSourceId,
-  defaultSourceId,
   initialSimulatorSourceId = null,
   initialSimulatorStatus = null,
+  simulatorStatus = null,
+  isSwitchingRuns = false,
+  showSwitchingIndicator = false,
 }: RealtimeOverviewWrapperProps) {
-  const [channels, setChannels] = useState(initialChannels);
-  const [anomalies, setAnomalies] = useState(initialAnomalies);
-  const [alerts, setAlerts] = useState<TelemetryAlert[]>([]);
-  const [live, setLive] = useState(false);
-  const [sourceId, setSourceId] = useState(initialSourceId);
-  const lastUpdateAtRef = useRef<number | null>(null);
-  const [client, setClient] = useState<RealtimeWsClient | null>(null);
+  const effectiveRunId = feedSourceId ?? initialSourceId;
+  const activeRunRef = useRef(effectiveRunId);
+  const [alertStore, setAlertStore] = useState<{
+    runId: string;
+    alerts: TelemetryAlert[];
+    hasLoaded: boolean;
+  }>({
+    runId: effectiveRunId,
+    alerts: [],
+    hasLoaded: false,
+  });
+  const [orbitStatusBySource, setOrbitStatusBySource] = useState<Record<string, OrbitStatus>>({});
+  const [hasLoadedOrbitStatus, setHasLoadedOrbitStatus] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
-  const effectiveRunId = feedSourceId ?? sourceId;
+  const { channelsArray, isLive: live, client } = useRealtimeTelemetry();
+  const sourceId = initialSourceId;
+  const visibleAlertStore =
+    alertStore.runId === effectiveRunId
+      ? alertStore
+      : {
+          runId: effectiveRunId,
+          alerts: [],
+          hasLoaded: false,
+        };
+
+  const channels = useMemo(
+    () => channelsArray.map(liveStateToOverviewChannel),
+    [channelsArray]
+  );
 
   useEffect(() => {
-    if (defaultSourceId !== undefined && initialSourceId === defaultSourceId) return;
-    setSourceId(initialSourceId);
-  }, [initialSourceId, defaultSourceId]);
+    activeRunRef.current = effectiveRunId;
+  }, [effectiveRunId]);
 
   const handleSourceChange = useCallback(
     (newId: string) => {
-      setSourceId(newId);
       if (pathname === "/overview") {
         if (typeof window !== "undefined") {
           try {
@@ -206,78 +303,101 @@ export function RealtimeOverviewWrapper({
     [pathname, router]
   );
 
-  const LIVE_STALE_MS = 15000;
-
-  const handleMessage = useCallback(
-    (msg: { type: string; channels?: RealtimeChannelUpdate[]; channel?: RealtimeChannelUpdate; active?: TelemetryAlert[]; event_type?: string; alert?: TelemetryAlert }) => {
-      if (msg.type === "snapshot_watchlist" && msg.channels) {
-        setChannels(msg.channels.map(channelUpdateToOverview));
-      } else if (msg.type === "telemetry_update" && msg.channel) {
-        lastUpdateAtRef.current = Date.now();
-        setLive(true);
-        setChannels((prev) => {
-          const idx = prev.findIndex((c) => c.name === msg.channel!.name);
-          const next = [...prev];
-          if (idx >= 0) {
-            next[idx] = channelUpdateToOverview(msg.channel!);
-          } else {
-            next.push(channelUpdateToOverview(msg.channel!));
-          }
-          return next;
-        });
-      } else if (msg.type === "snapshot_alerts" && msg.active) {
-        setAlerts(msg.active);
-        setAnomalies(alertsToAnomaliesData(msg.active));
-      } else if (msg.type === "alert_event" && msg.alert) {
-        lastUpdateAtRef.current = Date.now();
-        setLive(true);
-        const a = msg.alert;
-        setAlerts((prev) => {
-          const filtered = prev.filter((x) => x.id !== a.id);
-          const next = [...filtered, a];
-          const active = next.filter(
-            (x) => !x.resolved_at && !x.cleared_at
-          );
-          setAnomalies(alertsToAnomaliesData(active));
-          return next;
-        });
-      }
-    },
-    []
-  );
-
-  useEffect(() => {
-    const c = new RealtimeWsClient();
-    setClient(c);
-    c.subscribe((msg) => handleMessage(msg as Parameters<typeof handleMessage>[0]));
-    c.connect();
-    return () => c.disconnect();
+  const handleAlertsAndOrbit = useCallback((msg: RealtimeMessage) => {
+    const runId = activeRunRef.current;
+    if (msg.type === "snapshot_alerts" && msg.active) {
+      setAlertStore({
+        runId,
+        alerts: msg.active,
+        hasLoaded: true,
+      });
+    } else if (msg.type === "alert_event" && msg.alert) {
+      const a = msg.alert;
+      setAlertStore((prev) => {
+        const baseAlerts = prev.runId === runId ? prev.alerts : [];
+        const filtered = baseAlerts.filter((x) => x.id !== a.id);
+        return {
+          runId,
+          alerts: [...filtered, a],
+          hasLoaded: true,
+        };
+      });
+    } else if (msg.type === "orbit_status") {
+      setOrbitStatusBySource((prev) => ({
+        ...prev,
+        [msg.source_id]: {
+          source_id: msg.source_id,
+          status: msg.status,
+          reason: msg.reason,
+          orbit_type: msg.orbit_type ?? null,
+          perigee_km: msg.perigee_km ?? null,
+          apogee_km: msg.apogee_km ?? null,
+          eccentricity: msg.eccentricity ?? null,
+          velocity_kms: msg.velocity_kms ?? null,
+          period_sec: msg.period_sec ?? null,
+        },
+      }));
+      setHasLoadedOrbitStatus(true);
+    }
   }, []);
 
   useEffect(() => {
     if (!client) return;
-    const channelNames = initialChannels.map((ch) => ch.name);
-    // Subscribe to current run so live updates match overview data
-    client.subscribeWatchlist(channelNames, effectiveRunId);
-    client.subscribeAlerts(effectiveRunId);
-  }, [client, effectiveRunId, initialChannels]);
+    const unsub = client.subscribe(handleAlertsAndOrbit);
+    client.subscribeAlerts(feedSourceId ?? sourceId);
+    return () => {
+      unsub();
+    };
+  }, [client, feedSourceId, sourceId, handleAlertsAndOrbit]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      const at = lastUpdateAtRef.current;
-      if (at !== null && Date.now() - at > LIVE_STALE_MS) {
-        setLive(false);
+    let cancelled = false;
+    async function load() {
+      try {
+        const data = await fetchOrbitStatus();
+        if (cancelled) return;
+        setOrbitStatusBySource(data ?? {});
+        setHasLoadedOrbitStatus(true);
+      } catch {
+        if (!cancelled) {
+          setOrbitStatusBySource({});
+          setHasLoadedOrbitStatus(true);
+        }
       }
-    }, 2000);
-    return () => clearInterval(interval);
+    }
+    load();
+    const interval = setInterval(load, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
+
+  const anomalies = useMemo(() => {
+    const activeAlerts = visibleAlertStore.alerts.filter(
+      (x) => !x.resolved_at && !x.cleared_at
+    );
+    const orbitEntries = orbitAnomalyEntries(orbitStatusBySource, sources);
+    if (!visibleAlertStore.hasLoaded && !hasLoadedOrbitStatus) {
+      return initialAnomalies;
+    }
+    return alertsToAnomaliesData(activeAlerts, orbitEntries);
+  }, [
+    hasLoadedOrbitStatus,
+    initialAnomalies,
+    orbitStatusBySource,
+    sources,
+    visibleAlertStore.alerts,
+    visibleAlertStore.hasLoaded,
+  ]);
 
   const totalAlerts =
     anomalies.power.length +
     anomalies.thermal.length +
     anomalies.adcs.length +
     anomalies.comms.length +
-    (anomalies.other?.length ?? 0);
+    (anomalies.other?.length ?? 0) +
+    (anomalies.orbit?.length ?? 0);
 
   const alertSummaries = anomaliesToAlertSummaries(anomalies);
 
@@ -285,7 +405,6 @@ export function RealtimeOverviewWrapper({
     <div className="space-y-4">
       <ContextBanner
         sourceId={sourceId}
-        feedSourceId={feedSourceId}
         onSourceChange={handleSourceChange}
         sources={sources}
         activeAlertCount={totalAlerts}
@@ -293,6 +412,8 @@ export function RealtimeOverviewWrapper({
         alertSummaries={alertSummaries}
         initialSimulatorSourceId={initialSimulatorSourceId ?? undefined}
         initialSimulatorStatus={initialSimulatorStatus ?? undefined}
+        simulatorStatus={simulatorStatus ?? undefined}
+        isSwitchingRuns={showSwitchingIndicator}
       />
       <div className="space-y-4">
         <Card>
@@ -306,13 +427,19 @@ export function RealtimeOverviewWrapper({
                     Live
                   </span>
                 )}
+                {showSwitchingIndicator && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                    <Spinner className="size-3" />
+                    Switching…
+                  </span>
+                )}
               </div>
             </div>
             <p className="text-sm text-muted-foreground">
               Key channels: power, thermal, ADCS, comms
             </p>
           </CardHeader>
-          <CardContent>
+          <CardContent className={isSwitchingRuns ? "opacity-80 transition-opacity" : undefined}>
             {channels.length === 0 ? (
               <EmptyState
                 icon="chart"
@@ -326,8 +453,8 @@ export function RealtimeOverviewWrapper({
                     key={ch.name}
                     name={ch.name}
                     units={ch.units}
-                    currentValue={ch.current_value}
-                    lastTimestamp={ch.last_timestamp}
+                    currentValue={ch.current_value ?? Number.NaN}
+                    lastTimestamp={ch.last_timestamp ?? ""}
                     state={ch.state}
                     stateReason={ch.state_reason}
                     sparklineData={ch.sparkline_data}
@@ -341,10 +468,10 @@ export function RealtimeOverviewWrapper({
         <NowPanel sourceId={sourceId} sinceMinutes={15} />
         <EventConsole
           anomalies={anomalies}
-          alerts={alerts}
+          alerts={visibleAlertStore.alerts}
           sourceId={sourceId}
           onAck={
-            client
+            client && !isSwitchingRuns
               ? (id) => {
                   auditLog("alert.acked", { alert_id: id });
                   client.ackAlert(id);
@@ -352,7 +479,7 @@ export function RealtimeOverviewWrapper({
               : undefined
           }
           onResolve={
-            client
+            client && !isSwitchingRuns
               ? (id, text, code) => {
                   auditLog("alert.resolved", {
                     alert_id: id,

@@ -9,9 +9,10 @@ A **spacecraft telemetry monitoring and analysis platform** for mission operatio
 - **Semantic search** — find channels by meaning (e.g., "voltage", "temperature") instead of exact names
 - **LLM explanations** — contextual, human-readable summaries of each channel and its current state
 - **Live dashboard** — watchlist of key channels with sparklines, state badges, anomalies queue, and an events console for Ack/Resolve
-- **Real-time streaming** — WebSocket support for live telemetry and alerts with Ack/Resolve workflows
+- **Real-time streaming** — WebSocket support for live telemetry and alerts with Ack/Resolve workflows; Overview automatically follows a simulator's active run after start/stop without requiring a page refresh
+- **Orbit validation** — in-process orbit validation for sources with position mappings: LEO/MEO/GEO classification, anomaly detection (escape, suborbital, decay, high eccentricity). Status and anomalies are shown on the **Planning** page (per-source status and anomaly banner in the left panel) and in the **Overview** alerts area (Event Console “Orbit” section and alert summary). When a selected source is a simulator, Planning resolves that source's active run automatically for live globe position and orbit status. Updates are pushed in real time over WebSocket.
 - **Multi-source & feed health** — monitor multiple telemetry sources and feed health as described in the user guide
-- **Simulator** — mock vehicle streamer with scenarios (nominal, power sag, thermal runaway, etc.) for testing
+- **Simulator** — mock vehicle streamer with safe nominal telemetry plus explicit orbit-analysis presets (decay, highly elliptical, suborbital, escape) for controlled testing
 
 Designed for spacecraft ground operations, mission control dashboards, and teams that need to monitor and interpret large numbers of telemetry channels with AI-assisted context.
 
@@ -72,7 +73,7 @@ curl -X POST http://localhost:8000/telemetry/recompute-stats
 1. Open http://localhost:3000
 2. **Overview** (home): Watchlist of key channels (power, thermal, ADCS, comms) with current values, state badges, sparklines, and anomalies queue
 3. **Search**: Find telemetry by semantic search (e.g., "voltage", "temperature", "speed")
-4. **Simulator**: Start/stop mock vehicle streams with configurable scenarios (nominal, power sag, thermal runaway, etc.)
+4. **Simulator**: Start/stop mock vehicle streams with configurable scenarios, including safe nominal orbit telemetry and explicit orbit anomaly presets for Planning/orbit-analysis testing
 5. Click a channel to view stats, trend chart, z-score, and LLM explanation
 
 ### 5. Realtime streaming (optional)
@@ -91,6 +92,24 @@ Or with anomalies:
 ```
 
 The Overview page will show live updates (green "Live" badge when connected). The Events Console supports Ack and Resolve for alerts.
+
+## Browser Validation
+
+The repo-owned Playwright workspace lives in `tools/playwright`. Use it for browser checks instead of installing Playwright under `.cursor`.
+
+```bash
+npm --prefix tools/playwright install
+npm --prefix tools/playwright run install:chromium
+npm --prefix tools/playwright run test:smoke
+```
+
+For an interactive browser session against the local frontend:
+
+```bash
+npm --prefix tools/playwright run open:local
+```
+
+Browser binaries are stored in `tmp/playwright/ms-playwright`. Reports, traces, screenshots, and videos are stored in `tmp/playwright`.
 
 ## API Reference
 

@@ -6,6 +6,11 @@ import { useRouter, usePathname } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TelemetryDetailHeader } from "@/components/telemetry-detail-header";
 import { TelemetryDetailLive } from "@/components/telemetry-detail-live";
+import {
+  RealtimeTelemetryProvider,
+  useRealtimeChannel,
+  useRealtimeTelemetry,
+} from "@/lib/realtime-telemetry-context";
 import { TrendChartAnalysis } from "@/components/trend-chart-analysis";
 import { ExplanationBlock } from "@/components/explanation-block";
 import { ChannelRecentEvents } from "@/components/channel-recent-events";
@@ -85,10 +90,52 @@ export function TelemetryDetailTabs({
   currentRunId,
   decodedName,
 }: TelemetryDetailTabsProps) {
+  const initialChannels = [
+    {
+      name: decodedName,
+      current_value: explain.recent_value,
+      last_timestamp: explain.last_timestamp ?? "",
+      state: explain.state,
+      state_reason: explain.state_reason ?? null,
+      z_score: explain.z_score ?? null,
+      units: explain.units,
+      description: explain.description,
+      subsystem_tag: "",
+      sparkline_data: recentData,
+    },
+  ];
+
+  return (
+    <RealtimeTelemetryProvider
+      key={currentRunId}
+      channelNames={[decodedName]}
+      sourceId={currentRunId}
+      initialChannels={initialChannels}
+    >
+      <TelemetryDetailTabsContent
+        explain={explain}
+        recentData={recentData}
+        sourceId={sourceId}
+        currentRunId={currentRunId}
+        decodedName={decodedName}
+      />
+    </RealtimeTelemetryProvider>
+  );
+}
+
+function TelemetryDetailTabsContent({
+  explain,
+  recentData,
+  sourceId,
+  currentRunId,
+  decodedName,
+}: TelemetryDetailTabsProps) {
   const [activeTab, setActiveTab] = useState<TabId>("summary");
   const [sources, setSources] = useState<TelemetrySource[]>([]);
   const router = useRouter();
   const pathname = usePathname();
+  const liveChannel = useRealtimeChannel(decodedName);
+  const { isLive } = useRealtimeTelemetry();
 
   useEffect(() => {
     fetch(`${API_URL}/telemetry/sources`, { cache: "no-store" })
@@ -107,7 +154,6 @@ export function TelemetryDetailTabs({
       <div className="mx-auto max-w-6xl space-y-6">
         <ContextBanner
           sourceId={sourceId}
-          feedSourceId={currentRunId}
           onSourceChange={handleSourceChange}
           sources={sources}
         />
@@ -207,13 +253,14 @@ export function TelemetryDetailTabs({
                 >
                 <TelemetryDetailHeader
                   name={explain.name}
-                  value={explain.recent_value}
+                  value={liveChannel?.value ?? explain.recent_value}
                   units={explain.units}
-                  state={explain.state}
-                  stateReason={explain.state_reason}
-                  zScore={explain.z_score}
-                  lastTimestamp={explain.last_timestamp}
+                  state={liveChannel?.state ?? explain.state}
+                  stateReason={liveChannel?.stateReason ?? explain.state_reason}
+                  zScore={liveChannel?.zScore ?? explain.z_score}
+                  lastTimestamp={liveChannel?.lastTimestamp ?? explain.last_timestamp}
                   description={explain.description}
+                  live={isLive}
                 />
 
                 <Card className="mt-2 border-muted">
@@ -329,8 +376,7 @@ export function TelemetryDetailTabs({
                   aria-label="Live telemetry and trends"
                 >
                 <TelemetryDetailLive
-                  channelName={explain.name}
-                  sourceId={currentRunId}
+                  channelName={decodedName}
                   initialValue={explain.recent_value}
                   initialUnits={explain.units}
                   initialLastTimestamp={explain.last_timestamp}

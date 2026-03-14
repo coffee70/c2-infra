@@ -415,6 +415,21 @@ class WsFeedStatus(BaseModel):
     drop_count: Optional[int] = None
 
 
+class WsOrbitStatus(BaseModel):
+    """Orbit validation status update (real-time push)."""
+
+    type: str = "orbit_status"
+    source_id: str
+    status: str
+    reason: str = ""
+    orbit_type: Optional[str] = None
+    perigee_km: Optional[float] = None
+    apogee_km: Optional[float] = None
+    eccentricity: Optional[float] = None
+    velocity_kms: Optional[float] = None
+    period_sec: Optional[float] = None
+
+
 # --- Sources (constellation) ---
 class SourceCreate(BaseModel):
     """Request body for POST /telemetry/sources."""

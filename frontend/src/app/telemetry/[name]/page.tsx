@@ -105,7 +105,7 @@ export default async function TelemetryDetailPage({
 }) {
   const { name } = await params;
   const { source } = await searchParams;
-  let sourceId = source ?? "default";
+  const sourceId = source ?? "default";
   const decodedName = decodeURIComponent(name);
 
   // Normalize: URL is source-only; if a run id was passed, redirect to source.

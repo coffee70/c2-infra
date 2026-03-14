@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
 import { CurrentValueBlock } from "@/components/current-value-block";
 import { Badge } from "@/components/ui/badge";
-import { RealtimeWsClient } from "@/lib/realtime-ws-client";
-
-const LIVE_STALE_MS = 15000;
+import {
+  useRealtimeChannel,
+  useRealtimeTelemetry,
+} from "@/lib/realtime-telemetry-context";
 
 interface TelemetryDetailLiveProps {
   channelName: string;
-  sourceId?: string;
   initialValue: number;
   initialUnits?: string | null;
   initialLastTimestamp?: string | null;
@@ -22,7 +21,6 @@ interface TelemetryDetailLiveProps {
 
 export function TelemetryDetailLive({
   channelName,
-  sourceId = "default",
   initialValue,
   initialUnits,
   initialLastTimestamp,
@@ -32,51 +30,22 @@ export function TelemetryDetailLive({
   initialZScore,
   recentData,
 }: TelemetryDetailLiveProps) {
-  const [value, setValue] = useState(initialValue);
-  const [lastTimestamp, setLastTimestamp] = useState(initialLastTimestamp ?? "");
-  const [state, setState] = useState(initialState);
-  const [stateReason, setStateReason] = useState(initialStateReason ?? null);
-  const [zScore, setZScore] = useState(initialZScore ?? null);
-  const [liveData, setLiveData] = useState(recentData);
-  const [live, setLive] = useState(false);
-  const lastUpdateAtRef = useRef<number | null>(null);
+  const liveChannel = useRealtimeChannel(channelName);
+  const { isLive } = useRealtimeTelemetry();
 
-  useEffect(() => {
-    const client = new RealtimeWsClient();
-    client.subscribe((msg) => {
-      if (msg.type === "telemetry_update" && msg.channel?.name === channelName) {
-        lastUpdateAtRef.current = Date.now();
-        setLive(true);
-        const ch = msg.channel;
-        setValue(ch.current_value);
-        setLastTimestamp(ch.generation_time);
-        setState(ch.state);
-        setStateReason(ch.state_reason ?? null);
-        setZScore(ch.z_score ?? null);
-        setLiveData((prev) => {
-          const next = [...prev, { timestamp: ch.generation_time, value: ch.current_value }];
-          return next.slice(-100);
-        });
-      }
-    });
-    client.connect();
-    client.subscribeWatchlist([channelName], sourceId);
-    return () => client.disconnect();
-  }, [channelName, sourceId]);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const at = lastUpdateAtRef.current;
-      if (at !== null && Date.now() - at > LIVE_STALE_MS) {
-        setLive(false);
-      }
-    }, 2000);
-    return () => clearInterval(interval);
-  }, []);
+  const displayValue = liveChannel?.value ?? initialValue;
+  const displayLastTimestamp = liveChannel?.lastTimestamp ?? initialLastTimestamp ?? "";
+  const displayState = liveChannel?.state ?? initialState;
+  const displayStateReason = liveChannel?.stateReason ?? initialStateReason ?? null;
+  const displayZScore = liveChannel?.zScore ?? initialZScore ?? null;
+  const displayLiveData =
+    liveChannel && liveChannel.liveData.length > 0
+      ? liveChannel.liveData
+      : recentData;
 
   return (
     <div className="relative">
-      {live && (
+      {isLive && (
         <Badge
           variant="success"
           className="absolute top-2 right-2 gap-1.5"
@@ -86,14 +55,14 @@ export function TelemetryDetailLive({
         </Badge>
       )}
       <CurrentValueBlock
-        value={value}
+        value={displayValue}
         units={initialUnits}
-        lastTimestamp={lastTimestamp}
+        lastTimestamp={displayLastTimestamp}
         p50={initialP50}
-        state={state}
-        stateReason={stateReason}
-        zScore={zScore}
-        recentData={liveData}
+        state={displayState}
+        stateReason={displayStateReason}
+        zScore={displayZScore}
+        recentData={displayLiveData}
       />
     </div>
   );

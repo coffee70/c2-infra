@@ -11,6 +11,7 @@ from app.models.schemas import (
     RealtimeChannelUpdate,
     TelemetryAlertSchema,
     WsFeedStatus,
+    WsOrbitStatus,
     WsSnapshotAlerts,
     WsSnapshotWatchlist,
     WsTelemetryUpdate,
@@ -159,6 +160,40 @@ class RealtimeWsHub:
             self.broadcast_alert_event(event_type, alert),
             self._loop,
         )
+
+    def schedule_orbit_status(self, source_id: str, payload: dict) -> None:
+        """Schedule orbit status broadcast from sync context."""
+        if self._loop is None:
+            return
+        asyncio.run_coroutine_threadsafe(
+            self.broadcast_orbit_status(source_id, payload),
+            self._loop,
+        )
+
+    async def broadcast_orbit_status(self, source_id: str, payload: dict) -> None:
+        """Broadcast orbit status to all connected clients."""
+        if not self._connections:
+            return
+        msg = WsOrbitStatus(
+            source_id=source_id,
+            status=payload.get("status", ""),
+            reason=payload.get("reason", ""),
+            orbit_type=payload.get("orbit_type"),
+            perigee_km=payload.get("perigee_km"),
+            apogee_km=payload.get("apogee_km"),
+            eccentricity=payload.get("eccentricity"),
+            velocity_kms=payload.get("velocity_kms"),
+            period_sec=payload.get("period_sec"),
+        ).model_dump_json()
+        dead = []
+        for ws in list(self._connections.keys()):
+            try:
+                await ws.send_text(msg)
+            except Exception as e:
+                logger.warning("Orbit status broadcast failed: %s", e)
+                dead.append(ws)
+        for ws in dead:
+            await self.disconnect(ws)
 
     async def _do_broadcast_telemetry_update(self, update: RealtimeChannelUpdate) -> None:
         """Broadcast to clients subscribed to this channel and source."""

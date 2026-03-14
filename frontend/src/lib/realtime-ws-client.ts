@@ -57,12 +57,35 @@ export interface TelemetryAlert {
   resolution_code?: string | null;
 }
 
+export interface OrbitStatusMessage {
+  type: "orbit_status";
+  source_id: string;
+  status: string;
+  reason: string;
+  orbit_type?: string | null;
+  perigee_km?: number | null;
+  apogee_km?: number | null;
+  eccentricity?: number | null;
+  velocity_kms?: number | null;
+  period_sec?: number | null;
+}
+
+export interface FeedStatusMessage {
+  type: "feed_status";
+  source_id: string;
+  connected: boolean;
+  state?: "connected" | "degraded" | "disconnected";
+  last_reception_time: string | null;
+  approx_rate_hz?: number | null;
+}
+
 export type RealtimeMessage =
   | { type: "snapshot_watchlist"; channels: RealtimeChannelUpdate[] }
   | { type: "telemetry_update"; channel: RealtimeChannelUpdate }
   | { type: "snapshot_alerts"; active: TelemetryAlert[] }
   | { type: "alert_event"; event_type: string; alert: TelemetryAlert }
-  | { type: "feed_status"; source_id: string; connected: boolean; state?: "connected" | "degraded" | "disconnected" }
+  | FeedStatusMessage
+  | OrbitStatusMessage
   | { type: "hello_ack"; server_version: string }
   | { type: "error"; error: string };
 

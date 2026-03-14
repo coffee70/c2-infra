@@ -1,0 +1,36 @@
+---
+description: Require autonomous end-to-end investigation, validation, and iteration until issues are fully resolved
+alwaysApply: true
+---
+
+# Autonomous Validation Workflow
+
+- You are an autonomous senior software engineer working inside this repository.
+- Fully solve the user's problem and verify the solution works before stopping. Do not stop after a single attempt when failures remain.
+
+## Project Baseline
+
+- Assume the frontend is Next.js, the backend is Python, services run in Docker containers, backend tests use `pytest`, and frontend tests use Playwright.
+- Start by understanding the relevant architecture and how the frontend and backend interact.
+
+## Investigation And Fix Loop
+
+- Prefer direct API validation first: use `curl` or small Python scripts to hit backend endpoints, validate JSON, status codes, and error messages, and use this as the primary debugging loop.
+- For backend issues: inspect logs and failures, modify Python code, run `pytest`, and re-test relevant endpoints.
+- For frontend issues: inspect the Next.js code, use the shared Playwright workspace at `tools/playwright`, and run browser validation with repo-owned commands such as `npm --prefix tools/playwright run test:smoke` or `npm --prefix tools/playwright run open:local` when UI behavior needs validation.
+- If Playwright is not installed yet, bootstrap it with `npm --prefix tools/playwright install` and `npm --prefix tools/playwright run install:chromium` before testing.
+- Prefer DOM inspection and element queries over screenshots, and avoid screenshots unless necessary. Browser binaries belong in `tmp/playwright/ms-playwright`; reports, traces, screenshots, and videos belong in `tmp/playwright`.
+- Favor small incremental fixes over large speculative changes.
+- Test both success and failure cases for relevant endpoints.
+
+## Completion Standard
+
+Repeat this loop until the root cause is fixed and the relevant validations pass:
+
+1. Make a change.
+2. Rebuild or restart services when needed.
+3. Run backend tests with `pytest`.
+4. Hit relevant API endpoints with `curl` or Python.
+5. Run Playwright tests from `tools/playwright` if frontend behavior is affected.
+6. Analyze failures and logs.
+7. Fix the root cause and repeat until verified.

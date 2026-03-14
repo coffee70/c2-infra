@@ -7,14 +7,19 @@ import { Sparkline } from "@/components/sparkline";
 
 const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
 
-function formatWithUnits(value: number, units: string | null | undefined): string {
+function formatWithUnits(
+  value: number | null,
+  units: string | null | undefined
+): string {
+  if (value == null || !Number.isFinite(value)) return "No data";
   const formatted = value.toFixed(4);
   if (!units?.trim()) return formatted;
   const displayUnit = units === "C" ? "°C" : ` ${units}`;
   return `${formatted}${displayUnit}`;
 }
 
-function formatTimeAgo(timestamp: string): string {
+function formatTimeAgo(timestamp: string | null): string {
+  if (!timestamp) return "Waiting for telemetry";
   const ts = new Date(timestamp);
   const now = new Date();
   const diffMs = now.getTime() - ts.getTime();
@@ -27,7 +32,8 @@ function formatTimeAgo(timestamp: string): string {
   return `${diffHours} hours ago`;
 }
 
-function isStale(timestamp: string): boolean {
+function isStale(timestamp: string | null): boolean {
+  if (!timestamp) return false;
   const ts = new Date(timestamp);
   const now = new Date();
   return now.getTime() - ts.getTime() > STALE_THRESHOLD_MS;
@@ -36,8 +42,8 @@ function isStale(timestamp: string): boolean {
 interface WatchlistCardProps {
   name: string;
   units?: string | null;
-  currentValue: number;
-  lastTimestamp: string;
+  currentValue: number | null;
+  lastTimestamp: string | null;
   state: string;
   stateReason?: string | null;
   sparklineData: { timestamp: string; value: number }[];
@@ -54,12 +60,30 @@ export function WatchlistCard({
   sparklineData,
   sourceId,
 }: WatchlistCardProps) {
+  const hasData =
+    currentValue != null
+    && Number.isFinite(currentValue)
+    && lastTimestamp != null
+    && lastTimestamp !== "";
   const stale = isStale(lastTimestamp);
-  const stateVariant =
-    state === "warning" ? "destructive" : state === "caution" ? "secondary" : "success";
-  const stateLabel = state === "warning" ? "Warning" : state === "caution" ? "Caution" : "Normal";
+  const stateVariant = !hasData
+    ? "secondary"
+    : state === "warning"
+      ? "destructive"
+      : state === "caution"
+        ? "secondary"
+        : "success";
+  const stateLabel = !hasData
+    ? "No data"
+    : state === "warning"
+      ? "Warning"
+      : state === "caution"
+        ? "Caution"
+        : "Normal";
 
-  const tooltipTitle =
+  const tooltipTitle = !hasData
+    ? "Configured on the watchlist, waiting for telemetry for this source or run"
+    :
     stateReason === "out_of_limits"
       ? "Value outside mission-defined limits"
       : stateReason === "out_of_family"
@@ -91,7 +115,7 @@ export function WatchlistCard({
             >
               <span className="truncate block">
                 {stateLabel}
-                {stateReason && (
+                {hasData && stateReason && (
                   <span className="ml-1 opacity-80">
                     ({stateReason.replace("_", " ")})
                   </span>
@@ -106,7 +130,7 @@ export function WatchlistCard({
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span>Last update: {formatTimeAgo(lastTimestamp)}</span>
-              {stale && (
+              {hasData && stale && (
                 <span
                   className="inline-flex items-center gap-1 rounded bg-destructive/20 px-1.5 py-0.5 text-destructive"
                   title="Data is stale (no update in 15+ minutes)"

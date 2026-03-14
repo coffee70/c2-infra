@@ -331,7 +331,6 @@ export function TelemetryHistoryTable({
 
   const total = rows.length;
   const visible = filteredRows.length;
-  const appliedTimeFilter = downloadMeta.appliedTimeFilter ?? false;
   const fallbackToRecent = downloadMeta.fallbackToRecent ?? false;
 
   const runOptions = useMemo(() => {

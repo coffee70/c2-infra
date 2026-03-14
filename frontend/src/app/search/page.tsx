@@ -108,7 +108,6 @@ function SearchPageContent() {
   // Recent & Favorites
   const [recent, setRecent] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<string[]>([]);
-  const [favoritesLoading, setFavoritesLoading] = useState(false);
   const [favoriteError, setFavoriteError] = useState<string | null>(null);
 
   const loadFilterOptions = useCallback(async () => {
@@ -152,7 +151,6 @@ function SearchPageContent() {
   }, [sourceFromUrl, pathname, router]);
 
   const loadFavorites = useCallback(async () => {
-    setFavoritesLoading(true);
     try {
       const res = await fetch(`${API_URL}/telemetry/watchlist`);
       if (res.ok) {
@@ -161,8 +159,6 @@ function SearchPageContent() {
       }
     } catch {
       // ignore
-    } finally {
-      setFavoritesLoading(false);
     }
   }, []);
 

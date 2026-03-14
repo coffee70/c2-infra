@@ -22,3 +22,15 @@ Then open `http://localhost:3000` in your browser.
 By default the app expects the backend API at `http://localhost:8000`. You can override this with the `NEXT_PUBLIC_API_URL` environment variable.
 
 > When running the full stack with Docker, prefer the root-level instructions in `../README.md`, which start all services (database, backend, frontend, simulator) together.
+
+## Browser Validation
+
+Use the shared Playwright workspace at `../tools/playwright` for browser testing and smoke checks instead of creating a frontend-local or `.cursor` Playwright install.
+
+From the repo root:
+
+```bash
+npm --prefix tools/playwright install
+npm --prefix tools/playwright run install:chromium
+npm --prefix tools/playwright run test:smoke
+```

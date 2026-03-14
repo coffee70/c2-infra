@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.lib.audit import audit_log
 from app.models.telemetry import TelemetrySource
+from app.orbit import reset_source as reset_orbit_source
+from app.services.source_run_service import clear_active_run, register_active_run
 
 router = APIRouter()
 
@@ -78,6 +80,13 @@ async def simulator_status(
     try:
         base_url = _resolve_with_audit(db, source_id, "status")
         payload = await _proxy_get(base_url, "/status")
+        state = payload.get("state")
+        config = payload.get("config") or {}
+        active_run_id = config.get("source_id")
+        if state and state != "idle" and isinstance(active_run_id, str) and active_run_id:
+            register_active_run(active_run_id)
+        elif state == "idle":
+            clear_active_run(source_id)
         return {"connected": True, **payload}
     except (httpx.ConnectError, httpx.TimeoutException, HTTPException) as e:
         audit_log(
@@ -108,6 +117,10 @@ async def simulator_start(
     try:
         body = config.model_dump(exclude_none=True)
         result = await _proxy_post(base_url, "/start", body)
+        clear_active_run(config.source_id)
+        reset_orbit_source(config.source_id)
+        if isinstance(result.get("source_id"), str):
+            register_active_run(result["source_id"])
         audit_log(
             "simulator.start.proxied",
             origin="frontend",
@@ -183,6 +196,8 @@ async def simulator_stop(
     base_url = _resolve_with_audit(db, source_id, "stop")
     try:
         result = await _proxy_post(base_url, "/stop")
+        clear_active_run(source_id)
+        reset_orbit_source(source_id)
         audit_log("simulator.stop", destination=source_id)
         return result
     except (httpx.ConnectError, httpx.TimeoutException, HTTPException) as e:

@@ -1,0 +1,23 @@
+---
+description: Use the shared repo-owned Playwright workspace for browser validation
+alwaysApply: true
+---
+
+# Shared Playwright Workflow
+
+- The canonical Playwright workspace is `tools/playwright`. Do not create ad hoc Playwright installs under `.cursor` or other temporary folders.
+- Before running browser checks, ensure the frontend is reachable at `http://127.0.0.1:3000` unless the user specifies another URL.
+- If dependencies are missing, run:
+  - `npm --prefix tools/playwright install`
+  - `npm --prefix tools/playwright run install:chromium`
+- Use these commands by default:
+  - `npm --prefix tools/playwright run open:local` for a headed browser session on the local frontend
+  - `npm --prefix tools/playwright run codegen:local` to capture interactions against the local frontend
+  - `npm --prefix tools/playwright run test:smoke` for the shared smoke suite
+  - `npm --prefix tools/playwright run test:smoke:headed` when a visible browser helps debug UI behavior
+- Prefer DOM assertions, accessibility snapshots, and element queries over screenshots.
+- Save browser artifacts only in repo-owned temporary paths:
+  - Browser binaries: `tmp/playwright/ms-playwright`
+  - HTML report: `tmp/playwright/report`
+  - Traces, screenshots, videos, and other test output: `tmp/playwright/test-results`
+- Do not write screenshots, traces, HTML captures, or Playwright installs into `.cursor`.

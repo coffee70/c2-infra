@@ -3,7 +3,7 @@
 import random
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -35,8 +35,9 @@ def _make_session() -> requests.Session:
 _ORBIT_PERIOD_SEC = 90.0 * 60.0  # ~90 min
 _ORBIT_INCLINATION_DEG = 51.6
 _ORBIT_ALT_M = 400_000.0
-_ORBIT_NOISE_DEG = 0.01
-_ORBIT_NOISE_M = 10.0
+_ORBIT_NOISE_DEG = 0.00002
+_ORBIT_NOISE_M = 2.0
+_GPS_SAMPLE_PERIOD_SEC = 1.0 / max(RATES_HZ.get("gps", 1.0), 0.1)
 
 
 def get_subsystem(name: str) -> str:
@@ -98,8 +99,47 @@ class TelemetryStreamer:
         self._lock = threading.Lock()
         self._sim_elapsed = 0.0
         self._start_wall: float | None = None
+        self._sim_epoch: datetime | None = None
+        self._next_gps_emit_sim: float = 0.0
         self._paused_at_sim: float = 0.0
         self._session = _make_session()
+
+    def _append_gps_batch(
+        self,
+        batch: list[dict[str, Any]],
+        *,
+        seq: int,
+        sim_elapsed: float,
+        generation_time: datetime,
+        orbit_profile: str,
+    ) -> int:
+        """Emit a coherent GPS frame so position/orbit logic sees aligned samples."""
+        lat_deg, lon_deg, alt_m = position_at_time(
+            sim_elapsed,
+            period_sec=_ORBIT_PERIOD_SEC,
+            inclination_deg=_ORBIT_INCLINATION_DEG,
+            alt_m=_ORBIT_ALT_M,
+            profile=orbit_profile,
+        )
+        gps_values = {
+            "GPS_LAT": lat_deg + random.gauss(0, _ORBIT_NOISE_DEG),
+            "GPS_LON": lon_deg + random.gauss(0, _ORBIT_NOISE_DEG),
+            "GPS_ALT": alt_m + random.gauss(0, _ORBIT_NOISE_M),
+            "GPS_SATS": max(4.0, round(random.gauss(8.0, 1.0))),
+        }
+        for name in ("GPS_LAT", "GPS_LON", "GPS_ALT", "GPS_SATS"):
+            seq += 1
+            batch.append(
+                {
+                    "source_id": self.source_id,
+                    "channel_name": name,
+                    "generation_time": generation_time.isoformat(),
+                    "value": gps_values[name],
+                    "quality": "valid",
+                    "sequence": seq,
+                }
+            )
+        return seq
 
     @property
     def state(self) -> str:
@@ -119,6 +159,7 @@ class TelemetryStreamer:
         dropout_window = self.scenario.get("dropout")
         events = self.scenario.get("events", [])
         anomaly_frac = self.scenario.get("anomaly_fraction", 0.02)
+        orbit_profile = self.scenario.get("orbit_profile", "nominal")
         batch_size = 20
         batch: list[dict[str, Any]] = []
         seq = 0
@@ -140,7 +181,9 @@ class TelemetryStreamer:
                 audit_log("streamer.state", old_state="running", new_state="idle", reason="duration_reached")
                 break
 
-            now = datetime.now(timezone.utc)
+            if self._sim_epoch is None:
+                break
+            generation_time = self._sim_epoch + timedelta(seconds=sim_elapsed)
 
             if dropout_window and dropout_window["t0"] <= sim_elapsed < dropout_window["t0"] + dropout_window["duration"]:
                 time.sleep(0.1)
@@ -150,28 +193,28 @@ class TelemetryStreamer:
                 time.sleep(0.05)
                 continue
 
-            lat_deg, lon_deg, alt_m = position_at_time(
-                sim_elapsed,
-                period_sec=_ORBIT_PERIOD_SEC,
-                inclination_deg=_ORBIT_INCLINATION_DEG,
-                alt_m=_ORBIT_ALT_M,
-            )
+            while sim_elapsed >= self._next_gps_emit_sim:
+                gps_elapsed = self._next_gps_emit_sim
+                gps_generation_time = self._sim_epoch + timedelta(seconds=gps_elapsed)
+                seq = self._append_gps_batch(
+                    batch,
+                    seq=seq,
+                    sim_elapsed=gps_elapsed,
+                    generation_time=gps_generation_time,
+                    orbit_profile=orbit_profile,
+                )
+                self._next_gps_emit_sim += _GPS_SAMPLE_PERIOD_SEC
 
             for row in TELEMETRY_DEFINITIONS:
                 name, mean, std = row[0], row[3], row[4]
+                if name.startswith("GPS_"):
+                    continue
                 rate = get_rate(name)
                 dt = 0.1
                 if random.random() > rate * dt:
                     continue
 
-                if name == "GPS_LAT":
-                    value = lat_deg + random.gauss(0, _ORBIT_NOISE_DEG)
-                elif name == "GPS_LON":
-                    value = lon_deg + random.gauss(0, _ORBIT_NOISE_DEG)
-                elif name == "GPS_ALT":
-                    value = alt_m + random.gauss(0, _ORBIT_NOISE_M)
-                else:
-                    value = random.gauss(mean, std)
+                value = random.gauss(mean, std)
                 for ev in events:
                     if ev["t0"] <= sim_elapsed < ev["t0"] + ev.get("duration", 999):
                         if name in ev["channels"]:
@@ -183,14 +226,15 @@ class TelemetryStreamer:
                             elif ev["type"] == "set":
                                 value = ev["magnitude"]
 
-                if random.random() < anomaly_frac:
+                # Keep orbit telemetry physically plausible; orbit anomalies come from explicit orbit profiles.
+                if not name.startswith("GPS_") and random.random() < anomaly_frac:
                     value += random.choice([-1, 1]) * random.uniform(2.5, 5.0) * std
 
                 seq += 1
                 batch.append({
                     "source_id": self.source_id,
                     "channel_name": name,
-                    "generation_time": now.isoformat(),
+                    "generation_time": generation_time.isoformat(),
                     "value": value,
                     "quality": "valid",
                     "sequence": seq,
@@ -279,6 +323,8 @@ class TelemetryStreamer:
             self._stop_event.clear()
             self._pause_event.set()
             self._start_wall = time.monotonic()
+            self._sim_epoch = datetime.now(timezone.utc)
+            self._next_gps_emit_sim = 0.0
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
         return True
@@ -314,4 +360,6 @@ class TelemetryStreamer:
         with self._lock:
             self._state = StreamerState.IDLE
             self._thread = None
+            self._sim_epoch = None
+            self._next_gps_emit_sim = 0.0
         return True

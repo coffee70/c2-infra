@@ -4,7 +4,7 @@
 
 The Overview is your main dashboard. When you have a telemetry stream connected (or historical data), it shows your watchlist, feed health, and anomalies in a single data-focused layout—no Earth view on this page.
 
-For a full-screen 3D Earth view with position markers and source selection, use the **Planning** tab (or [Planning](/planning)): the globe fills the viewport below the app bar. Each selected source shows its **current position** (point and label) and a **recent position trail** (polyline) that builds as telemetry is received. A single **left-side card** (“Earth view”) has two independent sections: **Show on globe** (a dropdown to select one or multiple sources to display) and **Position mapping** (per-source configuration of frame and channels). You can configure position for any source whether or not it’s currently shown on the globe.
+For a full-screen 3D Earth view with position markers and source selection, use the **Planning** tab (or [Planning](/planning)): the globe fills the viewport below the app bar. Each selected source shows its **current position** (point and label) and a **recent position trail** (polyline) that builds as telemetry is received. For simulators, Planning follows the source's **active run** automatically, so you keep selecting the logical source while the globe reads live position and orbit status from the current run behind it. A single **left-side card** (“Earth view”) has two independent sections: **Show on globe** (a dropdown to select one or multiple sources to display) and **Position mapping** (per-source configuration of frame and channels). You can configure position for any source whether or not it’s currently shown on the globe.
 
 ## Watchlist Cards
 
@@ -14,6 +14,7 @@ Each card shows:
 - **Current value** — latest measurement with units
 - **State badge** — Normal (green), Caution (yellow), or Warning (red)
 - **Sparkline** — recent trend over time
+- **Persistent visibility** — If a channel is on the watchlist, its card stays on the Overview even when the selected source or simulator run has no current data for it. In that case the card shows **No data** until telemetry resumes or you remove the channel from the watchlist.
 
 Click a card to open the [channel detail page](/docs/investigating-channels) for stats, trend chart, and AI explanation.
 
@@ -25,6 +26,7 @@ At the top of the Overview:
   - **Live** — receiving data within the last ~15 seconds
   - **Degraded** — no recent data for 15–60 seconds
   - **No data** — no data for 60+ seconds
+- **Simulator/run sync:** If the selected source is a simulator and you start or stop it from the [Sources](/sources) page, the Overview switches to the simulator's active run automatically within a few seconds. The page stays in place during the handoff, shows a small switching indicator, and updates the watchlist, feed badge, and `Live` pill without a browser refresh.
 - **Approximate rate** — e.g. "~5 Hz" when connected
 - **Simulator status** — when the selected source is a simulator: a single status badge (Disconnected, Running, Paused, or Idle) with semantic color
 - **Source selector** — when multiple sources exist, switch between them; grouped by **Vehicles** and **Simulators** (see [Multi-Source Operations](/docs/multi-source))
@@ -54,4 +56,17 @@ To see a simulator’s position and trail on the globe:
 1. **Generate position telemetry** — On the [Sources](/sources) page, add a simulator (if needed), click **Manage**, then **Start**. The simulator emits position channels (e.g. `GPS_LAT`, `GPS_LON`, `GPS_ALT`) along with other telemetry.
 2. **Open Planning** — Go to the [Planning](/planning) tab. In the Earth view card, open **Show on globe** and select the simulator (and any other sources you want).
 3. **Set frame and channels** — In **Position mapping**, find the simulator row. If it shows “Not configured,” expand the row. Choose **frame** (e.g. GPS lat/lon/alt), set the channel names (e.g. `GPS_LAT`, `GPS_LON`, `GPS_ALT` for the default simulator), then click **Save mapping**.
-4. The globe shows the simulator’s **current position** (point and label) and a **recent trail** (polyline) that builds as telemetry is received.
+4. Planning resolves the simulator source to its **current run** automatically. The globe then shows the simulator’s **current position** (point and label), a **recent trail** (polyline), and the correct `Live` status as telemetry is received for that run.
+5. Use **Nominal** or **Orbit nominal** when you want a stable realistic path on the globe. Use **Orbit decay**, **Orbit highly elliptical**, **Orbit suborbital**, or **Orbit escape** only when you intentionally want the orbit-analysis badges and alerting to exercise those cases.
+
+## Orbit validation
+
+For sources that have a **position mapping** (and thus a position telemetry stream), the platform runs **orbit validation** in real time: it computes orbital parameters (perigee, apogee, eccentricity, velocity), classifies the orbit (LEO, MEO, GEO), and detects anomalies such as escape trajectory, suborbital, orbit decay, or highly elliptical LEO.
+
+- **Where to see status**
+  - **Planning page** — In the left panel, each source with a position mapping shows an orbit status badge (e.g. **LEO** for valid nominal, or the anomaly type). If any source currently shown on the globe has an orbit anomaly, a **red alert banner** appears in the left panel with the source name and reason.
+  - **Overview** — Orbit anomalies appear in the **Events Console** under an **Orbit** subsection (with a link to Planning). The **Alerts** count and dropdown in the Context Banner include orbit anomalies so you see them alongside telemetry alerts.
+
+- **What anomalies mean** — *Escape trajectory*: orbital energy ≥ 0 (unbound). *Suborbital*: velocity < 7 km/s at altitude < 1000 km. *Orbit decay*: predicted perigee below 120 km. *Highly elliptical*: eccentricity > 0.2 for an expected LEO mission. Status updates are pushed in real time over the same WebSocket as telemetry and alerts.
+
+The built-in simulator keeps nominal `GPS_*` telemetry smooth and bounded so Planning trails stay readable. Orbit-analysis edge cases are exposed as explicit simulator presets instead of random GPS spikes.

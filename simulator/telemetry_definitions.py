@@ -76,6 +76,7 @@ SCENARIOS = {
         "description": "Normal operation, occasional minor anomalies",
         "anomaly_fraction": 0.02,
         "events": [],
+        "orbit_profile": "nominal",
     },
     "power_sag": {
         "description": "Power bus voltage sag after t=30s",
@@ -83,6 +84,7 @@ SCENARIOS = {
         "events": [
             {"t0": 30, "duration": 45, "type": "offset", "channels": ["PWR_BUS_A_VOLT", "PWR_BAT_VOLT"], "magnitude": -2.5},
         ],
+        "orbit_profile": "nominal",
     },
     "thermal_runaway": {
         "description": "Thermal panel temps rise after t=20s",
@@ -90,11 +92,13 @@ SCENARIOS = {
         "events": [
             {"t0": 20, "duration": 60, "type": "ramp", "channels": ["THERM_PANEL_1_TEMP", "THERM_PANEL_2_TEMP", "THERM_CPU_TEMP"], "magnitude": 15},
         ],
+        "orbit_profile": "nominal",
     },
     "comm_dropout": {
         "description": "Comms dropout window at t=40-55s",
         "anomaly_fraction": 0.01,
         "dropout": {"t0": 40, "duration": 15},
+        "orbit_profile": "nominal",
     },
     "safe_mode": {
         "description": "Safe mode triggered at t=25s",
@@ -102,5 +106,36 @@ SCENARIOS = {
         "events": [
             {"t0": 25, "duration": 999, "type": "set", "channels": ["SAFE_MODE"], "magnitude": 1.0},
         ],
+        "orbit_profile": "nominal",
+    },
+    "orbit_nominal": {
+        "description": "Smooth physically plausible orbit without random GPS spikes",
+        "anomaly_fraction": 0.0,
+        "events": [],
+        "orbit_profile": "orbit_nominal",
+    },
+    "orbit_decay": {
+        "description": "Low-perigee orbit that should trigger orbit decay analysis",
+        "anomaly_fraction": 0.0,
+        "events": [],
+        "orbit_profile": "orbit_decay",
+    },
+    "orbit_highly_elliptical": {
+        "description": "High-eccentricity LEO-like orbit for anomaly testing",
+        "anomaly_fraction": 0.0,
+        "events": [],
+        "orbit_profile": "orbit_highly_elliptical",
+    },
+    "orbit_suborbital": {
+        "description": "Insufficient orbital velocity for sustained orbit",
+        "anomaly_fraction": 0.0,
+        "events": [],
+        "orbit_profile": "orbit_suborbital",
+    },
+    "orbit_escape": {
+        "description": "Unbound trajectory for escape anomaly testing",
+        "anomaly_fraction": 0.0,
+        "events": [],
+        "orbit_profile": "orbit_escape",
     },
 }

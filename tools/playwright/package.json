@@ -1,0 +1,18 @@
+{
+  "name": "repo-playwright-tools",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Shared Playwright workspace for agent-driven browser validation",
+  "scripts": {
+    "install:chromium": "node scripts/pw.mjs install chromium",
+    "open:local": "node scripts/pw.mjs open --browser chromium http://127.0.0.1:3000/overview",
+    "codegen:local": "node scripts/pw.mjs codegen http://127.0.0.1:3000/overview",
+    "test": "node scripts/pw.mjs test",
+    "test:smoke": "node scripts/pw.mjs test --grep @smoke",
+    "test:smoke:headed": "node scripts/pw.mjs test --grep @smoke --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "playwright": "^1.58.2"
+  }
+}

@@ -1,5 +1,11 @@
 # Cursor debug logs
 .cursor/debug-*.log
+.cursor/tmp-planning-*
+.cursor/browser-check/
+
+# Shared Playwright tooling artifacts
+tools/playwright/node_modules/
+tmp/playwright/
 
 # Virtual environment
 .venv/

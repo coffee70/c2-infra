@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
+import { useRealtimeFeedStatus } from "@/lib/realtime-telemetry-context";
+import {
+  useSimulatorRuntime,
+  type SimulatorRuntimeStatus,
+} from "@/lib/simulator-runtime";
 import {
   Select,
   SelectContent,
@@ -21,21 +25,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ChevronDownIcon } from "lucide-react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-interface FeedStatus {
-  source_id: string;
-  connected: boolean;
-  state?: "connected" | "degraded" | "disconnected";
-  last_reception_time: number | null;
-  approx_rate_hz: number | null;
-}
-
-interface SimulatorStatus {
-  connected: boolean;
-  state?: "idle" | "running" | "paused";
-}
-
 interface TelemetrySource {
   id: string;
   name: string;
@@ -50,8 +39,6 @@ export interface AlertSummary {
 
 interface ContextBannerProps {
   sourceId: string;
-  /** When set (e.g. current run id), feed-status polling uses this for live indicator; otherwise sourceId. */
-  feedSourceId?: string;
   onSourceChange?: (sourceId: string) => void;
   sources?: TelemetrySource[];
   activeAlertCount?: number;
@@ -62,7 +49,9 @@ interface ContextBannerProps {
   alertSummaries?: AlertSummary[];
   /** Pre-fetched simulator status for the initial source to avoid "Disconnected" flash. */
   initialSimulatorSourceId?: string;
-  initialSimulatorStatus?: SimulatorStatus | null;
+  initialSimulatorStatus?: SimulatorRuntimeStatus | null;
+  simulatorStatus?: SimulatorRuntimeStatus | null;
+  isSwitchingRuns?: boolean;
 }
 
 function scrollToAlerts(id: string) {
@@ -86,7 +75,6 @@ function fallbackSourceLabel(sourceId: string): string {
 
 export function ContextBanner({
   sourceId,
-  feedSourceId,
   onSourceChange,
   sources = [],
   activeAlertCount = 0,
@@ -95,74 +83,31 @@ export function ContextBanner({
   alertSummaries = [],
   initialSimulatorSourceId,
   initialSimulatorStatus,
+  simulatorStatus,
+  isSwitchingRuns = false,
 }: ContextBannerProps) {
-  const [feedStatus, setFeedStatus] = useState<FeedStatus | null>(null);
-  const [simulatorStatus, setSimulatorStatus] = useState<SimulatorStatus | null>(
-    () =>
-      initialSimulatorSourceId === sourceId && initialSimulatorStatus != null
-        ? initialSimulatorStatus
-        : null
-  );
-
-  const effectiveFeedId = feedSourceId ?? sourceId;
-  useEffect(() => {
-    let cancelled = false;
-    function fetchStatus() {
-      fetch(`${API_URL}/ops/feed-status?source_id=${encodeURIComponent(effectiveFeedId)}`)
-        .then((r) => r.ok ? r.json() : null)
-        .then((data) => {
-          if (!cancelled && data) setFeedStatus(data);
-        })
-        .catch(() => {});
-    }
-    fetchStatus();
-    const id = setInterval(fetchStatus, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [effectiveFeedId]);
-
+  const feedStatus = useRealtimeFeedStatus();
   const isSimulator =
     sources.find((s) => s.id === sourceId)?.source_type === "simulator";
-
-  useEffect(() => {
-    if (!isSimulator) {
-      setSimulatorStatus(null);
-      return;
-    }
-    const useInitial =
-      sourceId === initialSimulatorSourceId && initialSimulatorStatus != null;
-    if (useInitial) {
-      setSimulatorStatus(initialSimulatorStatus);
-    } else {
-      setSimulatorStatus(null);
-    }
-    let cancelled = false;
-    function fetchSimulator() {
-      fetch(
-        `${API_URL}/simulator/status?source_id=${encodeURIComponent(sourceId)}`,
-        { cache: "no-store" }
-      )
-        .then((r) => (r.ok ? r.json() : { connected: false }))
-        .then((data) => {
-          if (!cancelled && data) setSimulatorStatus(data);
-        })
-        .catch(() => {
-          if (!cancelled) setSimulatorStatus({ connected: false });
-        });
-    }
-    fetchSimulator();
-    const id = setInterval(fetchSimulator, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [sourceId, isSimulator, initialSimulatorSourceId, initialSimulatorStatus]);
+  const initialSimulatorStatusForSource =
+    sourceId === initialSimulatorSourceId && initialSimulatorStatus != null
+      ? initialSimulatorStatus
+      : null;
+  const polledSimulatorRuntime = useSimulatorRuntime({
+    sourceId,
+    enabled: isSimulator && simulatorStatus == null,
+    initialStatus: initialSimulatorStatusForSource,
+  });
+  const resolvedSimulatorStatus =
+    simulatorStatus
+    ?? polledSimulatorRuntime.status
+    ?? initialSimulatorStatusForSource;
 
   const sourceLabel =
     sources.find((s) => s.id === sourceId)?.name ?? fallbackSourceLabel(sourceId);
-  const feedState =
+  const feedState = isSimulator && resolvedSimulatorStatus?.state === "idle"
+    ? "disconnected"
+    :
     (feedStatus?.state as "connected" | "degraded" | "disconnected" | undefined) ??
     (feedStatus?.connected
       ? "connected"
@@ -249,13 +194,18 @@ export function ContextBanner({
             ~{feedStatus.approx_rate_hz.toFixed(1)} Hz
           </span>
         )}
+        {isSwitchingRuns && (
+          <Badge variant="outline" className="text-xs">
+            Switching run…
+          </Badge>
+        )}
       </div>
       {isSimulator && (
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">Simulator:</span>
           <SimulatorStatusBadge
-            connected={simulatorStatus?.connected ?? false}
-            state={simulatorStatus?.state}
+            connected={resolvedSimulatorStatus?.connected ?? false}
+            state={resolvedSimulatorStatus?.state}
           />
         </div>
       )}

@@ -129,8 +129,6 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
             continue
 
         stats = db.get(TelemetryStatistics, (source_id, meta.id))
-        if not stats:
-            continue
 
         # Prefer TelemetryCurrent for the source; fall back to TelemetryData
         current = db.get(TelemetryCurrent, (source_id, meta.id))
@@ -139,11 +137,20 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
         else:
             latest = _get_latest_value_and_ts(db, meta.id, source_id=source_id)
             if not latest:
+                # No data at all for this channel+source; skip
                 continue
             value, ts = latest
-        std_dev = float(stats.std_dev)
-        mean = float(stats.mean)
-        z_score = (value - mean) / std_dev if std_dev > 0 else None
+
+        if stats:
+            std_dev = float(stats.std_dev)
+            mean = float(stats.mean)
+            z_score = (value - mean) / std_dev if std_dev > 0 else None
+        else:
+            # Allow channels without statistics to still appear in the watchlist.
+            std_dev = 0.0
+            mean = float(value)
+            z_score = None
+
         red_low = float(meta.red_low) if meta.red_low is not None else None
         red_high = float(meta.red_high) if meta.red_high is not None else None
         state, state_reason = _compute_state(value, z_score, red_low, red_high, std_dev)

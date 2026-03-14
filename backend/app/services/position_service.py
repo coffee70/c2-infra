@@ -21,6 +21,7 @@ from app.models.schemas import (
     PositionSample,
 )
 from app.services.overview_service import _get_latest_value_and_ts
+from app.services.source_run_service import resolve_active_run_id
 from app.utils.coordinates import ecef_to_lla, eci_to_lla
 
 logger = logging.getLogger(__name__)
@@ -141,6 +142,7 @@ def _build_sample_for_mapping(
     mapping: PositionChannelMapping,
     source: TelemetrySource,
     *,
+    data_source_id: str,
     now: datetime,
     staleness: timedelta,
 ) -> PositionSample:
@@ -156,17 +158,17 @@ def _build_sample_for_mapping(
         if frame == "gps_lla":
             lat, ts_lat = _get_latest_for_channel(
                 db,
-                source_id=mapping.source_id,
+                source_id=data_source_id,
                 channel_name=mapping.lat_channel_name,
             )
             lon, ts_lon = _get_latest_for_channel(
                 db,
-                source_id=mapping.source_id,
+                source_id=data_source_id,
                 channel_name=mapping.lon_channel_name,
             )
             alt, ts_alt = _get_latest_for_channel(
                 db,
-                source_id=mapping.source_id,
+                source_id=data_source_id,
                 channel_name=mapping.alt_channel_name,
             )
             raw_channels = {
@@ -198,17 +200,17 @@ def _build_sample_for_mapping(
         elif frame in {"ecef", "eci"}:
             x, ts_x = _get_latest_for_channel(
                 db,
-                source_id=mapping.source_id,
+                source_id=data_source_id,
                 channel_name=mapping.x_channel_name,
             )
             y, ts_y = _get_latest_for_channel(
                 db,
-                source_id=mapping.source_id,
+                source_id=data_source_id,
                 channel_name=mapping.y_channel_name,
             )
             z, ts_z = _get_latest_for_channel(
                 db,
-                source_id=mapping.source_id,
+                source_id=data_source_id,
                 channel_name=mapping.z_channel_name,
             )
             raw_channels = {"x": x, "y": y, "z": z}
@@ -328,11 +330,13 @@ def get_latest_positions(
         src = sources_by_id.get(mapping.source_id)
         if not src:
             continue
+        data_source_id = resolve_active_run_id(db, mapping.source_id)
         samples.append(
             _build_sample_for_mapping(
                 db,
                 mapping,
                 src,
+                data_source_id=data_source_id,
                 now=now,
                 staleness=staleness,
             )

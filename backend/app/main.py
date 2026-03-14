@@ -15,7 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import get_settings
 from app.lib.audit import audit_log
 from app.lib.logging_setup import configure_logging
-from app.routes import ops, position, realtime, simulator, telemetry
+from app.routes import ops, orbit as orbit_routes, position, realtime, simulator, telemetry
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -41,6 +41,9 @@ async def lifespan(app: FastAPI):
     proc = get_realtime_processor()
     proc.register_telemetry_update_handler(hub.schedule_telemetry_update)
     bus = proc._bus
+
+    from app.orbit import register_on_status_change
+    register_on_status_change(hub.schedule_orbit_status)
 
     def on_alert(ev: dict):
         hub.schedule_alert_event(ev.get("type", ""), ev.get("alert", {}))
@@ -181,6 +184,7 @@ async def audit_request_middleware(request: Request, call_next):
 
 app.include_router(telemetry.router, prefix="/telemetry", tags=["telemetry"])
 app.include_router(position.router, prefix="/telemetry", tags=["position"])
+app.include_router(orbit_routes.router, prefix="/telemetry", tags=["orbit"])
 app.include_router(ops.router, prefix="/ops", tags=["ops"])
 app.include_router(realtime.router, prefix="/telemetry/realtime", tags=["realtime"])
 app.include_router(simulator.router, prefix="/simulator", tags=["simulator"])

@@ -54,6 +54,8 @@ interface TelemetryDetailHeaderProps {
   zScore?: number | null;
   lastTimestamp?: string | null;
   description?: string | null;
+  /** When true, show a Live badge (value is updating from stream). */
+  live?: boolean;
 }
 
 export function TelemetryDetailHeader({
@@ -65,6 +67,7 @@ export function TelemetryDetailHeader({
   zScore,
   lastTimestamp,
   description,
+  live = false,
 }: TelemetryDetailHeaderProps) {
   const [copied, setCopied] = useState<string | null>(null);
   const [copyFailedKey, setCopyFailedKey] = useState<string | null>(null);
@@ -85,14 +88,13 @@ export function TelemetryDetailHeader({
   const stateVariant =
     state === "warning" ? "destructive" : state === "caution" ? "secondary" : "success";
 
-  const valueWithUnits = formatWithUnits(value, units);
-  const copyValueText = `${name}: ${valueWithUnits}`;
+  const copyValueText = `${name}: ${formatWithUnits(value, units)}`;
   const copyTimestampText = lastTimestamp
     ? `${name} @ ${lastTimestamp} UTC`
     : "";
 
   return (
-    <header className="sticky top-14 z-10 py-4 mb-2 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b">
+    <header className="sticky top-14 z-10 py-4 mb-2 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80 border-b">
       <div className="flex flex-wrap items-center justify-between gap-4 px-4 sm:px-6">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-3 min-w-0">
@@ -103,11 +105,17 @@ export function TelemetryDetailHeader({
             <Badge variant={stateVariant} className="shrink-0 text-xs">
               {statusLabel}
             </Badge>
-            <span className="text-lg font-medium tabular-nums shrink-0">
-              {valueWithUnits}
+            {live && (
+              <Badge variant="default" className="shrink-0 text-xs gap-1.5 bg-emerald-600 text-white hover:bg-emerald-600">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse opacity-80" />
+                Live
+              </Badge>
+            )}
+            <span className="text-lg font-medium tabular-nums shrink-0" data-value={value}>
+              {formatWithUnits(value, units)}
             </span>
-            {lastTimestamp && (
-              <span className="text-sm text-muted-foreground shrink-0">
+            {lastTimestamp != null && lastTimestamp !== "" && (
+              <span className="text-sm text-muted-foreground shrink-0" data-last-timestamp={lastTimestamp}>
                 {formatTimeAgo(lastTimestamp)}
               </span>
             )}

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { EarthOverviewView } from "@/components/earth-overview-view";
+import { runIdToSourceId } from "@/components/context-banner";
 import { Spinner } from "@/components/ui/spinner";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -36,6 +37,9 @@ interface TelemetrySource {
 export function PlanningEarthPage() {
   const searchParams = useSearchParams();
   const sourceFromUrl = searchParams.get("source");
+  const normalizedSourceFromUrl = sourceFromUrl
+    ? runIdToSourceId(sourceFromUrl)
+    : null;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,8 +67,9 @@ export function PlanningEarthPage() {
   }, []);
 
   const initialSourceId =
-    sourceFromUrl && sources.some((s) => s.id === sourceFromUrl)
-      ? sourceFromUrl
+    normalizedSourceFromUrl &&
+    sources.some((s) => s.id === normalizedSourceFromUrl)
+      ? normalizedSourceFromUrl
       : sources.some((s) => s.id === DEFAULT_SOURCE_ID)
         ? DEFAULT_SOURCE_ID
         : sources[0]?.id ?? DEFAULT_SOURCE_ID;

@@ -51,6 +51,11 @@ const SCENARIOS = [
   { value: "thermal_runaway", label: "Thermal Runaway" },
   { value: "comm_dropout", label: "Comm Dropout" },
   { value: "safe_mode", label: "Safe Mode" },
+  { value: "orbit_nominal", label: "Orbit Nominal" },
+  { value: "orbit_decay", label: "Orbit Decay" },
+  { value: "orbit_highly_elliptical", label: "Orbit Highly Elliptical" },
+  { value: "orbit_suborbital", label: "Orbit Suborbital" },
+  { value: "orbit_escape", label: "Orbit Escape" },
 ] as const;
 
 interface SimulatorStatus {
@@ -117,7 +122,7 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
           sim_elapsed: data.sim_elapsed,
         });
       }
-    } catch (e) {
+    } catch {
       consecutiveStatusFailuresRef.current += 1;
       setStatus({ connected: false });
       if (consecutiveStatusFailuresRef.current >= 2) {

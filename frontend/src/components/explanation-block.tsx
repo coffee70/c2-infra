@@ -38,14 +38,18 @@ interface ExplanationBlockProps {
 }
 
 export function ExplanationBlock({ channelName, sourceId = "default" }: ExplanationBlockProps) {
-  const [data, setData] = useState<ExplainResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const requestKey = `${channelName}:${sourceId}`;
+  const [result, setResult] = useState<{
+    requestKey: string;
+    data: ExplainResponse | null;
+    error: boolean;
+  }>({ requestKey: "", data: null, error: false });
+  const loading = result.requestKey !== requestKey;
+  const data = loading ? null : result.data;
+  const error = loading ? false : result.error;
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(false);
     fetch(
       `${API_URL}/telemetry/${encodeURIComponent(channelName)}/explain?source_id=${encodeURIComponent(sourceId)}`,
       { cache: "no-store" }
@@ -56,19 +60,26 @@ export function ExplanationBlock({ channelName, sourceId = "default" }: Explanat
       })
       .then((explain: ExplainResponse) => {
         if (!cancelled) {
-          setData(explain);
+          setResult({
+            requestKey,
+            data: explain,
+            error: false,
+          });
         }
       })
       .catch(() => {
-        if (!cancelled) setError(true);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setResult({
+            requestKey,
+            data: null,
+            error: true,
+          });
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [channelName, sourceId]);
+  }, [channelName, requestKey, sourceId]);
 
   if (loading) {
     return (

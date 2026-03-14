@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { Viewer, Entity } from "resium";
 import * as Cesium from "cesium";
 
@@ -17,19 +17,28 @@ export interface EarthOverviewGlobeProps {
 const terrainProvider = new Cesium.EllipsoidTerrainProvider();
 
 const POLYLINE_WIDTH = 2;
+const subscribeToClient = () => () => {};
 
 export function EarthOverviewGlobe({
   positions,
   positionHistoryBySource = {},
 }: EarthOverviewGlobeProps) {
-  const [ready, setReady] = useState(false);
+  const isClient = useSyncExternalStore(
+    subscribeToClient,
+    () => true,
+    () => false
+  );
 
   useEffect(() => {
     // Configure Cesium asset base path and Ion token once on the client.
     if (typeof window !== "undefined") {
       const baseUrl = "/cesium/";
       try {
-        const buildModuleUrl = (Cesium as any).buildModuleUrl;
+        const buildModuleUrl = (
+          Cesium as typeof Cesium & {
+            buildModuleUrl?: { setBaseUrl?: (url: string) => void };
+          }
+        ).buildModuleUrl;
         if (buildModuleUrl?.setBaseUrl) {
           buildModuleUrl.setBaseUrl(baseUrl);
         } else {
@@ -55,10 +64,9 @@ export function EarthOverviewGlobe({
         ".cesium-viewer-bottom, .cesium-credit-textContainer { display: none !important; }";
       document.head.appendChild(style);
     }
-    setReady(true);
   }, []);
 
-  if (!ready) {
+  if (!isClient) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-black/80">
         <div className="text-sm text-muted-foreground">Preparing globe…</div>
