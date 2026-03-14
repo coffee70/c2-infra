@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- App bar navigation now treats Docs as a right-side help icon instead of a primary tab, aligning documentation access with other utility actions like keyboard shortcuts.
 - **Simulator nominal orbit telemetry** — Nominal `GPS_LAT`, `GPS_LON`, and `GPS_ALT` now come from a bounded continuous orbit perturbation model, so default Planning globe tracks stay smooth and physically plausible instead of picking up one-sample anomaly spikes.
 - **Cesium static assets:** No longer committed; `frontend/public/cesium` is in `.gitignore` and is copied from `node_modules/cesium/Build/Cesium` at build time (`prebuild` / `predev` script). Removes 392+ vendored files from the repo and keeps assets in sync with the installed `cesium` package. If your branch already had these files tracked, run `git rm -r --cached frontend/public/cesium` once.
 - **CORS:** Allowed origins are configurable via the `CORS_ORIGINS` environment variable (comma-separated list). Default is `http://localhost:3000,http://127.0.0.1:3000` for local development; set to your frontend URL(s) when deploying (e.g. `https://app.example.com`).

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Keyboard } from "lucide-react";
+import { BookOpen, Keyboard } from "lucide-react";
 import { OperatorModeToggle } from "@/components/operator-mode-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +15,6 @@ const NAV_LINKS = [
   { href: "/overview", label: "Overview" },
   { href: "/planning", label: "Planning" },
   { href: "/sources", label: "Sources" },
-  { href: "/docs", label: "Docs" },
 ] as const;
 
 export function Nav() {
@@ -42,6 +41,21 @@ export function Nav() {
         })}
       </div>
       <div className="flex items-center gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              asChild
+              variant="ghost"
+              size="sm"
+              className="h-8 text-muted-foreground hover:text-foreground"
+            >
+              <Link href="/docs" aria-label="Help and documentation">
+                <BookOpen className="h-4 w-4" />
+              </Link>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Help and documentation</TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

@@ -21,6 +21,14 @@
 - Favor small, incremental fixes over broad speculative changes.
 - Validate success and failure paths when changing behavior.
 
+### Validation Requirements
+
+- Run the tests that match the code you changed before finishing.
+- For frontend changes, run the relevant Playwright coverage from `tools/playwright`; at minimum run `npm --prefix tools/playwright run test:smoke` unless a more targeted or broader browser test is needed.
+- For backend changes, run the relevant `pytest` coverage for the affected codepaths and re-check any impacted API endpoints.
+- For changes that span frontend and backend behavior, run both the appropriate Playwright checks and the relevant `pytest` coverage.
+- Do not treat validation as complete until the applicable automated tests pass, or you have a concrete reason they cannot run and you report that clearly.
+
 ### Default Investigation Loop
 
 - Prefer direct API validation first: use `curl` or small Python scripts to exercise backend endpoints and confirm status codes, JSON, and error handling.
