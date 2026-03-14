@@ -200,14 +200,14 @@ export default function SourcesPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen p-4 sm:p-6 lg:p-8 flex items-center justify-center">
+      <div className="min-h-full p-4 sm:p-6 lg:p-8 flex items-center justify-center">
         <Spinner size="lg" className="h-10 w-10" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen p-4 sm:p-6 lg:p-8">
+    <div className="min-h-full p-4 sm:p-6 lg:p-8">
       <div className="max-w-2xl mx-auto space-y-8">
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Sources</h1>

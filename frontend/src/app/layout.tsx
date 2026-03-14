@@ -28,7 +28,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} min-h-screen antialiased flex flex-col`}
       >
         <script
           dangerouslySetInnerHTML={{
@@ -41,7 +41,7 @@ export default function RootLayout({
         <TooltipProvider>
           <Nav />
           <KeyboardShortcutsHandler />
-          <main id="main-content" tabIndex={-1}>
+          <main id="main-content" tabIndex={-1} className="flex-1 min-h-0">
             {children}
           </main>
         </TooltipProvider>

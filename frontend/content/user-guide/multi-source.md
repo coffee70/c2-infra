@@ -18,9 +18,9 @@ Each source has its own feed status:
 
 The banner shows the status for the currently selected source.
 
-## Timeline Filtered by Source
+## Event History Filtered by Source
 
-The **Timeline** page shows ops events for the selected source. Filter by source, event type, time range, and channel name.
+The **Overview** page shows ops events for the selected source directly under the Event Console. The historical event browser follows the source selected in the Context Banner and supports event-type and time-range filtering.
 
 ## When to Use Multi-Source
 

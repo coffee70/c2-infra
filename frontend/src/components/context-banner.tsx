@@ -45,6 +45,7 @@ interface ContextBannerProps {
   alertCountBySeverity?: { warning?: number; caution?: number };
   /** When set, Alerts block becomes clickable and scrolls to this element id (e.g. events-console). */
   scrollToAlertsId?: string;
+  onAlertsClick?: () => void;
   /** Optional short list of alert summaries for dropdown preview (e.g. first 5). */
   alertSummaries?: AlertSummary[];
   /** Pre-fetched simulator status for the initial source to avoid "Disconnected" flash. */
@@ -80,6 +81,7 @@ export function ContextBanner({
   activeAlertCount = 0,
   alertCountBySeverity = {},
   scrollToAlertsId,
+  onAlertsClick,
   alertSummaries = [],
   initialSimulatorSourceId,
   initialSimulatorStatus,
@@ -234,7 +236,10 @@ export function ContextBanner({
                 ))}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onSelect={() => scrollToAlerts(scrollToAlertsId)}
+                  onSelect={() => {
+                    onAlertsClick?.();
+                    scrollToAlerts(scrollToAlertsId);
+                  }}
                 >
                   View all in Events Console
                 </DropdownMenuItem>
@@ -245,6 +250,7 @@ export function ContextBanner({
               href={`#${scrollToAlertsId}`}
               onClick={(e) => {
                 e.preventDefault();
+                onAlertsClick?.();
                 scrollToAlerts(scrollToAlertsId);
               }}
               className="inline-flex cursor-pointer items-center outline-none ring-offset-background hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"

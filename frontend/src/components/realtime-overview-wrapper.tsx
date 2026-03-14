@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { auditLog } from "@/lib/audit-log";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
@@ -11,8 +11,9 @@ import {
   ContextBanner,
   type AlertSummary,
 } from "@/components/context-banner";
-import { NowPanel } from "@/components/now-panel";
 import { EmptyState } from "@/components/empty-state";
+import { OverviewSearch } from "@/components/overview-search";
+import { OpsEventHistory } from "@/components/ops-event-history";
 import { TelemetryAlert, type RealtimeMessage } from "@/lib/realtime-ws-client";
 import {
   RealtimeTelemetryProvider,
@@ -200,6 +201,14 @@ interface RealtimeOverviewWrapperProps {
   simulatorStatus?: SimulatorRuntimeStatus | null;
   isSwitchingRuns?: boolean;
   showSwitchingIndicator?: boolean;
+  onWatchlistChanged?: () => void | Promise<void>;
+  watchlistVersion?: number;
+}
+
+type OverviewTabId = "watchlist" | "events-console" | "event-history";
+
+function isOverviewTabId(value: string | null): value is OverviewTabId {
+  return value === "watchlist" || value === "events-console" || value === "event-history";
 }
 
 export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
@@ -251,7 +260,14 @@ function RealtimeOverviewContent({
   simulatorStatus = null,
   isSwitchingRuns = false,
   showSwitchingIndicator = false,
+  onWatchlistChanged,
+  watchlistVersion = 0,
 }: RealtimeOverviewWrapperProps) {
+  const searchParams = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const [currentHash, setCurrentHash] = useState<string>(
+    typeof window !== "undefined" ? window.location.hash : ""
+  );
   const effectiveRunId = feedSourceId ?? initialSourceId;
   const activeRunRef = useRef(effectiveRunId);
   const [alertStore, setAlertStore] = useState<{
@@ -282,10 +298,51 @@ function RealtimeOverviewContent({
     () => channelsArray.map(liveStateToOverviewChannel),
     [channelsArray]
   );
+  const hashTab: OverviewTabId | null =
+    currentHash === "#events-console"
+      ? "events-console"
+      : currentHash === "#event-history"
+        ? "event-history"
+        : currentHash === "#watchlist"
+          ? "watchlist"
+          : null;
+  const activeTab: OverviewTabId = hashTab
+    ?? (isOverviewTabId(requestedTab) ? requestedTab : "watchlist");
 
   useEffect(() => {
     activeRunRef.current = effectiveRunId;
   }, [effectiveRunId]);
+
+  const selectTab = useCallback(
+    (tab: OverviewTabId, options?: { preserveHash?: boolean }) => {
+      const params = new URLSearchParams(window.location.search);
+      params.set("tab", tab);
+      const query = params.toString();
+      const hash = options?.preserveHash ? window.location.hash : "";
+      setCurrentHash(hash);
+      router.replace(`${pathname}${query ? `?${query}` : ""}${hash}`);
+    },
+    [pathname, router, setCurrentHash]
+  );
+
+  useEffect(() => {
+    const syncHash = () => {
+      setCurrentHash(window.location.hash);
+    };
+
+    syncHash();
+    window.addEventListener("hashchange", syncHash);
+    return () => window.removeEventListener("hashchange", syncHash);
+  }, [setAlertStore, setOrbitStatusBySource, setHasLoadedOrbitStatus]);
+
+  useEffect(() => {
+    if (!hashTab || requestedTab === hashTab) return;
+
+    const params = new URLSearchParams(window.location.search);
+    params.set("tab", hashTab);
+    const query = params.toString();
+    router.replace(`${pathname}${query ? `?${query}` : ""}${currentHash}`);
+  }, [currentHash, hashTab, pathname, requestedTab, router]);
 
   const handleSourceChange = useCallback(
     (newId: string) => {
@@ -297,7 +354,10 @@ function RealtimeOverviewContent({
             // ignore when storage unavailable (e.g. private browsing)
           }
         }
-        router.replace(`${pathname}?source=${encodeURIComponent(newId)}`);
+        const params = new URLSearchParams(window.location.search);
+        params.set("source", newId);
+        const next = params.toString();
+        router.replace(next ? `${pathname}?${next}` : pathname);
       }
     },
     [pathname, router]
@@ -339,7 +399,7 @@ function RealtimeOverviewContent({
       }));
       setHasLoadedOrbitStatus(true);
     }
-  }, []);
+  }, [setAlertStore, setOrbitStatusBySource, setHasLoadedOrbitStatus]);
 
   useEffect(() => {
     if (!client) return;
@@ -400,6 +460,15 @@ function RealtimeOverviewContent({
     (anomalies.orbit?.length ?? 0);
 
   const alertSummaries = anomaliesToAlertSummaries(anomalies);
+  const handleAlertsClick = useCallback(() => {
+    selectTab("events-console");
+    window.requestAnimationFrame(() => {
+      document.getElementById("events-console")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  }, [selectTab]);
 
   return (
     <div className="space-y-4">
@@ -409,88 +478,142 @@ function RealtimeOverviewContent({
         sources={sources}
         activeAlertCount={totalAlerts}
         scrollToAlertsId="events-console"
+        onAlertsClick={handleAlertsClick}
         alertSummaries={alertSummaries}
         initialSimulatorSourceId={initialSimulatorSourceId ?? undefined}
         initialSimulatorStatus={initialSimulatorStatus ?? undefined}
         simulatorStatus={simulatorStatus ?? undefined}
         isSwitchingRuns={showSwitchingIndicator}
       />
-      <div className="space-y-4">
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle>Watchlist / Console</CardTitle>
-              <div className="flex items-center gap-2">
-                {live && (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 dark:bg-green-500/30 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-400">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400" />
-                    Live
-                  </span>
-                )}
-                {showSwitchingIndicator && (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                    <Spinner className="size-3" />
-                    Switching…
-                  </span>
-                )}
-              </div>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Key channels: power, thermal, ADCS, comms
-            </p>
-          </CardHeader>
-          <CardContent className={isSwitchingRuns ? "opacity-80 transition-opacity" : undefined}>
-            {channels.length === 0 ? (
-              <EmptyState
-                icon="chart"
-                title="No channels in watchlist"
-                description="Configure your watchlist to see key metrics here."
-              />
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                {channels.map((ch) => (
-                  <WatchlistCard
-                    key={ch.name}
-                    name={ch.name}
-                    units={ch.units}
-                    currentValue={ch.current_value ?? Number.NaN}
-                    lastTimestamp={ch.last_timestamp ?? ""}
-                    state={ch.state}
-                    stateReason={ch.state_reason}
-                    sparklineData={ch.sparkline_data}
-                    sourceId={sourceId}
-                  />
-                ))}
+      <OverviewSearch
+        sourceId={sourceId}
+        sources={sources}
+        onWatchlistChanged={onWatchlistChanged}
+        watchlistVersion={watchlistVersion}
+      />
+      <div className="flex min-h-0 flex-col gap-6 md:flex-row md:gap-12">
+        <aside className="shrink-0 md:sticky md:top-20 md:self-start">
+          <nav
+            className="flex gap-2 overflow-x-auto pb-1 text-sm text-muted-foreground md:flex-col md:gap-1 md:overflow-visible md:pb-0"
+            aria-label="Overview sections"
+            role="tablist"
+          >
+            {[
+              { id: "watchlist" as const, label: "Watchlist" },
+              { id: "events-console" as const, label: "Event Console" },
+              { id: "event-history" as const, label: "Event History" },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                className={`rounded-md px-3 py-2 text-left whitespace-nowrap transition-colors md:-ml-3 ${
+                  activeTab === tab.id
+                    ? "bg-muted text-foreground font-medium"
+                    : "hover:bg-muted/50 hover:text-foreground"
+                }`}
+                onClick={() => selectTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        <div className="flex min-w-0 flex-1 justify-center">
+          <div className="flex w-full max-w-5xl flex-col space-y-8">
+            {activeTab === "watchlist" && (
+              <div role="tabpanel" aria-label="Watchlist" className="w-full">
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between gap-2">
+                      <CardTitle>Watchlist</CardTitle>
+                      <div className="flex items-center gap-2">
+                        {live && (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-500/30 dark:text-green-400">
+                            <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500 dark:bg-green-400" />
+                            Live
+                          </span>
+                        )}
+                        {showSwitchingIndicator && (
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                            <Spinner className="size-3" />
+                            Switching…
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Key channels: power, thermal, ADCS, comms
+                    </p>
+                  </CardHeader>
+                  <CardContent className={isSwitchingRuns ? "opacity-80 transition-opacity" : undefined}>
+                    {channels.length === 0 ? (
+                      <EmptyState
+                        icon="chart"
+                        title="No channels in watchlist"
+                        description="Configure your watchlist to see key metrics here."
+                      />
+                    ) : (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                        {channels.map((ch) => (
+                          <WatchlistCard
+                            key={ch.name}
+                            name={ch.name}
+                            units={ch.units}
+                            currentValue={ch.current_value ?? Number.NaN}
+                            lastTimestamp={ch.last_timestamp ?? ""}
+                            state={ch.state}
+                            stateReason={ch.state_reason}
+                            sparklineData={ch.sparkline_data}
+                            sourceId={sourceId}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               </div>
             )}
-          </CardContent>
-        </Card>
-        <NowPanel sourceId={sourceId} sinceMinutes={15} />
-        <EventConsole
-          anomalies={anomalies}
-          alerts={visibleAlertStore.alerts}
-          sourceId={sourceId}
-          onAck={
-            client && !isSwitchingRuns
-              ? (id) => {
-                  auditLog("alert.acked", { alert_id: id });
-                  client.ackAlert(id);
-                }
-              : undefined
-          }
-          onResolve={
-            client && !isSwitchingRuns
-              ? (id, text, code) => {
-                  auditLog("alert.resolved", {
-                    alert_id: id,
-                    resolution_text: text,
-                    resolution_code: code,
-                  });
-                  client.resolveAlert(id, text, code);
-                }
-              : undefined
-          }
-        />
+
+            {activeTab === "events-console" && (
+              <div role="tabpanel" aria-label="Event Console" className="w-full">
+                <EventConsole
+                  anomalies={anomalies}
+                  alerts={visibleAlertStore.alerts}
+                  sourceId={sourceId}
+                  onAck={
+                    client && !isSwitchingRuns
+                      ? (id) => {
+                          auditLog("alert.acked", { alert_id: id });
+                          client.ackAlert(id);
+                        }
+                      : undefined
+                  }
+                  onResolve={
+                    client && !isSwitchingRuns
+                      ? (id, text, code) => {
+                          auditLog("alert.resolved", {
+                            alert_id: id,
+                            resolution_text: text,
+                            resolution_code: code,
+                          });
+                          client.resolveAlert(id, text, code);
+                        }
+                      : undefined
+                  }
+                />
+              </div>
+            )}
+
+            {activeTab === "event-history" && (
+              <div role="tabpanel" aria-label="Event History" className="w-full">
+                <OpsEventHistory sourceId={sourceId} />
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

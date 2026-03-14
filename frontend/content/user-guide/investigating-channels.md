@@ -6,16 +6,16 @@ When you see an anomaly or want to understand a telemetry channel, follow this f
 
 ## 1. Search for a Channel
 
-Go to **Search** and enter a semantic query (e.g. "voltage", "temperature", "speed"). The platform uses semantic search, so you find channels by meaning, not exact names.
+Go to **Overview** and use the search bar under the Context Banner. Enter a semantic query (e.g. "voltage", "temperature", "speed"). The platform uses semantic search, so you find channels by meaning, not exact names.
 
-- Choose **Source** to search within a specific vehicle or simulator run (e.g. a single sim run or feed); results and current values are scoped to that source. The URL updates so you can share a link to search in that source.
-- Filter by subsystem, units, anomalous status, or recent activity
+- Search is scoped to the source selected in the Context Banner; results and current values follow that source.
+- Expand **Advanced filters** to filter by subsystem, units, anomalous status, or recent activity
 - Add a channel to the watchlist
 - Click a result to open the channel detail page
 
 ## 2. Channel Detail Page
 
-Click a channel (from Overview, Search, or anomaly queue) to open its detail page.
+Click a channel (from Overview search, a watchlist card, or the anomaly queue) to open its detail page.
 
 The page is organized into **vertical tabs** so you can quickly switch between different views of the same channel:
 

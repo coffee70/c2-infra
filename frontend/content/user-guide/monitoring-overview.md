@@ -2,7 +2,7 @@
 
 **Workflow:** Stream connected → what to watch and how
 
-The Overview is your main dashboard. When you have a telemetry stream connected (or historical data), it shows your watchlist, feed health, and anomalies in a single data-focused layout—no Earth view on this page.
+The Overview is your main dashboard. When you have a telemetry stream connected (or historical data), it shows your watchlist, feed health, anomalies, event workflows, and integrated telemetry search in a single data-focused layout—no Earth view on this page.
 
 For a full-screen 3D Earth view with position markers and source selection, use the **Planning** tab (or [Planning](/planning)): the globe fills the viewport below the app bar. Each selected source shows its **current position** (point and label) and a **recent position trail** (polyline) that builds as telemetry is received. For simulators, Planning follows the source's **active run** automatically, so you keep selecting the logical source while the globe reads live position and orbit status from the current run behind it. A single **left-side card** (“Earth view”) has two independent sections: **Show on globe** (a dropdown to select one or multiple sources to display) and **Position mapping** (per-source configuration of frame and channels). You can configure position for any source whether or not it’s currently shown on the globe.
 
@@ -32,13 +32,31 @@ At the top of the Overview:
 - **Source selector** — when multiple sources exist, switch between them; grouped by **Vehicles** and **Simulators** (see [Multi-Source Operations](/docs/multi-source))
 - **Alerts** — active alert count; click the count to scroll to the **Events Console** on the same page, or open the dropdown to see a short preview of alerts (subsystem and channel name). **Other** in the preview means the channel is not classified as Power, Thermal, ADCS, or Comms. Use **View all in Events Console** to jump to the full list.
 
-## Anomalies Queue
+## Search From Overview
 
-Channels with current state outside Normal appear in the anomalies queue (and in the context banner alert preview), grouped by subsystem: **Power**, **Thermal**, **ADCS**, **Comms**, or **Other**. **Other** is used for channels that don't belong to one of the four main subsystems. Click an entry to open the channel detail.
+Directly under the Context Banner, use the search bar to open the semantic search popover.
+
+- Enter a meaning-based query such as "voltage", "temperature", or "speed"
+- Search is scoped to the source selected in the Context Banner
+- Expand **Advanced filters** to narrow by subsystem, units, anomalous status, or recent activity
+- Add channels to the watchlist from the result list
+- Click a result to open the channel detail page
+
+## Overview Tabs
+
+Below the search bar, the Overview uses a vertical tab rail:
+
+- **Watchlist** — key telemetry cards for the current source, including live state and sparklines
+- **Event Console** — active alerts grouped by subsystem, with Ack and Resolve actions
+- **Event History** — recent and historical ops events for the current source, with time-range and event-type filters
+
+## Event Console
+
+Channels with current state outside Normal appear in the Event Console (and in the context banner alert preview), grouped by subsystem: **Power**, **Thermal**, **ADCS**, **Comms**, or **Other**. **Other** is used for channels that don't belong to one of the four main subsystems. Click an entry to open the channel detail, or Ack/Resolve the alert from the console.
 
 ## Edit Watchlist
 
-Use **Edit watchlist** to open the configure modal: add or remove channels, and see how many are on the list and how many are available. Order in the modal matches the Overview cards. Use [Search](/docs/investigating-channels) to find channels by meaning (e.g. "voltage") and add them to the watchlist.
+Use **Edit watchlist** to open the configure modal: add or remove channels, and see how many are on the list and how many are available. Order in the modal matches the Overview cards. Use the integrated search bar to find channels by meaning (e.g. "voltage") and add them to the watchlist.
 
 ## Configure position mapping
 

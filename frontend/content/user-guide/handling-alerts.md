@@ -9,8 +9,7 @@ When an anomaly triggers an alert, it appears in the Event Console. Operators ca
 When a channel exceeds its threshold, an `alert.opened` event is created. The alert appears in:
 
 - **Event Console** — on the Overview page
-- **Now panel** — recent ops events
-- **Timeline** — full history of ops events
+- **Event History** — recent and historical ops events on the Overview page
 
 ## 2. Acknowledge
 
@@ -28,12 +27,11 @@ When the issue is addressed, the operator can **Resolve** the alert:
 - Sends `resolve_alert` via WebSocket
 - An `alert.resolved` event is recorded
 
-## 4. Events in Timeline and Now Panel
+## 4. Events in Overview and Channel Detail
 
 All events (opened, acked, resolved) appear in:
 
-- **Timeline** — filterable by source, event type, time range
-- **Now panel** — recent events on the Overview
+- **Event History** — filterable by source context, event type, and time range on Overview
 - **Channel detail** — recent events for that channel
 
 ## Summary
@@ -42,5 +40,5 @@ All events (opened, acked, resolved) appear in:
 Alert opens → Event Console
     → Ack (alert.acked)
     → Resolve with text (alert.resolved)
-    → Events visible in Timeline and Now panel
+    → Events visible in Event History and channel detail
 ```

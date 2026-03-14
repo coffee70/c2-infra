@@ -6,9 +6,7 @@ Quick reference for pages and features.
 
 | Page | Purpose |
 |------|---------|
-| **Overview** | Main dashboard: watchlist cards, sparklines, anomalies queue, feed health |
-| **Timeline** | Ops events (alerts, feed status) with time range and filters |
-| **Search** | Semantic search over channels; add to watchlist |
+| **Overview** | Main dashboard: vertical tabs for watchlist, active alert handling, ops-event history, integrated semantic search, and feed health |
 | **Simulator** | Start/stop mock vehicle streamer with scenario selection |
 | **Channel detail** | Stats, trend chart, z-score, LLM explanation, recent events |
 

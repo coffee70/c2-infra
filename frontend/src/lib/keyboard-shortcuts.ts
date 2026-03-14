@@ -3,8 +3,11 @@
 import { useEffect, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { getRecentChannels } from "@/lib/recent-telemetry";
-
-export const SEARCH_INPUT_SELECTOR = "[data-telemetry-search-input]";
+import {
+  AUTO_FOCUS_STORAGE_KEY,
+  OVERVIEW_SEARCH_FOCUS_EVENT,
+  SEARCH_INPUT_SELECTOR,
+} from "@/components/overview-search";
 
 function isTypingInInput(): boolean {
   if (typeof document === "undefined") return false;
@@ -36,19 +39,17 @@ export function useTelemetryKeyboardShortcuts(
       // / or Cmd+K: Focus search
       if (e.key === "/" || (e.metaKey && e.key === "k")) {
         e.preventDefault();
-        if (pathname?.startsWith("/search")) {
+        if (pathname === "/overview") {
+          window.dispatchEvent(new CustomEvent(OVERVIEW_SEARCH_FOCUS_EVENT));
           const input = document.querySelector<HTMLInputElement>(
             SEARCH_INPUT_SELECTOR
           );
           input?.focus();
         } else {
-          router.push("/search");
-          setTimeout(() => {
-            const input = document.querySelector<HTMLInputElement>(
-              SEARCH_INPUT_SELECTOR
-            );
-            input?.focus();
-          }, 100);
+          try {
+            sessionStorage.setItem(AUTO_FOCUS_STORAGE_KEY, "1");
+          } catch {}
+          router.push("/overview");
         }
         return;
       }

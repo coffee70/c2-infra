@@ -168,6 +168,7 @@ export function OverviewContent() {
   const [committedRunId, setCommittedRunId] = useState<string | null>(null);
   const [desiredRunId, setDesiredRunId] = useState<string | null>(null);
   const [showSwitchingIndicator, setShowSwitchingIndicator] = useState(false);
+  const [watchlistVersion, setWatchlistVersion] = useState(0);
 
   let effectiveSource =
     sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID;
@@ -177,7 +178,10 @@ export function OverviewContent() {
       try {
         sessionStorage.setItem(OVERVIEW_SOURCE_STORAGE_KEY, effectiveSource);
       } catch {}
-      router.replace(`/overview?source=${encodeURIComponent(effectiveSource)}`);
+      const params = new URLSearchParams(window.location.search);
+      params.set("source", effectiveSource);
+      const next = params.toString();
+      router.replace(next ? `/overview?${next}` : "/overview");
     }
   }
   const sourceReady = sourceFromUrl !== null || storageChecked;
@@ -213,6 +217,14 @@ export function OverviewContent() {
       setError(e instanceof Error ? e.message : "Failed to load overview");
     }
   }, [committedRunId]);
+
+  const handleWatchlistChanged = useCallback(async () => {
+    try {
+      await refreshCommittedSnapshot();
+    } finally {
+      setWatchlistVersion((current) => current + 1);
+    }
+  }, [refreshCommittedSnapshot]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -389,7 +401,7 @@ export function OverviewContent() {
 
   if (!sourceReady || bootstrapLoading || !committedRunId) {
     return (
-      <div className="min-h-screen p-4 sm:p-6 lg:p-8 flex items-center justify-center">
+      <div className="min-h-full p-4 sm:p-6 lg:p-8 flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <Spinner size="lg" className="h-10 w-10" />
           <p className="text-sm text-muted-foreground">Loading overview…</p>
@@ -399,7 +411,7 @@ export function OverviewContent() {
   }
 
   return (
-    <div className="min-h-screen p-4 sm:p-6 lg:p-8">
+    <div className="min-h-full p-4 sm:p-6 lg:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
         {error && (
           <Alert variant="destructive">
@@ -414,7 +426,7 @@ export function OverviewContent() {
               Operator Overview
             </h1>
           </div>
-          <WatchlistConfig onChanged={refreshCommittedSnapshot} />
+          <WatchlistConfig onChanged={handleWatchlistChanged} />
         </div>
         <RealtimeOverviewWrapper
           initialChannels={channels}
@@ -429,6 +441,8 @@ export function OverviewContent() {
           simulatorStatus={simulatorRuntime.status}
           isSwitchingRuns={isSwitchingRuns}
           showSwitchingIndicator={showSwitchingIndicator || isSwitchingRuns}
+          onWatchlistChanged={handleWatchlistChanged}
+          watchlistVersion={watchlistVersion}
         />
       </div>
     </div>

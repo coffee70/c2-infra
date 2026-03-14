@@ -3,7 +3,7 @@
 This package contains the **Next.js dashboard** for the Telemetry Operations Platform. It provides mission operators with:
 
 - **Overview dashboard** for watchlists, anomalies, and live status
-- **Semantic search** and **channel detail** pages with trends, z-scores, and AI explanations
+- **Overview-integrated semantic search** and **channel detail** pages with trends, z-scores, and AI explanations
 - **Simulator controls** and other workflows that sit on top of the backend telemetry API
 
 For an end-to-end description of what the full application does, see the root `README.md` and the user guide in `frontend/content/user-guide`.

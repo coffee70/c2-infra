@@ -71,8 +71,8 @@ curl -X POST http://localhost:8000/telemetry/recompute-stats
 ### 4. Use the UI
 
 1. Open http://localhost:3000
-2. **Overview** (home): Watchlist of key channels (power, thermal, ADCS, comms) with current values, state badges, sparklines, and anomalies queue
-3. **Search**: Find telemetry by semantic search (e.g., "voltage", "temperature", "speed")
+2. **Overview** (home): Context banner and integrated semantic search at the top, with tabs for Watchlist, Event Console, and Event History
+3. Search from **Overview** for telemetry by meaning (e.g., "voltage", "temperature", "speed"), then open a channel from the results
 4. **Simulator**: Start/stop mock vehicle streams with configurable scenarios, including safe nominal orbit telemetry and explicit orbit anomaly presets for Planning/orbit-analysis testing
 5. Click a channel to view stats, trend chart, z-score, and LLM explanation
 
@@ -268,7 +268,7 @@ curl -X POST "http://localhost:8000/telemetry/watchlist" \
 3. `python scripts/generate_synthetic_telemetry.py` (creates schemas, data, and seeds default watchlist)
 4. `curl -X POST http://localhost:8000/telemetry/recompute-stats`
 5. Open http://localhost:3000 → Overview dashboard with watchlist cards and anomalies queue
-6. Search in UI: "voltage" → should return PWR_* telemetry
+6. Search from Overview: "voltage" → should return PWR_* telemetry
 7. Click a channel → verify stats table, chart, state badge (Normal/Caution/Warning), explanation
 8. Edit watchlist via "Edit watchlist" button on Overview
 
@@ -293,7 +293,7 @@ c2-infra/
 │   │   ├── services/  # Business logic (stats, embeddings, LLM)
 │   │   └── interfaces/  # Embedding/LLM provider abstractions
 │   └── migrations/
-├── frontend/          # Next.js dashboard (Overview, Search, Simulator)
+├── frontend/          # Next.js dashboard (Overview, integrated search, Simulator)
 ├── simulator/        # Mock vehicle streamer (scenarios, ingest)
 ├── scripts/
 │   ├── init-db.sql    # Postgres extensions (TimescaleDB, pgvector)

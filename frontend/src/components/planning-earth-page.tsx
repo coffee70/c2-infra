@@ -76,7 +76,7 @@ export function PlanningEarthPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+      <div className="min-h-full flex flex-col items-center justify-center gap-4">
         <Spinner size="lg" className="h-10 w-10" />
         <p className="text-sm text-muted-foreground">
           Loading Planning Earth view…
