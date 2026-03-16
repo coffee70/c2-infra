@@ -782,3 +782,46 @@ def get_channel_runs_for_source(
 ):
     name = unquote(name)
     return get_channel_runs(name=name, source_id=source_id, db=db)
+
+
+@router.post("/sources/active-run")
+def set_active_run(body: ActiveRunUpdate):
+    """Set or clear the active run for any logical source.
+
+    External adapters (e.g. SatNOGS/FUNcube-1) use this to mark AOS/LOS
+    without needing simulator-specific /status polling.
+    """
+    logical_source_id = run_id_to_source_id(body.source_id)
+
+    if body.state == "active":
+        if not body.run_id:
+            raise HTTPException(status_code=400, detail="run_id is required when state=active")
+        if run_id_to_source_id(body.run_id) != logical_source_id:
+            raise HTTPException(status_code=400, detail="run_id does not belong to source")
+
+        register_active_run(body.run_id)
+        audit_log(
+            "sources.active_run.set",
+            source_id=logical_source_id,
+            run_id=body.run_id,
+            state="active",
+        )
+        return {
+            "status": "active",
+            "source_id": logical_source_id,
+            "run_id": body.run_id,
+        }
+
+    if body.state == "idle":
+        clear_active_run(logical_source_id)
+        audit_log(
+            "sources.active_run.set",
+            source_id=logical_source_id,
+            state="idle",
+        )
+        return {
+            "status": "idle",
+            "source_id": logical_source_id,
+        }
+
+    raise HTTPException(status_code=400, detail="state must be 'active' or 'idle'")
