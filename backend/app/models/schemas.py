@@ -507,3 +507,8 @@ class PositionSample(BaseModel):
     valid: bool = False
     frame_type: str
     raw_channels: Optional[dict[str, Optional[float]]] = None
+
+class ActiveRunUpdate(BaseModel):
+    source_id: str
+    run_id: Optional[str] = None
+    state: str  # "active" | "idle"

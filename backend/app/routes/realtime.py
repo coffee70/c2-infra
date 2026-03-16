@@ -28,6 +28,8 @@ from app.services.realtime_service import (
     get_watchlist_channel_names,
 )
 from app.lib.audit import audit_log
+from app.models.schemas import ActiveRunUpdate
+from app.services.source_run_service import register_active_run, clear_active_run
 
 logger = logging.getLogger(__name__)
 
@@ -380,3 +382,23 @@ async def websocket_realtime(websocket: WebSocket) -> None:
         logger.exception("WebSocket error: %s", e)
     finally:
         await hub.disconnect(websocket)
+
+@router.post("/sources/active-run")
+def set_active_run(
+    body: ActiveRunUpdate,
+):
+    logical_source_id = run_id_to_source_id(body.source_id)
+
+    if body.state == "active":
+        if not body.run_id:
+            raise HTTPException(status_code=400, detail="run_id is required when state=active")
+        if run_id_to_source_id(body.run_id) != logical_source_id:
+            raise HTTPException(status_code=400, detail="run_id does not belong to source")
+        register_active_run(body.run_id)
+        return {"status": "active", "source_id": logical_source_id, "run_id": body.run_id}
+
+    if body.state == "idle":
+        clear_active_run(logical_source_id)
+        return {"status": "idle", "source_id": logical_source_id}
+
+    raise HTTPException(status_code=400, detail="state must be 'active' or 'idle'")

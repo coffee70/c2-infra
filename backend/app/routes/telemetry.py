@@ -266,12 +266,23 @@ def get_source_runs(
     source_id: str,
     db: Session = Depends(get_db),
 ):
-    """List run ids for a source (any channel). Used e.g. by Overview to resolve current run. Newest first."""
+    """List run ids for a source (any channel). Newest first.
+
+    Works for simulators, vehicles, and any future source type.
+    If only base-source data exists, the logical source id is returned as a single item.
+    """
     logical_source_id = normalize_source_id(source_id)
-    reg = db.execute(select(TelemetrySource).where(TelemetrySource.id == logical_source_id)).scalars().first()
-    source_type = reg.source_type if reg else None
-    if source_type == "vehicle" or (reg is None and logical_source_id == normalize_source_id("default")):
-        return ChannelSourcesResponse(sources=[ChannelSourceItem(source_id=logical_source_id, label=reg.name if reg else logical_source_id)])
+
+    reg = db.execute(
+        select(TelemetrySource).where(TelemetrySource.id == logical_source_id)
+    ).scalars().first()
+
+    # Preserve legacy default behavior if the source is truly unknown.
+    if reg is None and logical_source_id == normalize_source_id("default"):
+        return ChannelSourcesResponse(
+            sources=[ChannelSourceItem(source_id=logical_source_id, label=logical_source_id)]
+        )
+
     prefix = f"{logical_source_id}-"
     stmt = (
         select(TelemetryData.source_id)
@@ -283,17 +294,30 @@ def get_source_runs(
         )
         .distinct()
     )
+
     rows = db.execute(stmt).fetchall()
     run_ids = [r[0] for r in rows]
-    reg_rows = db.execute(select(TelemetrySource.id, TelemetrySource.name)).fetchall()
-    registered = {r[0]: r[1] for r in reg_rows}
+
+    # If no telemetry exists yet, still return the logical source so the UI has something stable.
+    if not run_ids:
+        label = reg.name if reg else logical_source_id
+        return ChannelSourcesResponse(
+            sources=[ChannelSourceItem(source_id=logical_source_id, label=label)]
+        )
+
+    registered = {
+        r[0]: r[1]
+        for r in db.execute(select(TelemetrySource.id, TelemetrySource.name)).fetchall()
+    }
+
     items = []
     for rid in run_ids:
         if rid == logical_source_id:
-            label = "Current run"
+            label = reg.name if reg else "Base stream"
         else:
             label = _format_source_label(rid, registered.get(rid))
         items.append(ChannelSourceItem(source_id=rid, label=label))
+
     items.sort(key=lambda x: x.source_id, reverse=True)
     return ChannelSourcesResponse(sources=items)
 
@@ -560,14 +584,15 @@ def explain_for_source(
 
 
 def _format_source_label(source_id: str, registered_name: Optional[str] = None) -> str:
-    """Human-readable label for a source. Simulator runs: 'Run started at YYYY-MM-DD HH:MM UTC'."""
+    """Human-readable label for a source or run id."""
     if registered_name:
         return registered_name
-    # Run id format: simulator-{scenario}-{ts} or {source_id}-{ts} (e.g. sim_abc12345-2026-03-11T19-03-00Z)
+
     match = re.search(r"-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})Z?$", source_id)
     if match:
         date_part, h, m, s = match.groups()
         return f"Run started at {date_part} {h}:{m} UTC"
+
     return source_id
 
 
@@ -577,29 +602,22 @@ def get_channel_runs(
     source_id: str,
     db: Session = Depends(get_db),
 ):
-    """List runs for a source that have data for this channel. source_id is from telemetry_sources (vehicle or simulator). Returns run ids with labels (e.g. 'Run started at 2026-03-11 19:03 UTC'). Newest first."""
+    """List runs for a source that have data for this channel.
+
+    Works for simulators, vehicles, and any future source type.
+    Returns run ids with labels, newest first.
+    """
     name = unquote(name)
+
     meta = _get_channel_meta(db, source_id, name)
     if not meta:
         raise HTTPException(status_code=404, detail="Telemetry not found")
+
     logical_source_id = normalize_source_id(source_id)
-    reg = db.execute(select(TelemetrySource).where(TelemetrySource.id == logical_source_id)).scalars().first()
-    source_type = reg.source_type if reg else None
-    if source_type == "vehicle" or (reg is None and logical_source_id == normalize_source_id("default")):
-        # Single "run" = the source id itself; include only if channel has data.
-        stmt = (
-            select(TelemetryData.source_id)
-            .where(
-                TelemetryData.telemetry_id == meta.id,
-                TelemetryData.source_id == logical_source_id,
-            )
-            .limit(1)
-        )
-        if db.execute(stmt).first():
-            label = reg.name if reg else logical_source_id
-            return ChannelSourcesResponse(sources=[ChannelSourceItem(source_id=logical_source_id, label=label)])
-        return ChannelSourcesResponse(sources=[])
-    # Simulator or unknown: runs are source_id or source_id-*
+    reg = db.execute(
+        select(TelemetrySource).where(TelemetrySource.id == logical_source_id)
+    ).scalars().first()
+
     prefix = f"{logical_source_id}-"
     stmt = (
         select(TelemetryData.source_id)
@@ -612,18 +630,26 @@ def get_channel_runs(
         )
         .distinct()
     )
+
     rows = db.execute(stmt).fetchall()
     run_ids = [r[0] for r in rows]
-    registered = {r[0]: r[1] for r in db.execute(select(TelemetrySource.id, TelemetrySource.name)).fetchall()}
+
+    if not run_ids:
+        return ChannelSourcesResponse(sources=[])
+
+    registered = {
+        r[0]: r[1]
+        for r in db.execute(select(TelemetrySource.id, TelemetrySource.name)).fetchall()
+    }
+
     items = []
     for rid in run_ids:
-        # Use run-style label: when run id equals source id (e.g. legacy "simulator"), show "Current run" not the source name.
         if rid == logical_source_id:
-            label = "Current run"
+            label = reg.name if reg else "Base stream"
         else:
             label = _format_source_label(rid, registered.get(rid))
         items.append(ChannelSourceItem(source_id=rid, label=label))
-    # Newest first: run ids ending with timestamp sort desc
+
     items.sort(key=lambda x: x.source_id, reverse=True)
     return ChannelSourcesResponse(sources=items)
 

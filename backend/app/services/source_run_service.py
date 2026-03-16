@@ -111,30 +111,44 @@ def get_cached_active_run_id(source_id: str, *, max_age_sec: float = ACTIVE_RUN_
 
 
 def resolve_active_run_id(db: Session, source_id: str, *, timeout: float = 2.0) -> str:
-    """Resolve a logical source id to the active run id when available."""
-    src = get_logical_source(db, source_id)
-    if src is None or src.source_type != "simulator" or not src.base_url:
-        return source_id
+    """Resolve a logical source id to the active run id when available.
 
-    cached_run_id = get_cached_active_run_id(source_id)
+    Strategy:
+    1. Check the generic in-memory active-run cache for any source type.
+    2. If the source is a simulator, optionally refresh from its /status endpoint.
+    3. Otherwise, fall back to the logical source id.
+    """
+    logical_source_id = run_id_to_source_id(source_id)
+
+    cached_run_id = get_cached_active_run_id(logical_source_id)
     if cached_run_id is not None:
         return cached_run_id
+
+    src = get_logical_source(db, logical_source_id)
+    if src is None:
+        return logical_source_id
+
+    if src.source_type != "simulator" or not src.base_url:
+        return logical_source_id
 
     try:
         with httpx.Client(timeout=timeout) as client:
             res = client.get(f"{src.base_url.rstrip('/')}/status")
-        if res.status_code >= 400:
-            return source_id
-        payload = res.json()
+            if res.status_code >= 400:
+                return logical_source_id
+            payload = res.json()
     except Exception:
-        return source_id
+        return logical_source_id
 
     state = payload.get("state")
     config = payload.get("config") or {}
     active_run_id = config.get("source_id")
+
     if state and state != "idle" and isinstance(active_run_id, str) and active_run_id:
         register_active_run(active_run_id)
         return active_run_id
+
     if state == "idle":
-        clear_active_run(source_id)
-    return source_id
+        clear_active_run(logical_source_id)
+
+    return logical_source_id
