@@ -175,50 +175,6 @@ export function RealtimeTelemetryProvider({
     () => buildInitialChannelState(initialChannels),
     [initialChannels]
   );
-  const currentSourceIdRef = useRef(sourceId);
-  const initialChannelStateRef = useRef(initialChannelState);
-
-  useEffect(() => {
-    currentSourceIdRef.current = sourceId;
-    initialChannelStateRef.current = initialChannelState;
-  }, [initialChannelState, sourceId]);
-
-  useEffect(() => {
-    setChannelStore((prev) => {
-      if (prev.sourceId !== sourceId) {
-        return {
-          sourceId,
-          channelsByName: initialChannelState,
-        };
-      }
-
-      const nextChannelsByName: Record<string, LiveChannelState> = {};
-      for (const name of channelNames) {
-        const existing = prev.channelsByName[name];
-        const initial = initialChannelState[name];
-        if (existing) {
-          nextChannelsByName[name] = existing;
-        } else if (initial) {
-          nextChannelsByName[name] = initial;
-        }
-      }
-
-      const prevNames = Object.keys(prev.channelsByName);
-      const nextNames = Object.keys(nextChannelsByName);
-      const unchanged =
-        prevNames.length === nextNames.length
-        && nextNames.every((name) => prev.channelsByName[name] === nextChannelsByName[name]);
-      if (unchanged) {
-        return prev;
-      }
-
-      return {
-        sourceId,
-        channelsByName: nextChannelsByName,
-      };
-    });
-  }, [channelNames, initialChannelState, sourceId]);
-
   const [channelStore, setChannelStore] = useState<{
     sourceId: string;
     channelsByName: Record<string, LiveChannelState>;
@@ -233,6 +189,52 @@ export function RealtimeTelemetryProvider({
     sourceId,
     feedStatus: null,
   });
+  const currentSourceIdRef = useRef(sourceId);
+  const initialChannelStateRef = useRef(initialChannelState);
+
+  useEffect(() => {
+    currentSourceIdRef.current = sourceId;
+    initialChannelStateRef.current = initialChannelState;
+  }, [initialChannelState, sourceId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setChannelStore((prev) => {
+        if (prev.sourceId !== sourceId) {
+          return {
+            sourceId,
+            channelsByName: initialChannelState,
+          };
+        }
+
+        const nextChannelsByName: Record<string, LiveChannelState> = {};
+        for (const name of channelNames) {
+          const existing = prev.channelsByName[name];
+          const initial = initialChannelState[name];
+          if (existing) {
+            nextChannelsByName[name] = existing;
+          } else if (initial) {
+            nextChannelsByName[name] = initial;
+          }
+        }
+
+        const prevNames = Object.keys(prev.channelsByName);
+        const nextNames = Object.keys(nextChannelsByName);
+        const unchanged =
+          prevNames.length === nextNames.length
+          && nextNames.every((name) => prev.channelsByName[name] === nextChannelsByName[name]);
+        if (unchanged) {
+          return prev;
+        }
+
+        return {
+          sourceId,
+          channelsByName: nextChannelsByName,
+        };
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [channelNames, initialChannelState, sourceId]);
 
   const channelsByName =
     channelStore.sourceId === sourceId

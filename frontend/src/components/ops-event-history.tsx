@@ -1,26 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-interface OpsEventSchema {
-  id: string;
-  source_id: string;
-  event_time: string;
-  event_type: string;
-  severity: string;
-  summary: string;
-  entity_type: string;
-  entity_id?: string | null;
-  payload?: Record<string, unknown> | null;
-  created_at: string;
-}
+import { useOpsEventsQuery } from "@/lib/query-hooks";
+import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 
 interface OpsEventHistoryProps {
   sourceId: string;
@@ -54,61 +41,23 @@ function formatTime(iso: string): string {
 export function OpsEventHistory({ sourceId }: OpsEventHistoryProps) {
   const [rangeMinutes, setRangeMinutes] = useState(15);
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
-  const [result, setResult] = useState<{
-    requestKey: string;
-    events: OpsEventSchema[];
-    total: number;
-  }>({ requestKey: "", events: [], total: 0 });
-
-  const requestKey = `${sourceId}:${rangeMinutes}:${eventTypeFilter}`;
-  const loading = result.requestKey !== requestKey;
-  const events = loading ? [] : result.events;
-  const total = loading ? 0 : result.total;
-
-  useEffect(() => {
-    let cancelled = false;
-    const params = new URLSearchParams({
-      source_id: sourceId,
-      since_minutes: String(rangeMinutes),
-      limit: "100",
-      offset: "0",
-    });
-    if (eventTypeFilter !== "all") {
-      if (eventTypeFilter === "alerts") {
-        params.set(
-          "event_types",
-          "alert.opened,alert.cleared,alert.acked,alert.resolved"
-        );
-      } else if (eventTypeFilter === "system") {
-        params.set("event_types", "system.feed_status");
-      }
+  const params: Record<string, string> = {
+    source_id: sourceId,
+    since_minutes: String(rangeMinutes),
+    limit: "100",
+    offset: "0",
+  };
+  if (eventTypeFilter !== "all") {
+    if (eventTypeFilter === "alerts") {
+      params.event_types = "alert.opened,alert.cleared,alert.acked,alert.resolved";
+    } else if (eventTypeFilter === "system") {
+      params.event_types = "system.feed_status";
     }
-
-    fetch(`${API_URL}/ops/events?${params}`)
-      .then((response) => (response.ok ? response.json() : { events: [], total: 0 }))
-      .then((data) => {
-        if (!cancelled) {
-          setResult({
-            requestKey,
-            events: Array.isArray(data.events) ? data.events : [],
-            total: typeof data.total === "number" ? data.total : 0,
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setResult({
-            requestKey,
-            events: [],
-            total: 0,
-          });
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [eventTypeFilter, rangeMinutes, requestKey, sourceId]);
+  }
+  const eventsQuery = useOpsEventsQuery(params);
+  const loading = eventsQuery.isLoading;
+  const events = eventsQuery.data?.events ?? [];
+  const total = eventsQuery.data?.total ?? 0;
 
   return (
     <Card>
@@ -197,7 +146,7 @@ export function OpsEventHistory({ sourceId }: OpsEventHistoryProps) {
                 <p className="mt-1 text-sm">{event.summary}</p>
                 {event.entity_id && (
                   <Link
-                    href={`/telemetry/${encodeURIComponent(event.entity_id)}?source=${encodeURIComponent(sourceId)}`}
+                    href={buildTelemetryDetailHref(sourceId, event.entity_id)}
                     className="mt-1 inline-block text-xs text-primary hover:underline"
                   >
                     View {event.entity_id}

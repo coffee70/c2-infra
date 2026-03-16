@@ -16,13 +16,28 @@ class TelemetryMetadata(Base):
     """Telemetry schema and metadata with semantic embedding."""
 
     __tablename__ = "telemetry_metadata"
+    __table_args__ = (
+        Index(
+            "ix_telemetry_metadata_source_name",
+            "source_id",
+            "name",
+            unique=True,
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
     )
-    name: Mapped[str] = mapped_column(Text, unique=True, index=True, nullable=False)
+    source_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+        default="default",
+    )
+    name: Mapped[str] = mapped_column(Text, index=True, nullable=False)
     units: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     subsystem_tag: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -100,7 +115,14 @@ class WatchlistEntry(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    telemetry_name: Mapped[str] = mapped_column(Text, unique=True, index=True, nullable=False)
+    source_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+        default="default",
+    )
+    telemetry_name: Mapped[str] = mapped_column(Text, index=True, nullable=False)
     display_order: Mapped[int] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -118,6 +140,7 @@ class TelemetrySource(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source_type: Mapped[str] = mapped_column(Text, nullable=False)  # vehicle | simulator
     base_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # for simulators
+    telemetry_definition_path: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=datetime.utcnow,

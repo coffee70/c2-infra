@@ -1,21 +1,21 @@
 # Build stage: install dependencies
 FROM python:3.11-slim AS builder
 
-WORKDIR /app
+WORKDIR /app/backend
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Runtime stage: minimal image
 FROM python:3.11-slim AS runtime
 
-WORKDIR /app
+WORKDIR /app/backend
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
@@ -23,10 +23,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
-COPY . .
+COPY backend /app/backend
+COPY telemetry_catalog /app/telemetry_catalog
+COPY telemetry-definitions /app/telemetry-definitions
 
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app/backend:/app
 ENV PYTHONUNBUFFERED=1
+ENV TELEMETRY_DEFINITIONS_ROOT=/app/telemetry-definitions
 
 EXPOSE 8000
 

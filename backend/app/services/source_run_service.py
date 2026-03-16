@@ -11,21 +11,44 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.telemetry import TelemetrySource
+from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID, RHAEGALSAT_SOURCE_ID
+from telemetry_catalog.definitions import resolve_source_id_alias
 
 RUN_ID_RE = re.compile(r"^(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?)$")
 ACTIVE_RUN_CACHE_TTL_SEC = 30.0
 _active_run_by_source: dict[str, tuple[str, float]] = {}
 
 
+def normalize_source_id(source_id: str) -> str:
+    """Normalize an exact source id alias to its stored id; leave run ids untouched."""
+    return resolve_source_id_alias(source_id) or source_id
+
+
 def run_id_to_source_id(source_id: str) -> str:
     """Collapse a run id back to its logical source id."""
     match = RUN_ID_RE.match(source_id)
     if not match:
-        return source_id
+        return resolve_source_id_alias(source_id) or source_id
     prefix = match.group(1)
     if prefix.startswith("simulator-"):
-        return "simulator"
-    return prefix
+        return resolve_source_id_alias("simulator") or "simulator"
+    if prefix.startswith("simulator2-"):
+        return resolve_source_id_alias("simulator2") or "simulator2"
+    if prefix == DROGONSAT_SOURCE_ID or prefix.startswith(f"{DROGONSAT_SOURCE_ID}-"):
+        return DROGONSAT_SOURCE_ID
+    if prefix == RHAEGALSAT_SOURCE_ID or prefix.startswith(f"{RHAEGALSAT_SOURCE_ID}-"):
+        return RHAEGALSAT_SOURCE_ID
+    return resolve_source_id_alias(prefix) or prefix
+
+
+def ensure_run_belongs_to_source(source_id: str, run_id: str | None = None) -> str:
+    """Return a source or run id only if it belongs to the scoped logical source."""
+    logical_source_id = normalize_source_id(source_id)
+    if not run_id:
+        return logical_source_id
+    if run_id_to_source_id(run_id) != logical_source_id:
+        raise ValueError("Run not found for source")
+    return run_id
 
 
 def _run_id_started_at(source_id: str) -> Optional[datetime]:
@@ -40,7 +63,8 @@ def _run_id_started_at(source_id: str) -> Optional[datetime]:
 
 def get_logical_source(db: Session, source_id: str) -> Optional[TelemetrySource]:
     """Return the logical source row for either a source id or a run id."""
-    direct = db.get(TelemetrySource, source_id)
+    resolved_source_id = resolve_source_id_alias(source_id) or source_id
+    direct = db.get(TelemetrySource, resolved_source_id)
     if direct is not None:
         return direct
     return db.get(TelemetrySource, run_id_to_source_id(source_id))

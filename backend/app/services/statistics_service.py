@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.telemetry import TelemetryData, TelemetryMetadata, TelemetryStatistics
+from app.services.source_run_service import normalize_source_id, run_id_to_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +32,17 @@ class StatisticsService:
             stmt = select(TelemetryData.source_id).distinct()
             sources_to_process = [r[0] for r in self._db.execute(stmt).fetchall()]
         else:
-            sources_to_process = [source_id or "default"]
+            sources_to_process = [normalize_source_id(source_id or "default")]
 
-        stmt = select(TelemetryMetadata.id)
-        meta_ids = [row[0] for row in self._db.execute(stmt).fetchall()]
         count = 0
         for sid in sources_to_process:
+            logical_source_id = run_id_to_source_id(sid)
+            meta_ids = [
+                row[0]
+                for row in self._db.execute(
+                    select(TelemetryMetadata.id).where(TelemetryMetadata.source_id == logical_source_id)
+                ).fetchall()
+            ]
             for tid in meta_ids:
                 try:
                     self._recompute_one(tid, source_id=sid)
@@ -52,9 +58,10 @@ class StatisticsService:
         self, telemetry_id, source_id: str = "default"
     ) -> None:
         """Compute and upsert statistics for a single telemetry point. source_id filters when telemetry_data is source-aware."""
+        data_source_id = normalize_source_id(source_id)
         stmt = select(TelemetryData.value).where(
             TelemetryData.telemetry_id == telemetry_id,
-            TelemetryData.source_id == source_id,
+            TelemetryData.source_id == data_source_id,
         )
         rows = self._db.execute(stmt).fetchall()
         values = np.array([float(r[0]) for r in rows])
@@ -74,7 +81,7 @@ class StatisticsService:
         p95 = float(np.percentile(values, 95))
 
         n_samples = len(values)
-        pk = (source_id, telemetry_id)
+        pk = (data_source_id, telemetry_id)
         existing = self._db.get(TelemetryStatistics, pk)
         now = datetime.now(timezone.utc)
         if existing:
@@ -89,7 +96,7 @@ class StatisticsService:
             existing.last_computed_at = now
         else:
             stats = TelemetryStatistics(
-                source_id=source_id,
+                source_id=data_source_id,
                 telemetry_id=telemetry_id,
                 mean=Decimal(str(mean)),
                 std_dev=Decimal(str(std_dev)),

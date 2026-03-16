@@ -8,9 +8,11 @@
     "prebuild": "node scripts/copy-cesium.js",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.90.21",
     "cesium": "^1.139.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

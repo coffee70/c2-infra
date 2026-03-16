@@ -19,8 +19,8 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: telemetry-backend
     ports:
       - "8000:8000"
@@ -47,25 +47,27 @@ services:
 
   simulator:
     build:
-      context: ./simulator
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: simulator/Dockerfile
     container_name: telemetry-simulator
     ports:
       - "8001:8001"
     environment:
       BACKEND_URL: http://backend:8000
+      TELEMETRY_DEFINITION_PATH: simulators/drogonsat.yaml
     depends_on:
       - backend
 
   simulator2:
     build:
-      context: ./simulator
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: simulator/Dockerfile
     container_name: telemetry-simulator-2
     ports:
       - "8002:8001"
     environment:
       BACKEND_URL: http://backend:8000
+      TELEMETRY_DEFINITION_PATH: simulators/rhaegalsat.json
     depends_on:
       - backend
 

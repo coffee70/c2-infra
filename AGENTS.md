@@ -29,12 +29,63 @@
 - For changes that span frontend and backend behavior, run both the appropriate Playwright checks and the relevant `pytest` coverage.
 - Do not treat validation as complete until the applicable automated tests pass, or you have a concrete reason they cannot run and you report that clearly.
 
+#### Backend pytest workflow
+
+- Use the repo root virtualenv, not the backend container image, for backend `pytest`.
+- Install backend test dependencies into the repo virtualenv with `./.venv/bin/pip install -r backend/requirements.txt` if they are missing.
+- Run backend tests from the repo root with `PYTHONPATH=backend .venv/bin/pytest ...`.
+- Example: `PYTHONPATH=backend .venv/bin/pytest backend/tests/test_source_aware.py backend/tests/test_position_service.py backend/tests/test_realtime.py`
+- Do not rely on `docker compose exec backend pytest ...` for repo tests; the backend image copies `./backend` into `/app` but does not include the repo-level `backend/tests` tree, so those paths are unavailable inside the container.
+
 ### Default Investigation Loop
 
 - Prefer direct API validation first: use `curl` or small Python scripts to exercise backend endpoints and confirm status codes, JSON, and error handling.
 - For backend work, inspect the relevant Python code, logs, and tests; run `pytest` and re-check affected endpoints.
 - For frontend work, inspect the Next.js code and use the shared Playwright workspace in `tools/playwright` when browser validation is needed.
 - Repeat the loop until the root cause is fixed and the relevant validations pass.
+
+## Efficient Codebase Exploration
+
+- Minimize token usage during exploration. Gather precise context first, then read only the smallest code regions needed to complete the task.
+- Exploration priority order:
+  - First: use `rg` for fast text search across the repository.
+  - Second: use `ast-grep` for syntax-aware structural search.
+  - Third: read only the relevant sections of files returned by those searches.
+  - Last: read full files only if absolutely necessary.
+- Never begin by opening large files.
+- Avoid scanning entire directories by reading files sequentially.
+- Prefer command-line searches to locate symbols, functions, routes, tests, or database calls.
+- Read code in small windows, typically 50-150 lines around search matches, instead of entire files.
+- Expand context incrementally only if necessary.
+- Avoid loading unrelated files into context.
+
+### Recommended Search Workflow
+
+- Start with `rg -n` to identify likely files and exact match locations.
+- Use `ast-grep` when structure matters more than text, such as finding definitions, call sites, or React hook usage.
+- After search results narrow the target, read only the matching region with a bounded window.
+- Re-run search with tighter patterns before reading more files.
+
+### Recommended Search Patterns
+
+- Ripgrep examples:
+  - Finding API routes: `rg -n "export async function (GET|POST|PUT|DELETE)" app src`
+  - Finding database writes: `rg -n "insert|update|save|MongoClient|collection\\."`
+  - Finding tests: `rg -n "describe\\(|test\\(|pytest"`
+  - Finding Python/FastAPI routes: `rg -n "@router\\.(get|post|put|delete)|@app\\.(get|post|put|delete)" backend`
+  - Finding service entry points or handlers: `rg -n "def .*service|class .*Service|handle_|processor|listener" backend frontend`
+- `ast-grep` examples:
+  - Finding function definitions: `ast-grep -p 'def $FUNC($ARGS): $$$BODY' -l python`
+  - Finding function call sites: `ast-grep -p '$FUNC($$$ARGS)'`
+  - Finding React hooks: `ast-grep -p 'useEffect($A, $B)' -l tsx`
+  - Finding exported TS functions: `ast-grep -p 'export function $FUNC($$$ARGS) { $$$BODY }' -l ts`
+
+### Agent Editing Strategy
+
+- Identify the minimal set of files required for the change.
+- Locate the implementation, types or interfaces, tests, and configuration dependencies before editing.
+- Avoid modifying files that are unrelated to the task.
+- After making changes, run the relevant tests or commands to validate the change.
 
 ## Playwright Workflow
 

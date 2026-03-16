@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 class TelemetrySchemaCreate(BaseModel):
     """Request body for POST /telemetry/schema."""
 
+    source_id: str = "default"
     name: str
     units: str
     description: Optional[str] = None
@@ -143,7 +144,7 @@ class ChannelSourceItem(BaseModel):
 
 
 class ChannelSourcesResponse(BaseModel):
-    """Response for GET /telemetry/{name}/sources."""
+    """Response for channel run/source listing endpoints."""
 
     sources: list[ChannelSourceItem]
 
@@ -205,6 +206,7 @@ class AnomaliesResponse(BaseModel):
 class WatchlistEntrySchema(BaseModel):
     """Single watchlist entry."""
 
+    source_id: str
     name: str
     display_order: int
 
@@ -218,6 +220,7 @@ class WatchlistResponse(BaseModel):
 class WatchlistAddRequest(BaseModel):
     """Request body for POST /telemetry/watchlist."""
 
+    source_id: str
     telemetry_name: str
 
 
@@ -438,6 +441,7 @@ class SourceCreate(BaseModel):
     name: str
     description: Optional[str] = None
     base_url: Optional[str] = None  # required for simulator
+    telemetry_definition_path: str
 
 
 class SourceUpdate(BaseModel):
@@ -446,6 +450,7 @@ class SourceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     base_url: Optional[str] = None  # for simulators
+    telemetry_definition_path: Optional[str] = None
 
 
 # --- Position mapping and samples ---

@@ -23,9 +23,11 @@ import { Label } from "@/components/ui/label";
 import { CustomTimestampPicker } from "@/components/custom-timestamp-picker";
 import { CheckIcon, CopyIcon, FlagIcon, FlagOffIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import {
+  useTelemetryChannelRunsQuery,
+  useTelemetryRecentQuery,
+  type HistoryPoint,
+} from "@/lib/query-hooks";
 
 type TimePreset = 15 | 60 | 360 | 1440;
 
@@ -35,17 +37,6 @@ const RANGE_PRESETS: { label: string; minutes: TimePreset }[] = [
   { label: "6 hr", minutes: 360 },
   { label: "24 hr", minutes: 1440 },
 ];
-
-interface HistoryPoint {
-  timestamp: string;
-  value: number;
-}
-
-/** Source that has data for this channel; label is display-friendly (e.g. "Run started at 2026-03-11 19:03 UTC"). */
-interface ChannelSource {
-  source_id: string;
-  label: string;
-}
 
 interface TelemetryHistoryTableProps {
   channelName: string;
@@ -126,114 +117,62 @@ export function TelemetryHistoryTable({
   const [customSince, setCustomSince] = useState<string | null>(null);
   const [useCustom, setUseCustom] = useState(false);
   const [useUTC, setUseUTC] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [rows, setRows] = useState<HistoryPoint[]>([]);
   const [valueFilter, setValueFilter] = useState("");
   const [downloadMeta, setDownloadMeta] = useState<DownloadMeta>({});
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [runs, setRuns] = useState<ChannelSource[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>(effectiveDefaultRun);
 
   useEffect(() => {
     setSelectedRunId(effectiveDefaultRun);
   }, [effectiveDefaultRun]);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(
-      `${API_URL}/telemetry/${encodeURIComponent(channelName)}/runs?source_id=${encodeURIComponent(sourceId)}`,
-      { cache: "no-store" },
-    )
-      .then((r) => (r.ok ? r.json() : { sources: [] }))
-      .then((data: { sources?: ChannelSource[] }) => {
-        if (!cancelled)
-          setRuns(Array.isArray(data.sources) ? data.sources : []);
-      })
-      .catch(() => {
-        if (!cancelled) setRuns([]);
-      });
-    return () => { cancelled = true; };
-  }, [channelName, sourceId]);
+  const runsQuery = useTelemetryChannelRunsQuery(channelName, sourceId);
+  const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
 
-  useEffect(() => {
-    let isCancelled = false;
-
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        const sinceIso =
-          useCustom && customSince ? customSince : toIsoMinutesAgo(rangeMinutes);
-
-        let limit: number;
-        if (useCustom && customSince) {
-          const now = new Date();
-          const sinceDate = new Date(customSince);
-          const minutesBack = Math.max(
-            0,
-            Math.round((now.getTime() - sinceDate.getTime()) / 60000),
-          );
-          if (minutesBack <= 60) {
-            limit = 500;
-          } else if (minutesBack <= 1440) {
-            limit = 1000;
-          } else {
-            // Longer custom ranges (e.g., multiple days) get a higher cap.
-            limit = 2000;
-          }
-        } else {
-          limit = rangeMinutes <= 60 ? 500 : 1000;
-        }
-
-        const url = new URL(
-          `${API_URL}/telemetry/${encodeURIComponent(channelName)}/recent`,
-        );
-        url.searchParams.set("limit", String(limit));
-        url.searchParams.set("since", sinceIso);
-        url.searchParams.set("source_id", selectedRunId);
-
-        const res = await fetch(url.toString(), { cache: "no-store" });
-        if (!res.ok) {
-          throw new Error(`Failed to load history (${res.status})`);
-        }
-        const json = await res.json();
-        const data = Array.isArray(json.data) ? (json.data as HistoryPoint[]) : [];
-
-        if (!isCancelled) {
-          setRows(data);
-          setDownloadMeta({
-            sinceIso,
-            untilIso: undefined,
-            requestedSince: json.requested_since ?? null,
-            requestedUntil: json.requested_until ?? null,
-            effectiveSince: json.effective_since ?? null,
-            effectiveUntil: json.effective_until ?? null,
-            appliedTimeFilter: Boolean(json.applied_time_filter),
-            fallbackToRecent: Boolean(json.fallback_to_recent),
-          });
-        }
-      } catch (e) {
-        if (!isCancelled) {
-          setError(
-            e instanceof Error ? e.message : "Failed to load history",
-          );
-          setRows([]);
-        }
-      } finally {
-        if (!isCancelled) {
-          setLoading(false);
-        }
-      }
+  const sinceIso = useMemo(
+    () => (useCustom && customSince ? customSince : toIsoMinutesAgo(rangeMinutes)),
+    [customSince, rangeMinutes, useCustom]
+  );
+  const limit = useMemo(() => {
+    if (useCustom && customSince) {
+      const now = new Date();
+      const sinceDate = new Date(customSince);
+      const minutesBack = Math.max(
+        0,
+        Math.round((now.getTime() - sinceDate.getTime()) / 60000),
+      );
+      if (minutesBack <= 60) return 500;
+      if (minutesBack <= 1440) return 1000;
+      return 2000;
     }
+    return rangeMinutes <= 60 ? 500 : 1000;
+  }, [customSince, rangeMinutes, useCustom]);
 
-    load();
+  const historyQuery = useTelemetryRecentQuery({
+    channelName,
+    catalogSourceId: sourceId,
+    limit: String(limit),
+    since: sinceIso,
+    source_id: selectedRunId,
+  });
+  const rows = useMemo(() => historyQuery.data?.data ?? [], [historyQuery.data]);
+  const loading = historyQuery.isLoading || historyQuery.isFetching;
+  const error = historyQuery.isError ? historyQuery.error.message : null;
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [channelName, selectedRunId, rangeMinutes, useCustom, customSince]);
+  useEffect(() => {
+    if (!historyQuery.data) return;
+    setDownloadMeta({
+      sinceIso,
+      untilIso: undefined,
+      requestedSince: historyQuery.data.requested_since ?? null,
+      requestedUntil: historyQuery.data.requested_until ?? null,
+      effectiveSince: historyQuery.data.effective_since ?? null,
+      effectiveUntil: historyQuery.data.effective_until ?? null,
+      appliedTimeFilter: Boolean(historyQuery.data.applied_time_filter),
+      fallbackToRecent: Boolean(historyQuery.data.fallback_to_recent),
+    });
+  }, [historyQuery.data, sinceIso]);
 
   /** Parse ">10", "< 0", ">=5", "<=", "42" etc. and filter rows by numeric comparison or substring. */
   const filteredRows = useMemo(() => {
@@ -682,4 +621,3 @@ export function TelemetryHistoryTable({
     </Card>
   );
 }
-

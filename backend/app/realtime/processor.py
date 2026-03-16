@@ -34,10 +34,12 @@ from app.realtime.feed_health import get_feed_health_tracker
 from app.services.ops_events_service import write_event as write_ops_event
 from app.services.source_run_service import (
     get_cached_active_run_id,
+    normalize_source_id,
     register_active_run,
     run_id_to_source_id,
 )
 from app.services.telemetry_service import _compute_state
+from app.utils.coordinates import ecef_to_lla, eci_to_lla
 from app.utils.subsystem import infer_subsystem
 
 logger = logging.getLogger(__name__)
@@ -56,28 +58,37 @@ def _parse_time(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-def _get_orbit_mappings(db: Session) -> dict[str, tuple[str, str, str]]:
-    """Return source_id -> (lat_channel, lon_channel, alt_channel) for gps_lla mappings."""
+def _get_orbit_mappings(db: Session) -> dict[str, dict[str, str]]:
+    """Return source_id -> frame-aware channel mapping for orbit ingestion."""
     stmt = (
         select(
             PositionChannelMapping.source_id,
+            PositionChannelMapping.frame_type,
             PositionChannelMapping.lat_channel_name,
             PositionChannelMapping.lon_channel_name,
             PositionChannelMapping.alt_channel_name,
+            PositionChannelMapping.x_channel_name,
+            PositionChannelMapping.y_channel_name,
+            PositionChannelMapping.z_channel_name,
         )
         .where(PositionChannelMapping.active.is_(True))
-        .where(PositionChannelMapping.frame_type == "gps_lla")
-        .where(PositionChannelMapping.lat_channel_name.isnot(None))
-        .where(PositionChannelMapping.lon_channel_name.isnot(None))
     )
     rows = db.execute(stmt).fetchall()
-    out: dict[str, tuple[str, str, str]] = {}
+    out: dict[str, dict[str, str]] = {}
     for r in rows:
-        lat = r[1] or ""
-        lon = r[2] or ""
-        alt = r[3] or ""
-        if lat and lon:
-            out[r[0]] = (lat, lon, alt)
+        frame_type = r[1]
+        if frame_type == "gps_lla":
+            lat = r[2] or ""
+            lon = r[3] or ""
+            alt = r[4] or ""
+            if lat and lon:
+                out[r[0]] = {"frame_type": frame_type, "lat": lat, "lon": lon, "alt": alt}
+        elif frame_type in {"ecef", "eci"}:
+            x = r[5] or ""
+            y = r[6] or ""
+            z = r[7] or ""
+            if x and y and z:
+                out[r[0]] = {"frame_type": frame_type, "x": x, "y": y, "z": z}
     return out
 
 
@@ -93,7 +104,7 @@ class RealtimeProcessor:
         self._sparkline_history: dict[tuple[str, str], deque[RecentDataPoint]] = {}
         self._sparkline_history_lock = threading.Lock()
         # Orbit: sources with position mapping -> (lat, lon, alt) channel names
-        self._orbit_mappings: dict[str, tuple[str, str, str]] = {}
+        self._orbit_mappings: dict[str, dict[str, str]] = {}
         self._orbit_mappings_at: float = 0.0
         self._orbit_mappings_lock = threading.Lock()
         self._orbit_active_input_source: dict[str, str] = {}
@@ -143,12 +154,16 @@ class RealtimeProcessor:
         event: MeasurementEvent,
     ) -> None:
         """Process single measurement: validate, persist, update current, check alerts."""
-        source_id = event.source_id or "default"
+        source_id = normalize_source_id(event.source_id or "default")
         register_active_run(source_id)
         get_feed_health_tracker().record_reception(source_id)
+        logical_source_id = run_id_to_source_id(source_id)
 
         meta = db.execute(
-            select(TelemetryMetadata).where(TelemetryMetadata.name == event.channel_name)
+            select(TelemetryMetadata).where(
+                TelemetryMetadata.source_id == logical_source_id,
+                TelemetryMetadata.name == event.channel_name,
+            )
         ).scalars().first()
         if not meta:
             logger.debug("Unknown channel %s, skipping", event.channel_name)
@@ -425,7 +440,7 @@ class RealtimeProcessor:
         value: float,
         gen_time: datetime,
     ) -> None:
-        """If source has position mapping and this is lat/lon/alt, buffer and maybe push to orbit module."""
+        """If source has position mapping and this is a position channel, buffer and maybe push to orbit."""
         now = time.time()
         with self._orbit_mappings_lock:
             if now - self._orbit_mappings_at > ORBIT_MAPPINGS_CACHE_TTL_SEC:
@@ -438,7 +453,8 @@ class RealtimeProcessor:
             return
         if logical_source_id not in mappings:
             return
-        lat_name, lon_name, alt_name = mappings[logical_source_id]
+        mapping = mappings[logical_source_id]
+        frame_type = mapping["frame_type"]
         should_reset_source = False
         with self._orbit_buffer_lock:
             active_input_source = self._orbit_active_input_source.get(logical_source_id)
@@ -451,12 +467,23 @@ class RealtimeProcessor:
 
             reset_orbit_source(logical_source_id)
         slot: Optional[str] = None
-        if channel_name == lat_name:
-            slot = "lat"
-        elif channel_name == lon_name:
-            slot = "lon"
-        elif channel_name == alt_name:
-            slot = "alt"
+        if frame_type == "gps_lla":
+            lat_name = mapping["lat"]
+            lon_name = mapping["lon"]
+            alt_name = mapping.get("alt", "")
+            if channel_name == lat_name:
+                slot = "lat"
+            elif channel_name == lon_name:
+                slot = "lon"
+            elif channel_name == alt_name:
+                slot = "alt"
+        elif frame_type in {"ecef", "eci"}:
+            if channel_name == mapping["x"]:
+                slot = "x"
+            elif channel_name == mapping["y"]:
+                slot = "y"
+            elif channel_name == mapping["z"]:
+                slot = "z"
         if slot is None:
             return
         ts_unix = gen_time.timestamp()
@@ -474,18 +501,26 @@ class RealtimeProcessor:
             for sample_ts in list(samples_by_ts.keys()):
                 if sample_ts <= last_pushed or ts_unix - sample_ts > ORBIT_POSITION_TIMESTAMP_WINDOW_SEC:
                     samples_by_ts.pop(sample_ts, None)
-            sample = samples_by_ts.setdefault(
-                ts_unix,
-                {"lat": None, "lon": None, "alt": None},
-            )
+            sample = samples_by_ts.setdefault(ts_unix, {})
             sample[slot] = value
-            lat = sample["lat"]
-            lon = sample["lon"]
-            alt = sample["alt"]
-            alt_ready = alt_name == "" or alt is not None
-            if lat is None or lon is None or not alt_ready:
-                return
-            alt_val = alt if alt is not None else 0.0
+            if frame_type == "gps_lla":
+                lat = sample.get("lat")
+                lon = sample.get("lon")
+                alt = sample.get("alt")
+                alt_ready = mapping.get("alt", "") == "" or alt is not None
+                if lat is None or lon is None or not alt_ready:
+                    return
+                alt_val = alt if alt is not None else 0.0
+            else:
+                x = sample.get("x")
+                y = sample.get("y")
+                z = sample.get("z")
+                if x is None or y is None or z is None:
+                    return
+                if frame_type == "ecef":
+                    lat, lon, alt_val = ecef_to_lla(float(x), float(y), float(z))
+                else:
+                    lat, lon, alt_val = eci_to_lla(float(x), float(y), float(z), gen_time)
         try:
             from app.orbit import submit_position_sample
 

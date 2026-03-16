@@ -22,8 +22,6 @@ logger = logging.getLogger(__name__)
 
 # CORS origins: from CORS_ORIGINS env (comma-separated). Default includes localhost for local dev.
 CORS_ORIGINS = get_settings().get_cors_origins_list()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -35,6 +33,10 @@ async def lifespan(app: FastAPI):
     from app.realtime.feed_health import get_feed_health_tracker
     from app.realtime.ws_hub import get_ws_hub
     from app.services.ops_events_service import write_event as write_ops_event
+    from app.services.realtime_service import (
+        bootstrap_builtin_sources,
+        refresh_source_embeddings,
+    )
 
     hub = get_ws_hub()
     hub.set_loop(asyncio.get_running_loop())
@@ -75,6 +77,38 @@ async def lifespan(app: FastAPI):
     get_feed_health_tracker().set_on_transition(on_feed_transition)
     bus.subscribe_alerts(on_alert)
 
+    bootstrap_session = get_session_factory()()
+    created_builtin_source_ids: list[str] = []
+    try:
+        created_builtin_source_ids = bootstrap_builtin_sources(
+            bootstrap_session,
+        )
+    finally:
+        bootstrap_session.close()
+
+    async def backfill_builtin_embeddings():
+        if not created_builtin_source_ids:
+            return
+        def run_backfill_sync() -> None:
+            session = get_session_factory()()
+            try:
+                from app.services.embedding_service import SentenceTransformerEmbeddingProvider
+
+                refresh_source_embeddings(
+                    session,
+                    source_ids=created_builtin_source_ids,
+                    embedding_provider=SentenceTransformerEmbeddingProvider(),
+                )
+            except Exception as e:
+                logger.exception("Failed to backfill built-in embeddings after startup: %s", e)
+                session.rollback()
+            finally:
+                session.close()
+
+        await asyncio.to_thread(run_backfill_sync)
+
+    embedding_backfill_task = asyncio.create_task(backfill_builtin_embeddings())
+
     async def broadcast_feed_status_periodically():
         while True:
             await asyncio.sleep(5)
@@ -92,6 +126,12 @@ async def lifespan(app: FastAPI):
         await feed_task
     except asyncio.CancelledError:
         pass
+    if not embedding_backfill_task.done():
+        embedding_backfill_task.cancel()
+        try:
+            await embedding_backfill_task
+        except asyncio.CancelledError:
+            pass
     await hub.stop()
     bus.unsubscribe_alerts(on_alert)
     proc.unregister_telemetry_update_handler(hub.schedule_telemetry_update)

@@ -33,29 +33,19 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const DEFAULT_SOURCE_ID = "default";
+import {
+  useAddToWatchlistMutation,
+  useRemoveFromWatchlistMutation,
+  useTelemetrySearchQuery,
+  useTelemetrySubsystemsQuery,
+  useTelemetryUnitsQuery,
+  useWatchlistNames,
+} from "@/lib/query-hooks";
+import { DEFAULT_SOURCE_ID } from "@/lib/source-ids";
+import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 export const AUTO_FOCUS_STORAGE_KEY = "overviewSearchAutoFocus";
-
 export const OVERVIEW_SEARCH_FOCUS_EVENT = "telemetry-overview-search-focus";
 export const SEARCH_INPUT_SELECTOR = "[data-telemetry-search-input]";
-
-interface SearchResult {
-  name: string;
-  match_confidence: number;
-  description?: string | null;
-  subsystem_tag?: string | null;
-  units: string;
-  current_value?: number | null;
-  current_status?: string | null;
-  last_timestamp?: string | null;
-}
-
-interface WatchlistEntry {
-  name: string;
-  display_order: number;
-}
 
 interface TelemetrySource {
   id: string;
@@ -97,10 +87,7 @@ function statusVariant(status: string | null | undefined) {
 }
 
 function buildDetailHref(name: string, sourceId: string) {
-  if (!sourceId || sourceId === DEFAULT_SOURCE_ID) {
-    return `/telemetry/${encodeURIComponent(name)}`;
-  }
-  return `/telemetry/${encodeURIComponent(name)}?source=${encodeURIComponent(sourceId)}`;
+  return buildTelemetryDetailHref(sourceId || DEFAULT_SOURCE_ID, name);
 }
 
 function readSearchState(searchParams: { get(name: string): string | null }) {
@@ -124,41 +111,36 @@ export function OverviewSearch({
   sourceId,
   sources,
   onWatchlistChanged,
-  watchlistVersion = 0,
 }: OverviewSearchProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const inputRef = useRef<HTMLInputElement>(null);
+  const lastLoggedSearchRef = useRef<string | null>(null);
+
   const [open, setOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-
   const [query, setQuery] = useState("");
   const [filterSubsystem, setFilterSubsystem] = useState("");
   const [filterUnits, setFilterUnits] = useState("");
   const [filterAnomalousOnly, setFilterAnomalousOnly] = useState(false);
   const [filterRecentOnly, setFilterRecentOnly] = useState(false);
   const [filterRecentHours, setFilterRecentHours] = useState(24);
-
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [subsystems, setSubsystems] = useState<string[]>([]);
-  const [units, setUnits] = useState<string[]>([]);
-  const [recent, setRecent] = useState<string[]>([]);
-  const [favorites, setFavorites] = useState<string[]>([]);
+  const [recent, setRecent] = useState(() => getRecentChannels());
   const [favoriteError, setFavoriteError] = useState<string | null>(null);
 
   const sourceName = useMemo(
     () => sources.find((entry) => entry.id === sourceId)?.name ?? sourceId ?? DEFAULT_SOURCE_ID,
     [sourceId, sources]
   );
-
+  const recentForSource = useMemo(
+    () => recent.filter((entry) => entry.sourceId === (sourceId || DEFAULT_SOURCE_ID)),
+    [recent, sourceId]
+  );
+  const searchState = useMemo(() => readSearchState(searchParams), [searchParams]);
   const hasActiveFilters =
     !!filterSubsystem || !!filterUnits || filterAnomalousOnly || filterRecentOnly;
-
   const hasSearchState = !!query.trim() || hasActiveFilters;
 
   const updateUrl = useCallback(
@@ -199,99 +181,37 @@ export function OverviewSearch({
     router.replace(next ? `${pathname}?${next}` : pathname);
   }, [pathname, router, searchParams]);
 
-  const runSearch = useCallback(
-    async (nextQuery: string, filters: SearchFilters) => {
-      if (!nextQuery.trim()) {
-        setSearched(false);
-        setResults([]);
-        setError(null);
-        return;
-      }
-
-      setLoading(true);
-      setSearched(true);
-      setError(null);
-
-      try {
-        const params = new URLSearchParams({ q: nextQuery.trim() });
-        params.set("source_id", sourceId || DEFAULT_SOURCE_ID);
-        if (filters.subsystem) params.set("subsystem", filters.subsystem);
-        if (filters.units) params.set("units", filters.units);
-        if (filters.anomalousOnly) params.set("anomalous_only", "true");
-        if (filters.recentOnly && filters.recentHours > 0) {
-          params.set("recent_minutes", String(filters.recentHours * 60));
-        }
-
-        const response = await fetch(`${API_URL}/telemetry/search?${params.toString()}`);
-        if (!response.ok) {
-          const errMsg = response.status === 500 ? "Server error" : String(response.status);
-          auditLog("search", { q: nextQuery.trim(), error: errMsg });
-          setError(`Search failed: ${errMsg}`);
-          setResults([]);
-          return;
-        }
-
-        const data = await response.json();
-        const resultList = Array.isArray(data.results) ? data.results : [];
-        auditLog("search", {
-          q: nextQuery.trim(),
-          source_id: sourceId || undefined,
-          subsystem: filters.subsystem || undefined,
-          anomalous_only: filters.anomalousOnly,
-          units: filters.units || undefined,
-          result_count: resultList.length,
-        });
-        setResults(resultList);
-      } catch (err) {
-        console.error(err);
-        auditLog("search", { q: nextQuery.trim(), error: "Network error" });
-        setError("Search failed: Network error");
-        setResults([]);
-      } finally {
-        setLoading(false);
-      }
+  const subsystemQuery = useTelemetrySubsystemsQuery(sourceId || DEFAULT_SOURCE_ID);
+  const unitsQuery = useTelemetryUnitsQuery(sourceId || DEFAULT_SOURCE_ID);
+  const watchlistQuery = useWatchlistNames(sourceId || DEFAULT_SOURCE_ID);
+  const addMutation = useAddToWatchlistMutation(sourceId || DEFAULT_SOURCE_ID, {
+    onSuccess: async () => {
+      await onWatchlistChanged?.();
     },
-    [sourceId]
+  });
+  const removeMutation = useRemoveFromWatchlistMutation(sourceId || DEFAULT_SOURCE_ID, {
+    onSuccess: async () => {
+      await onWatchlistChanged?.();
+    },
+  });
+  const searchQuery = useTelemetrySearchQuery(
+    {
+      q: searchState.query,
+      sourceId: sourceId || DEFAULT_SOURCE_ID,
+      subsystem: searchState.filters.subsystem,
+      units: searchState.filters.units,
+      anomalousOnly: searchState.filters.anomalousOnly,
+      recentMinutes: searchState.filters.recentOnly ? searchState.filters.recentHours * 60 : undefined,
+    },
+    searchState.query.trim().length > 0
   );
 
-  const loadFilterOptions = useCallback(async () => {
-    try {
-      const [subsystemsResponse, unitsResponse] = await Promise.all([
-        fetch(`${API_URL}/telemetry/subsystems`),
-        fetch(`${API_URL}/telemetry/units`),
-      ]);
-      if (subsystemsResponse.ok) {
-        const data = await subsystemsResponse.json();
-        setSubsystems(Array.isArray(data.subsystems) ? data.subsystems : []);
-      }
-      if (unitsResponse.ok) {
-        const data = await unitsResponse.json();
-        setUnits(Array.isArray(data.units) ? data.units : []);
-      }
-    } catch {
-      // ignore filter option failures
-    }
-  }, []);
-
-  const loadFavorites = useCallback(async () => {
-    try {
-      const response = await fetch(`${API_URL}/telemetry/watchlist`);
-      if (!response.ok) return;
-      const data = await response.json();
-      setFavorites((data.entries || []).map((entry: WatchlistEntry) => entry.name));
-    } catch {
-      // ignore favorites load failure
-    }
-  }, []);
-
-  useEffect(() => {
-    loadFilterOptions();
-    setRecent(getRecentChannels());
-  }, [loadFilterOptions]);
-
-  useEffect(() => {
-    void loadFavorites();
-  }, [loadFavorites, watchlistVersion]);
+  const subsystems = subsystemQuery.data ?? [];
+  const units = unitsQuery.data ?? [];
+  const favorites = watchlistQuery.names;
+  const results = searchQuery.data ?? [];
+  const loading = searchQuery.isLoading || searchQuery.isFetching;
+  const error = searchQuery.isError ? `Search failed: ${searchQuery.error.message}` : null;
 
   useEffect(() => {
     const onFocus = () => setRecent(getRecentChannels());
@@ -300,32 +220,59 @@ export function OverviewSearch({
   }, []);
 
   useEffect(() => {
-    const state = readSearchState(searchParams);
-    setQuery(state.query);
-    setFilterSubsystem(state.filters.subsystem);
-    setFilterUnits(state.filters.units);
-    setFilterAnomalousOnly(state.filters.anomalousOnly);
-    setFilterRecentOnly(state.filters.recentOnly);
-    setFilterRecentHours(state.filters.recentHours);
-    setAdvancedOpen(
-      !!state.filters.subsystem ||
-        !!state.filters.units ||
-        state.filters.anomalousOnly ||
-        state.filters.recentOnly
-    );
+    const state = searchState;
+    const id = window.requestAnimationFrame(() => {
+      setQuery(state.query);
+      setFilterSubsystem(state.filters.subsystem);
+      setFilterUnits(state.filters.units);
+      setFilterAnomalousOnly(state.filters.anomalousOnly);
+      setFilterRecentOnly(state.filters.recentOnly);
+      setFilterRecentHours(state.filters.recentHours);
+      setAdvancedOpen(
+        !!state.filters.subsystem ||
+          !!state.filters.units ||
+          state.filters.anomalousOnly ||
+          state.filters.recentOnly
+      );
+      setOpen(Boolean(state.query.trim() || state.open));
+      setSearched(Boolean(state.query.trim()));
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [searchState]);
 
-    if (state.query.trim() || state.open) {
-      setOpen(true);
-      if (state.query.trim()) {
-        void runSearch(state.query, state.filters);
-        return;
-      }
+  useEffect(() => {
+    if (!searchState.query.trim()) {
+      lastLoggedSearchRef.current = null;
+      return;
     }
 
-    setSearched(false);
-    setResults([]);
-    setError(null);
-  }, [runSearch, searchParams]);
+    const signature = JSON.stringify({
+      q: searchState.query.trim(),
+      source_id: sourceId || DEFAULT_SOURCE_ID,
+      subsystem: searchState.filters.subsystem || undefined,
+      anomalous_only: searchState.filters.anomalousOnly,
+      units: searchState.filters.units || undefined,
+      result_count: results.length,
+      error,
+    });
+
+    if (signature === lastLoggedSearchRef.current) return;
+
+    if (searchQuery.isSuccess) {
+      auditLog("search", {
+        q: searchState.query.trim(),
+        source_id: sourceId || undefined,
+        subsystem: searchState.filters.subsystem || undefined,
+        anomalous_only: searchState.filters.anomalousOnly,
+        units: searchState.filters.units || undefined,
+        result_count: results.length,
+      });
+      lastLoggedSearchRef.current = signature;
+    } else if (searchQuery.isError) {
+      auditLog("search", { q: searchState.query.trim(), error: searchQuery.error.message });
+      lastLoggedSearchRef.current = signature;
+    }
+  }, [error, results.length, searchQuery.error, searchQuery.isError, searchQuery.isSuccess, searchState, sourceId]);
 
   useEffect(() => {
     if (!open) return;
@@ -343,7 +290,7 @@ export function OverviewSearch({
     try {
       if (sessionStorage.getItem(AUTO_FOCUS_STORAGE_KEY) === "1") {
         sessionStorage.removeItem(AUTO_FOCUS_STORAGE_KEY);
-        setOpen(true);
+        window.requestAnimationFrame(() => setOpen(true));
       }
     } catch {}
 
@@ -355,26 +302,11 @@ export function OverviewSearch({
     setFavoriteError(null);
     try {
       if (isFavorite) {
-        await fetch(`${API_URL}/telemetry/watchlist/${encodeURIComponent(name)}`, {
-          method: "DELETE",
-        });
-        auditLog("watchlist.remove", { name });
-        setFavorites((current) => current.filter((entry) => entry !== name));
+        await removeMutation.mutateAsync(name);
       } else {
-        await fetch(`${API_URL}/telemetry/watchlist`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ telemetry_name: name }),
-        });
-        auditLog("watchlist.add", { telemetry_name: name });
-        setFavorites((current) => [...current, name]);
+        await addMutation.mutateAsync(name);
       }
-      await onWatchlistChanged?.();
     } catch {
-      auditLog(isFavorite ? "watchlist.remove" : "watchlist.add", {
-        ...(isFavorite ? { name } : { telemetry_name: name }),
-        error: "Failed to update favorites",
-      });
       setFavoriteError("Failed to update favorites");
     }
   };
@@ -382,8 +314,7 @@ export function OverviewSearch({
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!query.trim()) {
-      setError("Enter a search term");
-      setSearched(true);
+      clearSearch();
       return;
     }
 
@@ -634,13 +565,13 @@ export function OverviewSearch({
                       <span className="text-xs text-muted-foreground">Quick return</span>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {recent.map((name) => (
+                      {recentForSource.map((entry) => (
                         <Link
-                          key={name}
-                          href={buildDetailHref(name, sourceId)}
+                          key={`${entry.sourceId}:${entry.name}`}
+                          href={buildDetailHref(entry.name, entry.sourceId)}
                           className="rounded-full border px-3 py-1.5 text-sm transition-colors hover:bg-accent"
                         >
-                          {name}
+                          {entry.name}
                         </Link>
                       ))}
                     </div>
@@ -669,7 +600,7 @@ export function OverviewSearch({
                   </section>
                 )}
 
-                {recent.length === 0 && favorites.length === 0 && (
+                {recentForSource.length === 0 && favorites.length === 0 && (
                   <EmptyState
                     icon="search"
                     title="Search telemetry from Overview"
@@ -718,6 +649,7 @@ export function OverviewSearch({
                                     ? `Remove ${result.name} from favorites`
                                     : `Add ${result.name} to favorites`
                                 }
+                                disabled={addMutation.isPending || removeMutation.isPending}
                               >
                                 <StarIcon
                                   className={cn(

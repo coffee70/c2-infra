@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 from sqlalchemy.orm import Session
 
 from app.interfaces.embedding_provider import EmbeddingProvider
@@ -18,6 +18,7 @@ from app.models.schemas import (
     ExplainResponse,
     SearchResult,
 )
+from app.services.source_run_service import normalize_source_id, run_id_to_source_id
 from app.utils.subsystem import infer_subsystem
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class TelemetryService:
 
     def create_schema(
         self,
+        source_id: str,
         name: str,
         units: str,
         description: Optional[str] = None,
@@ -85,10 +87,12 @@ class TelemetryService:
         red_high: Optional[float] = None,
     ) -> UUID:
         """Create telemetry metadata with embedding."""
+        logical_source_id = run_id_to_source_id(source_id)
         text_for_embedding = f"{name} {units} {description or ''}".strip()
         embedding = self._embedding.embed(text_for_embedding)
 
         meta = TelemetryMetadata(
+            source_id=logical_source_id,
             name=name,
             units=units,
             description=description,
@@ -103,9 +107,13 @@ class TelemetryService:
         logger.info("Created telemetry schema: %s", name)
         return meta.id
 
-    def get_by_name(self, name: str) -> Optional[TelemetryMetadata]:
-        """Fetch metadata by name."""
-        stmt = select(TelemetryMetadata).where(TelemetryMetadata.name == name)
+    def get_by_name(self, source_id: str, name: str) -> Optional[TelemetryMetadata]:
+        """Fetch metadata by source and name."""
+        logical_source_id = run_id_to_source_id(source_id)
+        stmt = select(TelemetryMetadata).where(
+            TelemetryMetadata.source_id == logical_source_id,
+            TelemetryMetadata.name == name,
+        )
         return self._db.execute(stmt).scalar_one_or_none()
 
     def get_by_id(self, telemetry_id: UUID) -> Optional[TelemetryMetadata]:
@@ -114,18 +122,19 @@ class TelemetryService:
 
     def insert_data(
         self,
+        source_id: str,
         telemetry_name: str,
         data: list[tuple[datetime, float]],
-        source_id: str = "default",
     ) -> int:
         """Insert batch of time-series data. source_id scopes data when telemetry_data is source-aware."""
-        meta = self.get_by_name(telemetry_name)
+        data_source_id = normalize_source_id(source_id)
+        meta = self.get_by_name(source_id, telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")
 
         rows = [
             TelemetryData(
-                source_id=source_id,
+                source_id=data_source_id,
                 telemetry_id=meta.id,
                 timestamp=ts,
                 value=Decimal(str(v)),
@@ -148,15 +157,18 @@ class TelemetryService:
         """Vector similarity search with enriched metadata and optional filters."""
         if not query or not query.strip():
             return []
+        data_source_id = normalize_source_id(source_id)
 
         # Fetch more candidates when filters are applied
         fetch_limit = limit * 5 if any([subsystem, anomalous_only, units, recent_minutes]) else limit
 
+        logical_source_id = run_id_to_source_id(source_id)
         query_embedding = self._embedding.embed(query)
         distance_expr = TelemetryMetadata.embedding.cosine_distance(query_embedding)
 
         stmt = (
             select(TelemetryMetadata, distance_expr)
+            .where(TelemetryMetadata.source_id == logical_source_id)
             .where(TelemetryMetadata.embedding.isnot(None))
             .order_by(distance_expr)
             .limit(fetch_limit)
@@ -167,25 +179,26 @@ class TelemetryService:
         results: list[SearchResult] = []
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=recent_minutes) if recent_minutes else None
 
-        for meta, dist in rows:
-            match_confidence = 1.0 - float(dist)
+        seen_names: set[str] = set()
+
+        def append_result(meta: TelemetryMetadata, match_confidence: float) -> bool:
             subsys = infer_subsystem(meta.name, meta)
 
             # Filter by subsystem
             if subsystem and subsys != subsystem:
-                continue
+                return False
 
             # Filter by units
             if units and meta.units != units:
-                continue
+                return False
 
-            stats = self._db.get(TelemetryStatistics, (source_id, meta.id))
+            stats = self._db.get(TelemetryStatistics, (data_source_id, meta.id))
             latest = self.get_recent_value_with_timestamp(meta.name, source_id=source_id)
 
             # Filter by recent data
             if recent_minutes and cutoff:
                 if not latest or latest[1] < cutoff:
-                    continue
+                    return False
 
             current_value: Optional[float] = None
             current_status: Optional[str] = None
@@ -204,10 +217,10 @@ class TelemetryService:
                 current_status = state
 
                 if anomalous_only and state != "warning":
-                    continue
+                    return False
             elif anomalous_only:
                 # Need state for anomalous filter but we don't have stats/latest
-                continue
+                return False
 
             results.append(
                 SearchResult(
@@ -221,8 +234,42 @@ class TelemetryService:
                     last_timestamp=last_timestamp,
                 )
             )
-            if len(results) >= limit:
+            seen_names.add(meta.name)
+            return True
+
+        for meta, dist in rows:
+            if append_result(meta, 1.0 - float(dist)) and len(results) >= limit:
                 break
+
+        if len(results) < limit:
+            raw_query = query.strip()
+            terms = [term for term in raw_query.lower().split() if term]
+            lexical_patterns = [f"%{term}%" for term in terms] or [f"%{raw_query.lower()}%"]
+            lexical_clauses = [
+                or_(
+                    TelemetryMetadata.name.ilike(pattern),
+                    TelemetryMetadata.description.ilike(pattern),
+                    TelemetryMetadata.subsystem_tag.ilike(pattern),
+                )
+                for pattern in lexical_patterns
+            ]
+            lexical_stmt = (
+                select(TelemetryMetadata)
+                .where(TelemetryMetadata.source_id == logical_source_id)
+                .where(TelemetryMetadata.name.not_in(seen_names) if seen_names else True)
+                .where(or_(*lexical_clauses))
+                .limit(fetch_limit)
+            )
+            lexical_rows = self._db.execute(lexical_stmt).scalars().all()
+
+            for meta in lexical_rows:
+                haystack = " ".join(
+                    filter(None, [meta.name.lower(), (meta.description or "").lower(), (meta.subsystem_tag or "").lower()])
+                )
+                term_hits = sum(term in haystack for term in terms) if terms else int(raw_query.lower() in haystack)
+                lexical_confidence = min(0.89, 0.5 + 0.15 * max(term_hits, 1))
+                if append_result(meta, lexical_confidence) and len(results) >= limit:
+                    break
 
         return results
 
@@ -235,7 +282,8 @@ class TelemetryService:
         source_id: str = "default",
     ) -> list[tuple[datetime, float]]:
         """Get most recent values for a telemetry point, optionally filtered by time range and source."""
-        meta = self.get_by_name(name)
+        data_source_id = normalize_source_id(source_id)
+        meta = self.get_by_name(source_id, name)
         if not meta:
             raise ValueError(f"Telemetry not found: {name}")
 
@@ -243,7 +291,7 @@ class TelemetryService:
             select(TelemetryData.timestamp, TelemetryData.value)
             .where(
                 TelemetryData.telemetry_id == meta.id,
-                TelemetryData.source_id == source_id,
+                TelemetryData.source_id == data_source_id,
             )
             .order_by(desc(TelemetryData.timestamp))
             .limit(limit)
@@ -273,7 +321,8 @@ class TelemetryService:
         self, name: str, limit: int = 5, source_id: str = "default"
     ) -> list[RelatedChannel]:
         """Get channels linked by subsystem/physics for 'What to check next'."""
-        meta = self.get_by_name(name)
+        data_source_id = normalize_source_id(source_id)
+        meta = self.get_by_name(source_id, name)
         if not meta:
             return []
 
@@ -281,7 +330,10 @@ class TelemetryService:
         units = meta.units or ""
 
         # Fetch all metadata except self
-        stmt = select(TelemetryMetadata).where(TelemetryMetadata.name != name)
+        stmt = select(TelemetryMetadata).where(
+            TelemetryMetadata.source_id == run_id_to_source_id(source_id),
+            TelemetryMetadata.name != name,
+        )
         all_meta = self._db.execute(stmt).scalars().all()
 
         same_subsys_same_units: list[tuple[TelemetryMetadata, str]] = []
@@ -305,12 +357,12 @@ class TelemetryService:
         # If fewer than limit, add semantic search within same subsystem
         if len(ordered) < limit:
             semantic_results = self.semantic_search(
-                meta.name, limit=limit, subsystem=subsys
+                meta.name, limit=limit, subsystem=subsys, source_id=source_id
             )
             seen = {m.name for m, _ in ordered}
             for r in semantic_results:
                 if r.name not in seen:
-                    m = self.get_by_name(r.name)
+                    m = self.get_by_name(source_id, r.name)
                     if m:
                         ordered.append((m, f"related in {subsys}"))
                         seen.add(r.name)
@@ -323,7 +375,7 @@ class TelemetryService:
             current_status: Optional[str] = None
             last_timestamp: Optional[str] = None
             latest = self.get_recent_value_with_timestamp(m.name, source_id=source_id)
-            stats = self._db.get(TelemetryStatistics, (source_id, m.id))
+            stats = self._db.get(TelemetryStatistics, (data_source_id, m.id))
             if latest and stats:
                 val, ts = latest
                 current_value = val
@@ -371,18 +423,19 @@ class TelemetryService:
         self, name: str, skip_llm: bool = False, source_id: str = "default"
     ) -> ExplainResponse:
         """Build full explanation with stats, z-score, and LLM response."""
-        meta = self.get_by_name(name)
+        data_source_id = normalize_source_id(source_id)
+        meta = self.get_by_name(source_id, name)
         if not meta:
             raise ValueError(f"Telemetry not found: {name}")
 
-        stats_row = self._db.get(TelemetryStatistics, (source_id, meta.id))
+        stats_row = self._db.get(TelemetryStatistics, (data_source_id, meta.id))
         if not stats_row:
             from app.services.statistics_service import StatisticsService
 
             stats_service = StatisticsService(self._db)
-            stats_service._recompute_one(meta.id, source_id=source_id)
+            stats_service._recompute_one(meta.id, source_id=data_source_id)
             self._db.flush()
-            stats_row = self._db.get(TelemetryStatistics, (source_id, meta.id))
+            stats_row = self._db.get(TelemetryStatistics, (data_source_id, meta.id))
         recent_row = self.get_recent_value_with_timestamp(name, source_id=source_id)
         recent_value = recent_row[0] if recent_row else None  # (value, timestamp)
         last_timestamp = recent_row[1].isoformat() if recent_row else None

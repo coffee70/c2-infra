@@ -15,6 +15,11 @@ from app.services.source_run_service import (
     resolve_active_run_id,
     run_id_to_source_id,
 )
+from telemetry_catalog.builtins import (
+    DEFAULT_SOURCE_ID,
+    DROGONSAT_SOURCE_ID,
+    RHAEGALSAT_SOURCE_ID,
+)
 
 
 class _FakeScalarResult:
@@ -52,21 +57,29 @@ class _FakeHttpxClient:
 
 
 def test_run_id_to_source_id_collapses_simulator_run() -> None:
-    assert run_id_to_source_id("simulator-nominal-2026-03-13T17-12-34Z") == "simulator"
-    assert run_id_to_source_id("simulator2-2026-03-13T17-12-34Z") == "simulator2"
-    assert run_id_to_source_id("default") == "default"
+    assert run_id_to_source_id(f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z") == DROGONSAT_SOURCE_ID
+    assert (
+        run_id_to_source_id(f"{DROGONSAT_SOURCE_ID}-nominal-2026-03-13T17-12-34Z")
+        == DROGONSAT_SOURCE_ID
+    )
+    assert run_id_to_source_id(f"{RHAEGALSAT_SOURCE_ID}-2026-03-13T17-12-34Z") == RHAEGALSAT_SOURCE_ID
+    assert (
+        run_id_to_source_id(f"{RHAEGALSAT_SOURCE_ID}-orbit_decay-2026-03-13T17-12-34Z")
+        == RHAEGALSAT_SOURCE_ID
+    )
+    assert run_id_to_source_id("default") == DEFAULT_SOURCE_ID
 
 
 def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
     db = MagicMock()
     db.get.side_effect = lambda model, source_id: (
         TelemetrySource(
-            id="simulator",
-            name="Simulator",
+            id=DROGONSAT_SOURCE_ID,
+            name="DrogonSat",
             source_type="simulator",
             base_url="http://simulator:8001",
         )
-        if source_id == "simulator"
+        if source_id == DROGONSAT_SOURCE_ID
         else None
     )
 
@@ -77,7 +90,7 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
                 {
                     "state": "running",
                     "config": {
-                        "source_id": "simulator-nominal-2026-03-13T17-12-34Z",
+                        "source_id": f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
                     },
                 }
             )
@@ -85,26 +98,26 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
     )
 
     assert (
-        resolve_active_run_id(db, "simulator")
-        == "simulator-nominal-2026-03-13T17-12-34Z"
+        resolve_active_run_id(db, DROGONSAT_SOURCE_ID)
+        == f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
     )
-    clear_active_run("simulator")
+    clear_active_run(DROGONSAT_SOURCE_ID)
 
 
 def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
     db = MagicMock()
     db.get.side_effect = lambda model, source_id: (
         TelemetrySource(
-            id="simulator",
-            name="Simulator",
+            id=DROGONSAT_SOURCE_ID,
+            name="DrogonSat",
             source_type="simulator",
             base_url="http://simulator:8001",
         )
-        if source_id == "simulator"
+        if source_id == DROGONSAT_SOURCE_ID
         else None
     )
 
-    register_active_run("simulator-orbit_decay-2026-03-13T19-17-52Z")
+    register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z")
 
     def fail_client(timeout=2.0):
         raise AssertionError("status poll should not run")
@@ -115,34 +128,34 @@ def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
     )
 
     assert (
-        resolve_active_run_id(db, "simulator")
-        == "simulator-orbit_decay-2026-03-13T19-17-52Z"
+        resolve_active_run_id(db, DROGONSAT_SOURCE_ID)
+        == f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
     )
-    clear_active_run("simulator")
+    clear_active_run(DROGONSAT_SOURCE_ID)
 
 
 def test_register_active_run_does_not_roll_back_to_older_run() -> None:
-    clear_active_run("simulator")
-    register_active_run("simulator-orbit_highly_elliptical-2026-03-13T19-23-07Z")
-    register_active_run("simulator-orbit_decay-2026-03-13T19-22-43Z")
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-23-07Z")
+    register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-22-43Z")
 
     db = MagicMock()
     db.get.side_effect = lambda model, source_id: (
         TelemetrySource(
-            id="simulator",
-            name="Simulator",
+            id=DROGONSAT_SOURCE_ID,
+            name="DrogonSat",
             source_type="simulator",
             base_url="http://simulator:8001",
         )
-        if source_id == "simulator"
+        if source_id == DROGONSAT_SOURCE_ID
         else None
     )
 
     assert (
-        resolve_active_run_id(db, "simulator")
-        == "simulator-orbit_highly_elliptical-2026-03-13T19-23-07Z"
+        resolve_active_run_id(db, DROGONSAT_SOURCE_ID)
+        == f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-23-07Z"
     )
-    clear_active_run("simulator")
+    clear_active_run(DROGONSAT_SOURCE_ID)
 
 
 def test_build_sample_for_mapping_reads_from_run_but_labels_logical_source(
@@ -163,7 +176,7 @@ def test_build_sample_for_mapping_reads_from_run_but_labels_logical_source(
     monkeypatch.setattr(position_service, "_get_latest_for_channel", fake_get_latest_for_channel)
 
     mapping = SimpleNamespace(
-        source_id="simulator",
+        source_id=DROGONSAT_SOURCE_ID,
         frame_type="gps_lla",
         lat_channel_name="GPS_LAT",
         lon_channel_name="GPS_LON",
@@ -173,8 +186,8 @@ def test_build_sample_for_mapping_reads_from_run_but_labels_logical_source(
         z_channel_name=None,
     )
     source = SimpleNamespace(
-        id="simulator",
-        name="Simulator",
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
         source_type="simulator",
     )
 
@@ -182,18 +195,18 @@ def test_build_sample_for_mapping_reads_from_run_but_labels_logical_source(
         MagicMock(),
         mapping,
         source,
-        data_source_id="simulator-nominal-2026-03-13T17-12-34Z",
+        data_source_id=f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
         now=now,
         staleness=position_service.timedelta(seconds=300),
     )
 
     assert requested_source_ids == [
-        "simulator-nominal-2026-03-13T17-12-34Z",
-        "simulator-nominal-2026-03-13T17-12-34Z",
-        "simulator-nominal-2026-03-13T17-12-34Z",
+        f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
+        f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
+        f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
     ]
-    assert sample.source_id == "simulator"
-    assert sample.source_name == "Simulator"
+    assert sample.source_id == DROGONSAT_SOURCE_ID
+    assert sample.source_name == "DrogonSat"
     assert sample.valid is True
 
 
@@ -201,10 +214,10 @@ def test_get_latest_positions_resolves_active_run_for_mapped_source(
     monkeypatch,
 ) -> None:
     db = MagicMock()
-    mapping = SimpleNamespace(source_id="simulator")
+    mapping = SimpleNamespace(source_id=DROGONSAT_SOURCE_ID)
     source = SimpleNamespace(
-        id="simulator",
-        name="Simulator",
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
         source_type="simulator",
     )
     db.execute.side_effect = [
@@ -215,7 +228,7 @@ def test_get_latest_positions_resolves_active_run_for_mapped_source(
     monkeypatch.setattr(
         position_service,
         "resolve_active_run_id",
-        lambda db_session, source_id: "simulator-nominal-2026-03-13T17-12-34Z",
+        lambda db_session, source_id: f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
     )
 
     seen: dict[str, str] = {}
@@ -236,8 +249,8 @@ def test_get_latest_positions_resolves_active_run_for_mapped_source(
 
     monkeypatch.setattr(position_service, "_build_sample_for_mapping", fake_build_sample)
 
-    samples = position_service.get_latest_positions(db, source_ids=["simulator"])
+    samples = position_service.get_latest_positions(db, source_ids=[DROGONSAT_SOURCE_ID])
 
     assert len(samples) == 1
-    assert samples[0].source_id == "simulator"
-    assert seen["data_source_id"] == "simulator-nominal-2026-03-13T17-12-34Z"
+    assert samples[0].source_id == DROGONSAT_SOURCE_ID
+    assert seen["data_source_id"] == f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"

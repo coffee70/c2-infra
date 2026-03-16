@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { auditLog } from "@/lib/audit-log";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,49 +17,27 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
+import {
+  useSimulatorPauseMutation,
+  useSimulatorResumeMutation,
+  useSimulatorStartMutation,
+  useSimulatorStatusQuery,
+  useSimulatorStopMutation,
+} from "@/lib/query-hooks";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
-
-async function fetchApiWithFallback(
-  path: string,
-  init: RequestInit
-): Promise<{ response: Response; baseUrl: string }> {
-  const bases = [API_URL, API_FALLBACK_URL].filter(
-    (v, i, arr) => arr.indexOf(v) === i
-  );
-  let lastError: unknown = null;
-  for (const base of bases) {
-    try {
-      const response = await fetch(`${base}${path}`, {
-        ...init,
-      });
-      if (response.ok) {
-        return { response, baseUrl: base };
-      }
-      lastError = new Error(`HTTP ${response.status} from ${base}${path}`);
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  throw lastError ?? new Error("All API paths failed");
+function formatScenarioLabel(name: string): string {
+  return name
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
-
-const SCENARIOS = [
-  { value: "nominal", label: "Nominal" },
-  { value: "power_sag", label: "Power Sag" },
-  { value: "thermal_runaway", label: "Thermal Runaway" },
-  { value: "comm_dropout", label: "Comm Dropout" },
-  { value: "safe_mode", label: "Safe Mode" },
-  { value: "orbit_nominal", label: "Orbit Nominal" },
-  { value: "orbit_decay", label: "Orbit Decay" },
-  { value: "orbit_highly_elliptical", label: "Orbit Highly Elliptical" },
-  { value: "orbit_suborbital", label: "Orbit Suborbital" },
-  { value: "orbit_escape", label: "Orbit Escape" },
-] as const;
 
 interface SimulatorStatus {
   connected: boolean;
+  supported_scenarios?: {
+    name: string;
+    description: string;
+  }[];
   state?: "idle" | "running" | "paused";
   config?: {
     scenario: string;
@@ -79,8 +57,6 @@ interface SimulatorPanelProps {
 }
 
 export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
-  const [status, setStatus] = useState<SimulatorStatus | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [scenario, setScenario] = useState("nominal");
@@ -89,55 +65,56 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
   const [speed, setSpeed] = useState(1);
   const [dropProb, setDropProb] = useState(0);
   const [jitter, setJitter] = useState(0.1);
-  const statusInFlightRef = useRef(false);
-  const consecutiveStatusFailuresRef = useRef(0);
   const lastLoggedStateRef = useRef<string | null>(null);
   const lastSimElapsedRef = useRef<number>(0);
   const lastFetchTimeRef = useRef<number>(0);
   const [displayElapsed, setDisplayElapsed] = useState<number | null>(null);
-
-  const fetchStatus = useCallback(async () => {
-    if (statusInFlightRef.current) {
-      return;
+  const statusQuery = useSimulatorStatusQuery(sourceId, {
+    refetchInterval: 2000,
+  });
+  const startMutation = useSimulatorStartMutation();
+  const pauseMutation = useSimulatorPauseMutation();
+  const resumeMutation = useSimulatorResumeMutation();
+  const stopMutation = useSimulatorStopMutation();
+  const status = useMemo(
+    () => ((statusQuery.data as SimulatorStatus | undefined) ?? { connected: false }),
+    [statusQuery.data]
+  );
+  const supportedScenarios = useMemo(
+    () => (status.supported_scenarios ?? []).map((entry) => ({
+      value: entry.name,
+      label: formatScenarioLabel(entry.name),
+      description: entry.description,
+    })),
+    [status.supported_scenarios]
+  );
+  const effectiveScenario = useMemo(() => {
+    if (supportedScenarios.some((entry) => entry.value === scenario)) {
+      return scenario;
     }
-    statusInFlightRef.current = true;
-    try {
-      const { response: res } = await fetchApiWithFallback(
-        `/simulator/status?source_id=${encodeURIComponent(sourceId)}`,
-        { cache: "no-store" }
-      );
-      if (!res.ok) throw new Error(res.statusText);
-      const data: SimulatorStatus = await res.json();
-      setStatus(data);
-      consecutiveStatusFailuresRef.current = 0;
-      setError(null);
-      if (data.connected && data.sim_elapsed != null) {
-        lastSimElapsedRef.current = data.sim_elapsed;
-        lastFetchTimeRef.current = Date.now();
-      }
-      if (data.connected && data.state && lastLoggedStateRef.current !== data.state) {
-        lastLoggedStateRef.current = data.state;
-        auditLog("simulator.status.fetched", {
-          state: data.state,
-          sim_elapsed: data.sim_elapsed,
-        });
-      }
-    } catch {
-      consecutiveStatusFailuresRef.current += 1;
-      setStatus({ connected: false });
-      if (consecutiveStatusFailuresRef.current >= 2) {
-        setError("Simulator unavailable");
-      }
-    } finally {
-      statusInFlightRef.current = false;
-    }
-  }, [sourceId]);
+    return supportedScenarios[0]?.value ?? scenario;
+  }, [scenario, supportedScenarios]);
+  const selectedScenario = supportedScenarios.find((entry) => entry.value === effectiveScenario) ?? null;
+  const loading =
+    startMutation.isPending
+    || pauseMutation.isPending
+    || resumeMutation.isPending
+    || stopMutation.isPending;
+  const combinedError = error ?? (statusQuery.isError ? "Simulator unavailable" : null);
 
   useEffect(() => {
-    fetchStatus();
-    const id = setInterval(fetchStatus, 2000);
-    return () => clearInterval(id);
-  }, [fetchStatus]);
+    if (status.connected && status.sim_elapsed != null) {
+      lastSimElapsedRef.current = status.sim_elapsed;
+      lastFetchTimeRef.current = Date.now();
+    }
+    if (status.connected && status.state && lastLoggedStateRef.current !== status.state) {
+      lastLoggedStateRef.current = status.state;
+      auditLog("simulator.status.fetched", {
+        state: status.state,
+        sim_elapsed: status.sim_elapsed,
+      });
+    }
+  }, [status]);
 
   useEffect(() => {
     if (!status?.connected || status.state !== "running" || status.sim_elapsed == null) {
@@ -156,109 +133,66 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
   }, [status?.connected, status?.state, status?.sim_elapsed, status?.config?.speed]);
 
   async function handleStart() {
-    setLoading(true);
     setError(null);
     auditLog("simulator.start.sent", {
-      scenario,
+      scenario: effectiveScenario,
       duration: runForever ? 0 : duration,
       speed,
       drop_prob: dropProb,
       jitter,
     });
     try {
-      const { response: res } = await fetchApiWithFallback(
-        "/simulator/start",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scenario,
-            duration: runForever ? 0 : duration,
-            speed,
-            drop_prob: dropProb,
-            jitter,
-            source_id: sourceId,
-          }),
-        },
-      );
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || res.statusText);
-      }
-      const data = await res.json() as { source_id?: string; run_label?: string; status?: string };
+      const data = await startMutation.mutateAsync({
+        sourceId,
+        scenario: effectiveScenario,
+        duration: runForever ? 0 : duration,
+        speed,
+        drop_prob: dropProb,
+        jitter,
+      }) as { source_id?: string; run_label?: string; status?: string };
       const resolvedSourceId = data?.source_id;
       auditLog("simulator.start", {
-        scenario,
+        scenario: effectiveScenario,
         duration: runForever ? 0 : duration,
         speed,
         drop_prob: dropProb,
         jitter,
         resolvedSourceId,
       });
-      fetchStatus(); // fire-and-forget; polling will update state
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to start";
       auditLog("simulator.start", { error: msg });
       setError(msg.includes("abort") ? "Request timed out — simulator may be unavailable" : msg);
-    } finally {
-      setLoading(false);
     }
   }
 
   async function handlePause() {
-    setLoading(true);
     setError(null);
     try {
-      const { response: res } = await fetchApiWithFallback(
-        `/simulator/pause?source_id=${encodeURIComponent(sourceId)}`,
-        { method: "POST" },
-      );
-      if (!res.ok) throw new Error(await res.text());
-      auditLog("simulator.pause");
-      await fetchStatus();
+      await pauseMutation.mutateAsync({ sourceId });
     } catch (e) {
       auditLog("simulator.pause", { error: e instanceof Error ? e.message : "Failed to pause" });
       setError(e instanceof Error ? e.message : "Failed to pause");
-    } finally {
-      setLoading(false);
     }
   }
 
   async function handleResume() {
-    setLoading(true);
     setError(null);
     try {
-      const { response: res } = await fetchApiWithFallback(
-        `/simulator/resume?source_id=${encodeURIComponent(sourceId)}`,
-        { method: "POST" },
-      );
-      if (!res.ok) throw new Error(await res.text());
-      auditLog("simulator.resume");
-      await fetchStatus();
+      await resumeMutation.mutateAsync({ sourceId });
     } catch (e) {
       auditLog("simulator.resume", { error: e instanceof Error ? e.message : "Failed to resume" });
       setError(e instanceof Error ? e.message : "Failed to resume");
-    } finally {
-      setLoading(false);
     }
   }
 
   async function handleStop() {
-    setLoading(true);
     setError(null);
     try {
-      const { response: res } = await fetchApiWithFallback(
-        `/simulator/stop?source_id=${encodeURIComponent(sourceId)}`,
-        { method: "POST" },
-      );
-      if (!res.ok) throw new Error(await res.text());
-      auditLog("simulator.stop");
-      await fetchStatus();
+      await stopMutation.mutateAsync({ sourceId });
     } catch (e) {
       auditLog("simulator.stop", { error: e instanceof Error ? e.message : "Failed to stop" });
       setError(e instanceof Error ? e.message : "Failed to stop");
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -290,9 +224,9 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
           </div>
         </div>
 
-        {error && (
+        {combinedError && (
           <Alert variant="destructive">
-            <AlertDescription>{error}</AlertDescription>
+            <AlertDescription>{combinedError}</AlertDescription>
           </Alert>
         )}
 
@@ -325,21 +259,24 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
             <div className="grid gap-2">
               <Label htmlFor="scenario">Scenario</Label>
               <Select
-                value={scenario}
+                value={effectiveScenario}
                 onValueChange={setScenario}
-                disabled={!canEdit}
+                disabled={!canEdit || supportedScenarios.length === 0}
               >
                 <SelectTrigger id="scenario">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {SCENARIOS.map((s) => (
+                  {supportedScenarios.map((s) => (
                     <SelectItem key={s.value} value={s.value}>
                       {s.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {selectedScenario ? (
+                <p className="text-sm text-muted-foreground">{selectedScenario.description}</p>
+              ) : null}
             </div>
             <div className="grid gap-2">
               <div className="flex items-center gap-2">

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from typing import Tuple
+
+from telemetry_catalog.coordinates import eci_to_ecef_m
 
 
 # WGS84 ellipsoid constants
@@ -50,13 +53,12 @@ def ecef_to_lla(x: float, y: float, z: float) -> Tuple[float, float, float]:
     return lat_deg, lon_deg, alt
 
 
-def eci_to_lla(x: float, y: float, z: float, timestamp) -> Tuple[float, float, float]:
-    """Convert ECI to LLA.
-
-    This is intentionally conservative for now: we do not attempt to
-    approximate Earth rotation or handle precise orbit propagation here.
-    For v1 of the Earth view, ECI-based mappings are not supported and
-    callers should treat this as unavailable.
-    """
-    raise ValueError("eci_to_lla is not implemented; use gps_lla or ecef mappings")
-
+def eci_to_lla(
+    x: float,
+    y: float,
+    z: float,
+    timestamp: datetime,
+) -> Tuple[float, float, float]:
+    """Convert ECI (meters) to geodetic latitude, longitude, altitude."""
+    x_ecef, y_ecef, z_ecef = eci_to_ecef_m(x, y, z, timestamp)
+    return ecef_to_lla(x_ecef, y_ecef, z_ecef)

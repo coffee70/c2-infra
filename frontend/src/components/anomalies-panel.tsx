@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/empty-state";
+import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 
 const SUBSYSTEM_LABELS: Record<string, string> = {
   power: "Power",
@@ -42,6 +43,7 @@ interface AnomalyEntry {
 }
 
 interface AnomaliesPanelProps {
+  sourceId: string;
   power: AnomalyEntry[];
   thermal: AnomalyEntry[];
   adcs: AnomalyEntry[];
@@ -50,6 +52,7 @@ interface AnomaliesPanelProps {
 }
 
 export function AnomaliesPanel({
+  sourceId,
   power,
   thermal,
   adcs,
@@ -108,7 +111,7 @@ export function AnomaliesPanel({
                       {entries.map((entry) => (
                         <li key={entry.name}>
                           <Link
-                            href={`/telemetry/${encodeURIComponent(entry.name)}`}
+                            href={buildTelemetryDetailHref(sourceId, entry.name)}
                             className="block p-2 rounded-md border hover:bg-accent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 text-primary hover:underline underline-offset-4"
                           >
                             <div className="flex items-center justify-between gap-2">

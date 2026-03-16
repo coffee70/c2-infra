@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -11,75 +10,19 @@ import {
 import { ChevronDownIcon } from "lucide-react";
 import { SimilarTelemetryCard } from "@/components/similar-telemetry-card";
 import { Spinner } from "@/components/ui/spinner";
-
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-interface RelatedChannel {
-  name: string;
-  subsystem_tag: string;
-  link_reason: string;
-  current_value?: number | null;
-  current_status?: string | null;
-  last_timestamp?: string | null;
-  units?: string | null;
-}
-
-interface ExplainResponse {
-  what_this_means: string;
-  llm_explanation: string;
-  what_to_check_next: RelatedChannel[];
-  confidence_indicator?: string | null;
-}
+import { useTelemetryExplanationQuery } from "@/lib/query-hooks";
 
 interface ExplanationBlockProps {
   channelName: string;
-  sourceId?: string;
+  sourceId: string;
+  runId?: string;
 }
 
-export function ExplanationBlock({ channelName, sourceId = "default" }: ExplanationBlockProps) {
-  const requestKey = `${channelName}:${sourceId}`;
-  const [result, setResult] = useState<{
-    requestKey: string;
-    data: ExplainResponse | null;
-    error: boolean;
-  }>({ requestKey: "", data: null, error: false });
-  const loading = result.requestKey !== requestKey;
-  const data = loading ? null : result.data;
-  const error = loading ? false : result.error;
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch(
-      `${API_URL}/telemetry/${encodeURIComponent(channelName)}/explain?source_id=${encodeURIComponent(sourceId)}`,
-      { cache: "no-store" }
-    )
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch");
-        return res.json();
-      })
-      .then((explain: ExplainResponse) => {
-        if (!cancelled) {
-          setResult({
-            requestKey,
-            data: explain,
-            error: false,
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setResult({
-            requestKey,
-            data: null,
-            error: true,
-          });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [channelName, requestKey, sourceId]);
+export function ExplanationBlock({ channelName, sourceId, runId }: ExplanationBlockProps) {
+  const explanationQuery = useTelemetryExplanationQuery(channelName, sourceId, runId);
+  const loading = explanationQuery.isLoading;
+  const data = explanationQuery.data ?? null;
+  const error = explanationQuery.isError;
 
   if (loading) {
     return (
@@ -150,7 +93,7 @@ export function ExplanationBlock({ channelName, sourceId = "default" }: Explanat
         </CardContent>
       </Card>
 
-      <SimilarTelemetryCard channels={data.what_to_check_next ?? []} />
+      <SimilarTelemetryCard detailSourceId={runId ?? sourceId} channels={data.what_to_check_next ?? []} />
     </>
   );
 }

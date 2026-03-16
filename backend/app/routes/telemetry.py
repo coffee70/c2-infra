@@ -42,12 +42,14 @@ from app.services.llm_service import MockLLMProvider, OpenAICompatibleLLMProvide
 from app.services.overview_service import (
     add_to_watchlist,
     get_all_telemetry_names,
+    get_all_telemetry_names_for_source,
     get_anomalies,
     get_overview,
     get_watchlist,
     remove_from_watchlist,
 )
 from app.services.realtime_service import (
+    bootstrap_builtin_sources,
     create_source,
     get_telemetry_sources,
     update_source,
@@ -55,6 +57,11 @@ from app.services.realtime_service import (
 from app.utils.subsystem import infer_subsystem
 from app.services.statistics_service import StatisticsService
 from app.services.telemetry_service import TelemetryService, _compute_state
+from app.services.source_run_service import (
+    ensure_run_belongs_to_source,
+    normalize_source_id,
+    run_id_to_source_id,
+)
 from app.config import get_settings
 from app.lib.audit import audit_log
 
@@ -65,6 +72,24 @@ router = APIRouter()
 # Lazy-load providers (embedding model is heavy)
 _embedding_provider = None
 _llm_provider = None
+
+
+def _get_channel_meta(db: Session, source_id: str, name: str) -> TelemetryMetadata | None:
+    logical_source_id = run_id_to_source_id(source_id)
+    return db.execute(
+        select(TelemetryMetadata).where(
+            TelemetryMetadata.source_id == logical_source_id,
+            TelemetryMetadata.name == name,
+        )
+    ).scalars().first()
+
+
+def _resolve_scoped_run_id(source_id: str, run_id: Optional[str] = None) -> str:
+    """Return a source or run id only if it belongs to the scoped source."""
+    try:
+        return ensure_run_belongs_to_source(source_id, run_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Run not found for source")
 
 
 def get_embedding_provider() -> SentenceTransformerEmbeddingProvider:
@@ -99,6 +124,7 @@ def create_schema(
     service = TelemetryService(db, embedding, llm)
     try:
         telemetry_id = service.create_schema(
+            source_id=body.source_id,
             name=body.name,
             units=body.units,
             description=body.description,
@@ -108,7 +134,7 @@ def create_schema(
         )
     except IntegrityError:
         raise HTTPException(status_code=409, detail="Telemetry name already exists")
-    audit_log("schema.create", name=body.name, telemetry_id=str(telemetry_id))
+    audit_log("schema.create", source_id=body.source_id, name=body.name, telemetry_id=str(telemetry_id))
     return TelemetrySchemaResponse(
         status="created",
         telemetry_id=telemetry_id,
@@ -129,7 +155,7 @@ def ingest_data(
         for pt in body.data:
             ts = datetime.fromisoformat(pt.timestamp.replace("Z", "+00:00"))
             data.append((ts, pt.value))
-        rows = service.insert_data(body.telemetry_name, data, source_id=body.source_id)
+        rows = service.insert_data(body.source_id, body.telemetry_name, data)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     audit_log(
@@ -189,20 +215,18 @@ def list_sources(db: Session = Depends(get_db)):
 def create_source_route(
     body: SourceCreate,
     db: Session = Depends(get_db),
+    embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
 ):
-    """Create a new telemetry source (simulator only for now)."""
-    if body.source_type != "simulator":
-        raise HTTPException(
-            status_code=400,
-            detail="Only simulator sources can be created via this endpoint",
-        )
+    """Create a new telemetry source and seed its telemetry catalog."""
     try:
         result = create_source(
             db,
+            embedding_provider=embedding,
             source_type=body.source_type,
             name=body.name,
             description=body.description,
             base_url=body.base_url,
+            telemetry_definition_path=body.telemetry_definition_path,
         )
         audit_log("sources.create", source_id=result["id"], name=body.name)
         return result
@@ -215,16 +239,22 @@ def update_source_route(
     source_id: str,
     body: SourceUpdate,
     db: Session = Depends(get_db),
+    embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
 ):
     """Update a telemetry source (name, description, base_url for simulators)."""
     updates = body.model_dump(exclude_unset=True)
-    result = update_source(
-        db,
-        source_id=source_id,
-        name=updates.get("name"),
-        description=updates.get("description"),
-        base_url=updates.get("base_url"),
-    )
+    try:
+        result = update_source(
+            db,
+            embedding_provider=embedding,
+            source_id=source_id,
+            name=updates.get("name"),
+            description=updates.get("description"),
+            base_url=updates.get("base_url"),
+            telemetry_definition_path=updates.get("telemetry_definition_path"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     if result is None:
         raise HTTPException(status_code=404, detail="Source not found")
     audit_log("sources.update", source_id=source_id)
@@ -237,16 +267,17 @@ def get_source_runs(
     db: Session = Depends(get_db),
 ):
     """List run ids for a source (any channel). Used e.g. by Overview to resolve current run. Newest first."""
-    reg = db.execute(select(TelemetrySource).where(TelemetrySource.id == source_id)).scalars().first()
+    logical_source_id = normalize_source_id(source_id)
+    reg = db.execute(select(TelemetrySource).where(TelemetrySource.id == logical_source_id)).scalars().first()
     source_type = reg.source_type if reg else None
-    if source_type == "vehicle" or (reg is None and source_id == "default"):
-        return ChannelSourcesResponse(sources=[ChannelSourceItem(source_id=source_id, label=reg.name if reg else source_id)])
-    prefix = f"{source_id}-"
+    if source_type == "vehicle" or (reg is None and logical_source_id == normalize_source_id("default")):
+        return ChannelSourcesResponse(sources=[ChannelSourceItem(source_id=logical_source_id, label=reg.name if reg else logical_source_id)])
+    prefix = f"{logical_source_id}-"
     stmt = (
         select(TelemetryData.source_id)
         .where(
             or_(
-                TelemetryData.source_id == source_id,
+                TelemetryData.source_id == logical_source_id,
                 TelemetryData.source_id.like(f"{prefix}%"),
             )
         )
@@ -258,7 +289,7 @@ def get_source_runs(
     registered = {r[0]: r[1] for r in reg_rows}
     items = []
     for rid in run_ids:
-        if rid == source_id:
+        if rid == logical_source_id:
             label = "Current run"
         else:
             label = _format_source_label(rid, registered.get(rid))
@@ -268,11 +299,21 @@ def get_source_runs(
 
 
 @router.get("/watchlist", response_model=WatchlistResponse)
-def list_watchlist(db: Session = Depends(get_db)):
+def list_watchlist(
+    source_id: str = "default",
+    db: Session = Depends(get_db),
+):
     """List watchlist entries."""
-    entries = get_watchlist(db)
+    entries = get_watchlist(db, source_id)
     return WatchlistResponse(
-        entries=[{"name": e["name"], "display_order": e["display_order"]} for e in entries]
+        entries=[
+            {
+                "source_id": e["source_id"],
+                "name": e["name"],
+                "display_order": e["display_order"],
+            }
+            for e in entries
+        ]
     )
 
 
@@ -283,8 +324,9 @@ def add_watchlist(
 ):
     """Add a channel to the watchlist."""
     try:
-        add_to_watchlist(db, body.telemetry_name)
-        audit_log("watchlist.add", telemetry_name=body.telemetry_name)
+        add_to_watchlist(db, body.source_id, body.telemetry_name)
+        db.flush()
+        audit_log("watchlist.add", source_id=body.source_id, telemetry_name=body.telemetry_name)
         return {"status": "added"}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -293,26 +335,38 @@ def add_watchlist(
 @router.delete("/watchlist/{name}")
 def delete_watchlist(
     name: str,
+    source_id: str = "default",
     db: Session = Depends(get_db),
 ):
     """Remove a channel from the watchlist."""
     name = unquote(name)
-    remove_from_watchlist(db, name)
-    audit_log("watchlist.remove", name=name)
+    remove_from_watchlist(db, source_id, name)
+    audit_log("watchlist.remove", source_id=source_id, name=name)
     return {"status": "removed"}
 
 
 @router.get("/list", response_model=TelemetryListResponse)
-def list_telemetry(db: Session = Depends(get_db)):
+def list_telemetry(
+    source_id: str = "default",
+    db: Session = Depends(get_db),
+):
     """List all telemetry names for watchlist config."""
-    names = get_all_telemetry_names(db)
+    names = get_all_telemetry_names_for_source(db, source_id)
     return TelemetryListResponse(names=names)
 
 
 @router.get("/subsystems")
-def list_subsystems(db: Session = Depends(get_db)):
+def list_subsystems(
+    source_id: str = "default",
+    db: Session = Depends(get_db),
+):
     """Get distinct subsystem tags for filter dropdown."""
-    stmt = select(TelemetryMetadata).order_by(TelemetryMetadata.name)
+    logical_source_id = run_id_to_source_id(source_id)
+    stmt = (
+        select(TelemetryMetadata)
+        .where(TelemetryMetadata.source_id == logical_source_id)
+        .order_by(TelemetryMetadata.name)
+    )
     rows = db.execute(stmt).scalars().all()
     subsystems = set()
     for meta in rows:
@@ -321,9 +375,18 @@ def list_subsystems(db: Session = Depends(get_db)):
 
 
 @router.get("/units")
-def list_units(db: Session = Depends(get_db)):
+def list_units(
+    source_id: str = "default",
+    db: Session = Depends(get_db),
+):
     """Get distinct units for filter dropdown."""
-    stmt = select(TelemetryMetadata.units).distinct().order_by(TelemetryMetadata.units)
+    logical_source_id = run_id_to_source_id(source_id)
+    stmt = (
+        select(TelemetryMetadata.units)
+        .where(TelemetryMetadata.source_id == logical_source_id)
+        .distinct()
+        .order_by(TelemetryMetadata.units)
+    )
     rows = db.execute(stmt).fetchall()
     return {"units": [r[0] for r in rows]}
 
@@ -366,21 +429,22 @@ def search(
 
 def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "default") -> ExplainResponse:
     """Build explain response using only DB—no embedding/LLM cold start."""
-    meta = db.execute(select(TelemetryMetadata).where(TelemetryMetadata.name == name)).scalars().first()
+    data_source_id = normalize_source_id(source_id)
+    meta = _get_channel_meta(db, source_id, name)
     if not meta:
         raise ValueError(f"Telemetry not found: {name}")
 
-    stats_row = db.get(TelemetryStatistics, (source_id, meta.id))
+    stats_row = db.get(TelemetryStatistics, (data_source_id, meta.id))
     if not stats_row:
         # Compute stats on-the-fly when missing (e.g. new simulator source)
         stats_service = StatisticsService(db)
-        stats_service._recompute_one(meta.id, source_id=source_id)
+        stats_service._recompute_one(meta.id, source_id=data_source_id)
         db.flush()
-        stats_row = db.get(TelemetryStatistics, (source_id, meta.id))
+        stats_row = db.get(TelemetryStatistics, (data_source_id, meta.id))
     if not stats_row:
         raise ValueError(f"Statistics not computed for: {name}")
 
-    rows = _get_recent_values_db_only(db, name, limit=1, source_id=source_id)
+    rows = _get_recent_values_db_only(db, name, limit=1, source_id=data_source_id)
     recent_value: Optional[float] = float(rows[0][1]) if rows else None
     last_timestamp: Optional[str] = rows[0][0].isoformat() if rows else None
 
@@ -443,6 +507,18 @@ def get_summary(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/sources/{source_id}/channels/{name}/summary", response_model=ExplainResponse)
+def get_summary_for_source(
+    source_id: str,
+    name: str,
+    run_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    name = unquote(name)
+    scoped_run_id = _resolve_scoped_run_id(source_id, run_id)
+    return get_summary(name=name, source_id=scoped_run_id, db=db)
+
+
 @router.get("/{name}/explain", response_model=ExplainResponse)
 def explain(
     name: str,
@@ -459,6 +535,28 @@ def explain(
         return service.get_explanation(name, skip_llm=skip_llm, source_id=source_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/sources/{source_id}/channels/{name}/explain", response_model=ExplainResponse)
+def explain_for_source(
+    source_id: str,
+    name: str,
+    run_id: Optional[str] = None,
+    skip_llm: bool = False,
+    db: Session = Depends(get_db),
+    embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
+    llm: object = Depends(get_llm_provider),
+):
+    name = unquote(name)
+    scoped_run_id = _resolve_scoped_run_id(source_id, run_id)
+    return explain(
+        name=name,
+        skip_llm=skip_llm,
+        source_id=scoped_run_id,
+        db=db,
+        embedding=embedding,
+        llm=llm,
+    )
 
 
 def _format_source_label(source_id: str, registered_name: Optional[str] = None) -> str:
@@ -481,33 +579,34 @@ def get_channel_runs(
 ):
     """List runs for a source that have data for this channel. source_id is from telemetry_sources (vehicle or simulator). Returns run ids with labels (e.g. 'Run started at 2026-03-11 19:03 UTC'). Newest first."""
     name = unquote(name)
-    meta = db.execute(select(TelemetryMetadata).where(TelemetryMetadata.name == name)).scalars().first()
+    meta = _get_channel_meta(db, source_id, name)
     if not meta:
         raise HTTPException(status_code=404, detail="Telemetry not found")
-    reg = db.execute(select(TelemetrySource).where(TelemetrySource.id == source_id)).scalars().first()
+    logical_source_id = normalize_source_id(source_id)
+    reg = db.execute(select(TelemetrySource).where(TelemetrySource.id == logical_source_id)).scalars().first()
     source_type = reg.source_type if reg else None
-    if source_type == "vehicle" or (reg is None and source_id == "default"):
+    if source_type == "vehicle" or (reg is None and logical_source_id == normalize_source_id("default")):
         # Single "run" = the source id itself; include only if channel has data.
         stmt = (
             select(TelemetryData.source_id)
             .where(
                 TelemetryData.telemetry_id == meta.id,
-                TelemetryData.source_id == source_id,
+                TelemetryData.source_id == logical_source_id,
             )
             .limit(1)
         )
         if db.execute(stmt).first():
-            label = reg.name if reg else source_id
-            return ChannelSourcesResponse(sources=[ChannelSourceItem(source_id=source_id, label=label)])
+            label = reg.name if reg else logical_source_id
+            return ChannelSourcesResponse(sources=[ChannelSourceItem(source_id=logical_source_id, label=label)])
         return ChannelSourcesResponse(sources=[])
     # Simulator or unknown: runs are source_id or source_id-*
-    prefix = f"{source_id}-"
+    prefix = f"{logical_source_id}-"
     stmt = (
         select(TelemetryData.source_id)
         .where(
             TelemetryData.telemetry_id == meta.id,
             or_(
-                TelemetryData.source_id == source_id,
+                TelemetryData.source_id == logical_source_id,
                 TelemetryData.source_id.like(f"{prefix}%"),
             ),
         )
@@ -519,7 +618,7 @@ def get_channel_runs(
     items = []
     for rid in run_ids:
         # Use run-style label: when run id equals source id (e.g. legacy "simulator"), show "Current run" not the source name.
-        if rid == source_id:
+        if rid == logical_source_id:
             label = "Current run"
         else:
             label = _format_source_label(rid, registered.get(rid))
@@ -527,41 +626,6 @@ def get_channel_runs(
     # Newest first: run ids ending with timestamp sort desc
     items.sort(key=lambda x: x.source_id, reverse=True)
     return ChannelSourcesResponse(sources=items)
-
-
-@router.get("/{name}/sources", response_model=ChannelSourcesResponse)
-def get_channel_sources(
-    name: str,
-    db: Session = Depends(get_db),
-):
-    """List source_ids that have data for this channel, with display labels (e.g. 'Run started at 2026-03-11 19:03 UTC' for simulator runs)."""
-    name = unquote(name)
-    meta = db.execute(select(TelemetryMetadata).where(TelemetryMetadata.name == name)).scalars().first()
-    if not meta:
-        raise HTTPException(status_code=404, detail="Telemetry not found")
-    stmt = (
-        select(TelemetryData.source_id)
-        .where(TelemetryData.telemetry_id == meta.id)
-        .distinct()
-    )
-    rows = db.execute(stmt).fetchall()
-    source_ids = [r[0] for r in rows]
-    reg_rows = db.execute(select(TelemetrySource.id, TelemetrySource.name)).fetchall()
-    registered = {r[0]: r[1] for r in reg_rows}
-    items = [
-        ChannelSourceItem(
-            source_id=sid,
-            label=_format_source_label(sid, registered.get(sid)),
-        )
-        for sid in source_ids
-    ]
-    # Only treat as simulator run if id contains the run timestamp pattern (avoids misclassifying
-    # registered sources with hyphens or plain "simulator-*" without a run suffix).
-    sim_runs = [x for x in items if re.search(r"\d{4}-\d{2}-\d{2}T", x.source_id)]
-    other = [x for x in items if x not in sim_runs]
-    sim_runs.sort(key=lambda x: x.source_id, reverse=True)
-    other.sort(key=lambda x: x.label)
-    return ChannelSourcesResponse(sources=sim_runs + other)
 
 
 def _get_recent_values_db_only(
@@ -573,14 +637,15 @@ def _get_recent_values_db_only(
     source_id: str = "default",
 ) -> list[tuple[datetime, float]]:
     """Get recent values using only DB—no embedding/LLM cold start. source_id filters when telemetry_data is source-aware."""
-    meta = db.execute(select(TelemetryMetadata).where(TelemetryMetadata.name == name)).scalars().first()
+    data_source_id = normalize_source_id(source_id)
+    meta = _get_channel_meta(db, source_id, name)
     if not meta:
         raise ValueError(f"Telemetry not found: {name}")
     stmt = (
         select(TelemetryData.timestamp, TelemetryData.value)
         .where(
             TelemetryData.telemetry_id == meta.id,
-            TelemetryData.source_id == source_id,
+            TelemetryData.source_id == data_source_id,
         )
         .order_by(desc(TelemetryData.timestamp))
         .limit(limit)
@@ -659,3 +724,35 @@ def get_recent(
         applied_time_filter=applied_time_filter,
         fallback_to_recent=fallback_to_recent,
     )
+
+
+@router.get("/sources/{source_id}/channels/{name}/recent", response_model=RecentDataResponse)
+def get_recent_for_source(
+    source_id: str,
+    name: str,
+    run_id: Optional[str] = None,
+    limit: int = 100,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    name = unquote(name)
+    scoped_run_id = _resolve_scoped_run_id(source_id, run_id)
+    return get_recent(
+        name=name,
+        limit=limit,
+        since=since,
+        until=until,
+        source_id=scoped_run_id,
+        db=db,
+    )
+
+
+@router.get("/sources/{source_id}/channels/{name}/runs", response_model=ChannelSourcesResponse)
+def get_channel_runs_for_source(
+    source_id: str,
+    name: str,
+    db: Session = Depends(get_db),
+):
+    name = unquote(name)
+    return get_channel_runs(name=name, source_id=source_id, db=db)

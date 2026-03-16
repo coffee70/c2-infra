@@ -1,23 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-interface OpsEventSchema {
-  id: string;
-  source_id: string;
-  event_time: string;
-  event_type: string;
-  severity: string;
-  summary: string;
-  entity_type: string;
-  entity_id?: string | null;
-  created_at: string;
-}
+import { useOpsEventsQuery } from "@/lib/query-hooks";
 
 interface ChannelRecentEventsProps {
   channelName: string;
@@ -46,44 +32,15 @@ export function ChannelRecentEvents({
   sourceId = "default",
   sinceMinutes = 60,
 }: ChannelRecentEventsProps) {
-  const requestKey = `${channelName}:${sourceId}:${sinceMinutes}`;
-  const [result, setResult] = useState<{
-    requestKey: string;
-    events: OpsEventSchema[];
-  }>({ requestKey: "", events: [] });
-  const loading = result.requestKey !== requestKey;
-  const events = loading ? [] : result.events;
-
-  useEffect(() => {
-    let cancelled = false;
-    const params = new URLSearchParams({
+  const params = {
       source_id: sourceId,
       since_minutes: String(sinceMinutes),
       channel_name: channelName,
       limit: "20",
-    });
-    fetch(`${API_URL}/ops/events?${params}`)
-      .then((r) => (r.ok ? r.json() : { events: [] }))
-      .then((data) => {
-        if (!cancelled) {
-          setResult({
-            requestKey,
-            events: data.events || [],
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setResult({
-            requestKey,
-            events: [],
-          });
-        }
-      });
-    return () => {
-      cancelled = true;
     };
-  }, [channelName, requestKey, sinceMinutes, sourceId]);
+  const eventsQuery = useOpsEventsQuery(params);
+  const loading = eventsQuery.isLoading;
+  const events = eventsQuery.data?.events ?? [];
 
   if (loading) {
     return (

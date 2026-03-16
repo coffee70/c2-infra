@@ -175,7 +175,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                     # Default to watchlist
                     session = session_factory()
                     try:
-                        channels = get_watchlist_channel_names(session)
+                        channels = get_watchlist_channel_names(session, source_id)
                     finally:
                         session.close()
                 await hub.subscribe_watchlist(websocket, channels, source_id=source_id)

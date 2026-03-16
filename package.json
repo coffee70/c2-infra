@@ -1,0 +1,10 @@
+{
+  "name": "c2-infra",
+  "private": true,
+  "scripts": {
+    "lint": "npm --prefix frontend run lint",
+    "typecheck": "npm --prefix frontend run typecheck",
+    "test": "PYTHONPATH=backend .venv/bin/pytest backend/tests && npm --prefix tools/playwright run test:smoke",
+    "build": "npm --prefix frontend run build"
+  }
+}

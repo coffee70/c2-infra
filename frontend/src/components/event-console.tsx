@@ -16,6 +16,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { TelemetryAlert } from "@/lib/realtime-ws-client";
+import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
+import { DEFAULT_SOURCE_ID } from "@/lib/source-ids";
 
 const SUBSYSTEM_LABELS: Record<string, string> = {
   power: "Power",
@@ -184,9 +186,7 @@ export function EventConsole({
                                     href={
                                       entry.name.startsWith("Orbit: ")
                                         ? "/planning"
-                                        : sourceId && sourceId !== "default"
-                                          ? `/telemetry/${encodeURIComponent(entry.name)}?source=${encodeURIComponent(sourceId)}`
-                                          : `/telemetry/${encodeURIComponent(entry.name)}`
+                                        : buildTelemetryDetailHref(sourceId || DEFAULT_SOURCE_ID, entry.name)
                                     }
                                     className="font-medium text-sm text-primary hover:underline underline-offset-4 truncate flex-1 min-w-0"
                                   >

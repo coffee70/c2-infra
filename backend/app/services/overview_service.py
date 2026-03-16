@@ -16,6 +16,7 @@ from app.models.telemetry import (
     TelemetryStatistics,
     WatchlistEntry,
 )
+from app.services.source_run_service import normalize_source_id, run_id_to_source_id
 from app.services.telemetry_service import _compute_state
 from app.utils.subsystem import infer_subsystem
 
@@ -30,44 +31,72 @@ def get_all_telemetry_names(db: Session) -> list[str]:
     return [r[0] for r in db.execute(stmt).fetchall()]
 
 
-def get_watchlist(db: Session) -> list[dict]:
-    """Get watchlist entries ordered by display_order."""
+def get_all_telemetry_names_for_source(db: Session, source_id: str) -> list[str]:
+    """Get telemetry names for one source."""
+    logical_source_id = run_id_to_source_id(source_id)
     stmt = (
-        select(WatchlistEntry.telemetry_name, WatchlistEntry.display_order)
+        select(TelemetryMetadata.name)
+        .where(TelemetryMetadata.source_id == logical_source_id)
+        .order_by(TelemetryMetadata.name)
+    )
+    return [r[0] for r in db.execute(stmt).fetchall()]
+
+
+def get_watchlist(db: Session, source_id: str) -> list[dict]:
+    """Get watchlist entries ordered by display_order."""
+    logical_source_id = run_id_to_source_id(source_id)
+    stmt = (
+        select(WatchlistEntry.source_id, WatchlistEntry.telemetry_name, WatchlistEntry.display_order)
+        .where(WatchlistEntry.source_id == logical_source_id)
         .order_by(WatchlistEntry.display_order)
     )
     rows = db.execute(stmt).fetchall()
-    return [{"name": r[0], "display_order": r[1]} for r in rows]
+    return [{"source_id": r[0], "name": r[1], "display_order": r[2]} for r in rows]
 
 
-def add_to_watchlist(db: Session, telemetry_name: str) -> None:
+def add_to_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
     """Add a channel to the watchlist."""
+    logical_source_id = run_id_to_source_id(source_id)
     # Verify telemetry exists
     meta = db.execute(
-        select(TelemetryMetadata).where(TelemetryMetadata.name == telemetry_name)
+        select(TelemetryMetadata).where(
+            TelemetryMetadata.source_id == logical_source_id,
+            TelemetryMetadata.name == telemetry_name,
+        )
     ).scalar_one_or_none()
     if not meta:
         raise ValueError(f"Telemetry not found: {telemetry_name}")
 
     existing = db.execute(
-        select(WatchlistEntry).where(WatchlistEntry.telemetry_name == telemetry_name)
+        select(WatchlistEntry).where(
+            WatchlistEntry.source_id == logical_source_id,
+            WatchlistEntry.telemetry_name == telemetry_name,
+        )
     ).scalar_one_or_none()
     if existing:
         return  # Already in watchlist
 
     max_result = db.execute(
-        select(func.max(WatchlistEntry.display_order))
+        select(func.max(WatchlistEntry.display_order)).where(WatchlistEntry.source_id == logical_source_id)
     ).scalar()
     next_order = (max_result or -1) + 1
 
-    entry = WatchlistEntry(telemetry_name=telemetry_name, display_order=next_order)
+    entry = WatchlistEntry(
+        source_id=logical_source_id,
+        telemetry_name=telemetry_name,
+        display_order=next_order,
+    )
     db.add(entry)
 
 
-def remove_from_watchlist(db: Session, telemetry_name: str) -> None:
+def remove_from_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
     """Remove a channel from the watchlist."""
+    logical_source_id = run_id_to_source_id(source_id)
     entry = db.execute(
-        select(WatchlistEntry).where(WatchlistEntry.telemetry_name == telemetry_name)
+        select(WatchlistEntry).where(
+            WatchlistEntry.source_id == logical_source_id,
+            WatchlistEntry.telemetry_name == telemetry_name,
+        )
     ).scalar_one_or_none()
     if entry:
         db.delete(entry)
@@ -77,11 +106,12 @@ def _get_latest_value_and_ts(
     db: Session, telemetry_id, source_id: str = "default"
 ) -> Optional[tuple[float, datetime]]:
     """Get latest value and timestamp for a telemetry point, filtered by source."""
+    data_source_id = normalize_source_id(source_id)
     stmt = (
         select(TelemetryData.timestamp, TelemetryData.value)
         .where(
             TelemetryData.telemetry_id == telemetry_id,
-            TelemetryData.source_id == source_id,
+            TelemetryData.source_id == data_source_id,
         )
         .order_by(desc(TelemetryData.timestamp))
         .limit(1)
@@ -96,11 +126,12 @@ def _get_recent_for_sparkline(
     db: Session, telemetry_id, source_id: str = "default", limit: int = SPARKLINE_POINTS
 ) -> list[dict]:
     """Get recent data points for sparkline (oldest first for chart), filtered by source."""
+    data_source_id = normalize_source_id(source_id)
     stmt = (
         select(TelemetryData.timestamp, TelemetryData.value)
         .where(
             TelemetryData.telemetry_id == telemetry_id,
-            TelemetryData.source_id == source_id,
+            TelemetryData.source_id == data_source_id,
         )
         .order_by(desc(TelemetryData.timestamp))
         .limit(limit)
@@ -115,7 +146,9 @@ def _get_recent_for_sparkline(
 
 def get_overview(db: Session, source_id: str = "default") -> list[dict]:
     """Get overview data for all watchlist channels, optionally filtered by source."""
-    watchlist = get_watchlist(db)
+    data_source_id = normalize_source_id(source_id)
+    logical_source_id = run_id_to_source_id(source_id)
+    watchlist = get_watchlist(db, source_id)
     if not watchlist:
         return []
 
@@ -123,19 +156,22 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
     for entry in watchlist:
         name = entry["name"]
         meta = db.execute(
-            select(TelemetryMetadata).where(TelemetryMetadata.name == name)
+            select(TelemetryMetadata).where(
+                TelemetryMetadata.source_id == logical_source_id,
+                TelemetryMetadata.name == name,
+            )
         ).scalars().first()
         if not meta:
             continue
 
-        stats = db.get(TelemetryStatistics, (source_id, meta.id))
+        stats = db.get(TelemetryStatistics, (data_source_id, meta.id))
 
         # Prefer TelemetryCurrent for the source; fall back to TelemetryData
-        current = db.get(TelemetryCurrent, (source_id, meta.id))
+        current = db.get(TelemetryCurrent, (data_source_id, meta.id))
         if current:
             value, ts = float(current.value), current.generation_time
         else:
-            latest = _get_latest_value_and_ts(db, meta.id, source_id=source_id)
+            latest = _get_latest_value_and_ts(db, meta.id, source_id=data_source_id)
             if not latest:
                 # No data at all for this channel+source; skip
                 continue
@@ -155,7 +191,7 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
         red_high = float(meta.red_high) if meta.red_high is not None else None
         state, state_reason = _compute_state(value, z_score, red_low, red_high, std_dev)
 
-        sparkline_data = _get_recent_for_sparkline(db, meta.id, source_id=source_id)
+        sparkline_data = _get_recent_for_sparkline(db, meta.id, source_id=data_source_id)
 
         result.append({
             "name": meta.name,
@@ -175,24 +211,27 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
 
 def get_anomalies(db: Session, source_id: str = "default") -> dict[str, list[dict]]:
     """Get anomalous channels grouped by subsystem, optionally filtered by source."""
+    data_source_id = normalize_source_id(source_id)
+    logical_source_id = run_id_to_source_id(source_id)
     stmt = (
         select(TelemetryMetadata, TelemetryStatistics)
         .join(
             TelemetryStatistics,
             (TelemetryMetadata.id == TelemetryStatistics.telemetry_id)
-            & (TelemetryStatistics.source_id == source_id),
+            & (TelemetryStatistics.source_id == data_source_id),
         )
+        .where(TelemetryMetadata.source_id == logical_source_id)
     )
     rows = db.execute(stmt).fetchall()
 
     anomalies_by_subsystem: dict[str, list[dict]] = defaultdict(list)
 
     for meta, stats in rows:
-        current = db.get(TelemetryCurrent, (source_id, meta.id))
+        current = db.get(TelemetryCurrent, (data_source_id, meta.id))
         if current:
             value, ts = float(current.value), current.generation_time
         else:
-            latest = _get_latest_value_and_ts(db, meta.id, source_id=source_id)
+            latest = _get_latest_value_and_ts(db, meta.id, source_id=data_source_id)
             if not latest:
                 continue
             value, ts = latest

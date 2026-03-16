@@ -34,76 +34,43 @@ except ImportError:
 _SCRIPT_DIR = __file__.rsplit("/", 1)[0] if "/" in __file__ else "."
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
-from generate_synthetic_telemetry import TELEMETRY_DEFINITIONS
+_REPO_ROOT = __file__.rsplit("/", 2)[0] if "/" in __file__ else "."
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
-# Rates (Hz) per subsystem for mixed-rate streaming
-RATES_HZ = {
-    "power": 1.0,
-    "thermal": 0.2,
-    "adcs": 5.0,
-    "comms": 0.5,
-    "obc": 0.5,
-    "payload": 0.2,
-    "propulsion": 0.1,
-    "gps": 1.0,
-    "safety": 0.2,
-}
+from telemetry_catalog.builtins import MOCK_VEHICLE_SOURCE_ID
+from telemetry_catalog.definitions import channel_rate_hz, load_definition_file
+
+DEFINITION = load_definition_file("vehicles/balerion-surveyor.json")
+TELEMETRY_DEFINITIONS = [
+    (
+        channel.name,
+        channel.units,
+        channel.description,
+        channel.mean,
+        channel.std_dev,
+        channel.subsystem,
+        channel.red_low,
+        channel.red_high,
+    )
+    for channel in DEFINITION.channels
+]
+RATES_HZ = {channel.name: channel_rate_hz(channel) for channel in DEFINITION.channels}
 
 SCENARIOS = {
+    name: scenario.model_dump()
+    for name, scenario in DEFINITION.scenarios.items()
+} or {
     "nominal": {
-        "description": "Normal operation, occasional minor anomalies",
-        "anomaly_fraction": 0.02,
+        "description": "Normal operation",
+        "anomaly_fraction": 0.01,
         "events": [],
-    },
-    "power_sag": {
-        "description": "Power bus voltage sag after t=30s",
-        "anomaly_fraction": 0.01,
-        "events": [
-            {"t0": 30, "duration": 45, "type": "offset", "channels": ["PWR_BUS_A_VOLT", "PWR_BAT_VOLT"], "magnitude": -2.5},
-        ],
-    },
-    "thermal_runaway": {
-        "description": "Thermal panel temps rise after t=20s",
-        "anomaly_fraction": 0.01,
-        "events": [
-            {"t0": 20, "duration": 60, "type": "ramp", "channels": ["THERM_PANEL_1_TEMP", "THERM_PANEL_2_TEMP", "THERM_CPU_TEMP"], "magnitude": 15},
-        ],
-    },
-    "comm_dropout": {
-        "description": "Comms dropout window at t=40-55s",
-        "anomaly_fraction": 0.01,
-        "dropout": {"t0": 40, "duration": 15},
-    },
-    "safe_mode": {
-        "description": "Safe mode triggered at t=25s",
-        "anomaly_fraction": 0.0,
-        "events": [
-            {"t0": 25, "duration": 999, "type": "set", "channels": ["SAFE_MODE"], "magnitude": 1.0},
-        ],
-    },
+    }
 }
-
-
-def get_subsystem(name: str) -> str:
-    prefixes = [
-        ("PWR_", "power"), ("EPS_", "power"),
-        ("THERM_", "thermal"),
-        ("ADCS_", "adcs"),
-        ("COMM_", "comms"),
-        ("OBC_", "obc"),
-        ("PAY_", "payload"),
-        ("PROP_", "propulsion"),
-        ("GPS_", "gps"),
-        ("SAFE_", "safety"), ("WATCHDOG_", "safety"), ("ERR_", "safety"), ("HEALTH_", "safety"),
-    ]
-    for prefix, sub in prefixes:
-        if name.startswith(prefix):
-            return sub
-    return "other"
 
 
 def get_rate(name: str) -> float:
-    return RATES_HZ.get(get_subsystem(name), 0.5)
+    return RATES_HZ.get(name, 0.5)
 
 
 def backfill_historical(
@@ -135,7 +102,7 @@ def backfill_historical(
             try:
                 r = requests.post(
                     data_url,
-                    json={"telemetry_name": name, "data": batch},
+                    json={"telemetry_name": name, "data": batch, "source_id": MOCK_VEHICLE_SOURCE_ID},
                     timeout=30,
                 )
                 if r.status_code != 200:
@@ -232,7 +199,7 @@ def main() -> None:
 
                 seq += 1
                 batch.append({
-                    "source_id": "mock_vehicle",
+                    "source_id": MOCK_VEHICLE_SOURCE_ID,
                     "channel_name": name,
                     "generation_time": now.isoformat(),
                     "value": value,

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TelemetryDetailHeader } from "@/components/telemetry-detail-header";
 import { TelemetryDetailLive } from "@/components/telemetry-detail-live";
@@ -32,6 +32,8 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { ChevronDownIcon } from "lucide-react";
 import { formatSmartValue } from "@/lib/format-value";
+import { useTelemetrySourcesQuery } from "@/lib/query-hooks";
+import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 
 interface ExplainResponse {
   name: string;
@@ -73,8 +75,6 @@ interface TelemetryDetailTabsProps {
   currentRunId: string;
   decodedName: string;
 }
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface TelemetrySource {
   id: string;
@@ -131,22 +131,16 @@ function TelemetryDetailTabsContent({
   decodedName,
 }: TelemetryDetailTabsProps) {
   const [activeTab, setActiveTab] = useState<TabId>("summary");
-  const [sources, setSources] = useState<TelemetrySource[]>([]);
   const router = useRouter();
-  const pathname = usePathname();
   const liveChannel = useRealtimeChannel(decodedName);
   const { isLive } = useRealtimeTelemetry();
-
-  useEffect(() => {
-    fetch(`${API_URL}/telemetry/sources`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : []))
-      .then((list: TelemetrySource[]) => setSources(Array.isArray(list) ? list : []))
-      .catch(() => setSources([]));
-  }, []);
+  const sourcesQuery = useTelemetrySourcesQuery<TelemetrySource[]>();
+  const sources = sourcesQuery.data ?? [];
+  const sourceName = sources.find((source) => source.id === sourceId)?.name ?? sourceId;
 
   const handleSourceChange = (newSourceId: string) => {
     if (newSourceId === sourceId) return;
-    router.replace(`${pathname}?source=${encodeURIComponent(newSourceId)}`);
+    router.replace(buildTelemetryDetailHref(newSourceId, decodedName));
   };
 
   return (
@@ -162,12 +156,21 @@ function TelemetryDetailTabsContent({
             <BreadcrumbItem>
               <BreadcrumbLink asChild>
                 <Link
-                  href="/overview"
+                  href="/sources"
                   className="text-primary hover:underline underline-offset-4"
                 >
-                  Overview
+                  Sources
                 </Link>
               </BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage
+                className="truncate max-w-[200px]"
+                title={sourceName}
+              >
+                {sourceName}
+              </BreadcrumbPage>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
@@ -253,6 +256,7 @@ function TelemetryDetailTabsContent({
                 >
                 <TelemetryDetailHeader
                   name={explain.name}
+                  sourceId={sourceId}
                   value={liveChannel?.value ?? explain.recent_value}
                   units={explain.units}
                   state={liveChannel?.state ?? explain.state}
@@ -436,7 +440,8 @@ function TelemetryDetailTabsContent({
                 >
                 <ExplanationBlock
                   channelName={decodedName}
-                  sourceId={currentRunId}
+                  sourceId={sourceId}
+                  runId={currentRunId}
                 />
                 <ChannelRecentEvents
                   channelName={decodedName}
@@ -452,4 +457,3 @@ function TelemetryDetailTabsContent({
     </div>
   );
 }
-

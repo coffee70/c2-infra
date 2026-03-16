@@ -7,13 +7,14 @@ import { KeyboardShortcutsDialog } from "@/components/keyboard-shortcuts-dialog"
 
 export function KeyboardShortcutsHandler() {
   const pathname = usePathname();
-  const match = pathname?.match(/^\/telemetry\/([^/]+)$/);
+  const match = pathname?.match(/^\/sources\/([^/]+)\/telemetry\/([^/]+)$/);
+  const currentSourceId = match ? decodeURIComponent(match[1]) : "default";
   const currentChannelName = match
-    ? decodeURIComponent(match[1])
+    ? decodeURIComponent(match[2])
     : undefined;
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  useTelemetryKeyboardShortcuts(currentChannelName);
+  useTelemetryKeyboardShortcuts(currentChannelName, currentSourceId);
 
   useEffect(() => {
     const handler = () => setShortcutsOpen(true);

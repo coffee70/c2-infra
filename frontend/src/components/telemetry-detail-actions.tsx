@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -10,62 +10,36 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { addToRecent } from "@/lib/recent-telemetry";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import {
+  useAddToWatchlistMutation,
+  useRemoveFromWatchlistMutation,
+  useWatchlistNames,
+} from "@/lib/query-hooks";
 
 interface TelemetryDetailActionsProps {
   name: string;
+  sourceId: string;
 }
 
-export function TelemetryDetailActions({ name }: TelemetryDetailActionsProps) {
-  const [isFavorite, setIsFavorite] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(false);
+export function TelemetryDetailActions({ name, sourceId }: TelemetryDetailActionsProps) {
+  const { names } = useWatchlistNames(sourceId);
+  const addMutation = useAddToWatchlistMutation(sourceId);
+  const removeMutation = useRemoveFromWatchlistMutation(sourceId);
+  const isFavorite = names.includes(name);
+  const loading = addMutation.isPending || removeMutation.isPending;
+  const error = addMutation.isError || removeMutation.isError;
 
   useEffect(() => {
-    addToRecent(name);
-  }, [name]);
-
-  useEffect(() => {
-    async function check() {
-      try {
-        const res = await fetch(`${API_URL}/telemetry/watchlist`);
-        if (res.ok) {
-          const d = await res.json();
-          const names = (d.entries || []).map((e: { name: string }) => e.name);
-          setIsFavorite(names.includes(name));
-        }
-      } catch {
-        // ignore
-      }
-    }
-    check();
-  }, [name]);
+    addToRecent(sourceId, name);
+  }, [name, sourceId]);
 
   const toggleFavorite = useCallback(async () => {
-    setLoading(true);
-    setError(false);
-    try {
-      if (isFavorite) {
-        await fetch(
-          `${API_URL}/telemetry/watchlist/${encodeURIComponent(name)}`,
-          { method: "DELETE" }
-        );
-        setIsFavorite(false);
-      } else {
-        await fetch(`${API_URL}/telemetry/watchlist`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ telemetry_name: name }),
-        });
-        setIsFavorite(true);
-      }
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
+    if (isFavorite) {
+      await removeMutation.mutateAsync(name);
+    } else {
+      await addMutation.mutateAsync(name);
     }
-  }, [name, isFavorite]);
+  }, [addMutation, isFavorite, name, removeMutation]);
 
   useEffect(() => {
     const handler = () => toggleFavorite();

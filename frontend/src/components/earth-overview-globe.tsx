@@ -3,6 +3,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { Viewer, Entity } from "resium";
 import * as Cesium from "cesium";
+import "cesium/Build/Cesium/Widgets/widgets.css";
 
 import type {
   PositionSample,
@@ -13,6 +14,43 @@ export interface EarthOverviewGlobeProps {
   positions: PositionSample[];
   positionHistoryBySource?: Record<string, PositionHistoryEntry[]>;
 }
+
+let cesiumConfigured = false;
+
+function configureCesium() {
+  if (cesiumConfigured || typeof window === "undefined") {
+    return;
+  }
+
+  const baseUrl = "/cesium/";
+  try {
+    (
+      window as Window & {
+        CESIUM_BASE_URL?: string;
+      }
+    ).CESIUM_BASE_URL = baseUrl;
+
+    const buildModuleUrl = (
+      Cesium as typeof Cesium & {
+        buildModuleUrl?: { setBaseUrl?: (url: string) => void };
+      }
+    ).buildModuleUrl;
+
+    if (buildModuleUrl?.setBaseUrl) {
+      buildModuleUrl.setBaseUrl(baseUrl);
+    } else {
+      console.error(
+        "[EarthOverviewGlobe] Cesium.buildModuleUrl.setBaseUrl is not available; static assets may fail to load and the globe may not render correctly."
+      );
+    }
+  } catch (e) {
+    console.error("[EarthOverviewGlobe] Failed to set Cesium base URL:", e);
+  }
+
+  cesiumConfigured = true;
+}
+
+configureCesium();
 
 const terrainProvider = new Cesium.EllipsoidTerrainProvider();
 
@@ -30,29 +68,7 @@ export function EarthOverviewGlobe({
   );
 
   useEffect(() => {
-    // Configure Cesium asset base path and Ion token once on the client.
-    if (typeof window !== "undefined") {
-      const baseUrl = "/cesium/";
-      try {
-        const buildModuleUrl = (
-          Cesium as typeof Cesium & {
-            buildModuleUrl?: { setBaseUrl?: (url: string) => void };
-          }
-        ).buildModuleUrl;
-        if (buildModuleUrl?.setBaseUrl) {
-          buildModuleUrl.setBaseUrl(baseUrl);
-        } else {
-          console.error(
-            "[EarthOverviewGlobe] Cesium.buildModuleUrl.setBaseUrl is not available; static assets may fail to load and the globe may not render correctly."
-          );
-        }
-      } catch (e) {
-        console.error(
-          "[EarthOverviewGlobe] Failed to set Cesium base URL:",
-          e
-        );
-      }
-    }
+    configureCesium();
     const token = process.env.NEXT_PUBLIC_CESIUM_ION_TOKEN;
     if (token) {
       Cesium.Ion.defaultAccessToken = token;
@@ -74,8 +90,19 @@ export function EarthOverviewGlobe({
     );
   }
 
+  const renderedSources = positions
+    .filter((p) => p.valid && p.lat_deg != null && p.lon_deg != null)
+    .map((p) => p.source_name);
+
   return (
     <div className="absolute inset-0 bg-black" style={{ width: "100%", height: "100%" }}>
+      <div
+        className="sr-only"
+        data-testid="earth-overview-rendered-sources"
+      >
+        Rendered sources:{" "}
+        {renderedSources.length > 0 ? renderedSources.join(", ") : "None"}
+      </div>
       <Viewer
         full
         style={{ width: "100%", height: "100%" }}
@@ -152,4 +179,3 @@ export function EarthOverviewGlobe({
     </div>
   );
 }
-

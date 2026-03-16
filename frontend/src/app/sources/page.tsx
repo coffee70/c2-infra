@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
@@ -17,8 +17,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { SatelliteIcon, CpuIcon } from "lucide-react";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import {
+  useCreateTelemetrySourceMutation,
+  useSimulatorStatusesMap,
+  useTelemetrySourcesQuery,
+  useUpdateTelemetrySourceMutation,
+} from "@/lib/query-hooks";
 
 interface TelemetrySource {
   id: string;
@@ -26,6 +30,7 @@ interface TelemetrySource {
   description?: string | null;
   source_type: string;
   base_url?: string | null;
+  telemetry_definition_path?: string;
 }
 
 interface SimulatorStatus {
@@ -34,105 +39,39 @@ interface SimulatorStatus {
 }
 
 export default function SourcesPage() {
-  const [sources, setSources] = useState<TelemetrySource[]>([]);
-  const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardStep, setWizardStep] = useState<1 | 2>(1);
   const [wizardType, setWizardType] = useState<"vehicle" | "simulator">("simulator");
   const [wizardName, setWizardName] = useState("");
   const [wizardBaseUrl, setWizardBaseUrl] = useState("");
+  const [wizardDefinitionPath, setWizardDefinitionPath] = useState("");
   const [wizardSubmitting, setWizardSubmitting] = useState(false);
   const [wizardError, setWizardError] = useState<string | null>(null);
-  const [simulatorStatuses, setSimulatorStatuses] = useState<Record<string, SimulatorStatus>>({});
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
-
-  const fetchSources = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_URL}/telemetry/sources`, { cache: "no-store" });
-      if (!res.ok) {
-        setSources([]);
-        setSimulatorStatuses({});
-        return;
-      }
-      const data = await res.json();
-      const sourcesList = Array.isArray(data) ? data : [];
-      const sims = sourcesList.filter(
-        (s: TelemetrySource) => s.source_type === "simulator"
-      );
-
-      let initialStatuses: Record<string, SimulatorStatus> = {};
-      if (sims.length > 0) {
-        const results = await Promise.all(
-          sims.map(async (s: TelemetrySource) => {
-            try {
-              const r = await fetch(
-                `${API_URL}/simulator/status?source_id=${encodeURIComponent(s.id)}`,
-                { cache: "no-store" }
-              );
-              const status = r.ok ? await r.json() : { connected: false };
-              return [s.id, status] as const;
-            } catch {
-              return [s.id, { connected: false }] as const;
-            }
-          })
-        );
-        initialStatuses = Object.fromEntries(results);
-      }
-
-      setSources(sourcesList);
-      setSimulatorStatuses(sims.length > 0 ? initialStatuses : {});
-    } catch {
-      setSources([]);
-      setSimulatorStatuses({});
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchSources();
-  }, [fetchSources]);
-
-  useEffect(() => {
-    const sims = sources.filter((s) => s.source_type === "simulator");
-    if (sims.length === 0) return;
-    let cancelled = false;
-    function fetchStatuses() {
-      sims.forEach(async (s) => {
-        try {
-          const res = await fetch(
-            `${API_URL}/simulator/status?source_id=${encodeURIComponent(s.id)}`,
-            { cache: "no-store" }
-          );
-          if (!cancelled && res.ok) {
-            const data = await res.json();
-            setSimulatorStatuses((prev) => ({ ...prev, [s.id]: data }));
-          }
-        } catch {
-          if (!cancelled) {
-            setSimulatorStatuses((prev) => ({ ...prev, [s.id]: { connected: false } }));
-          }
-        }
-      });
-    }
-    fetchStatuses();
-    const id = setInterval(fetchStatuses, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [sources]);
+  const [editDefinitionPath, setEditDefinitionPath] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+  const sourcesQuery = useTelemetrySourcesQuery<TelemetrySource[]>();
+  const createSourceMutation = useCreateTelemetrySourceMutation();
+  const updateSourceMutation = useUpdateTelemetrySourceMutation();
+  const sources = sourcesQuery.data ?? [];
+  const loading = sourcesQuery.isLoading;
 
   const vehicles = sources.filter((s) => s.source_type === "vehicle");
   const simulators = sources.filter((s) => s.source_type === "simulator");
+  const simulatorStatuses = useSimulatorStatusesMap(
+    useMemo(() => simulators.map((simulator) => simulator.id), [simulators]),
+    simulators.length > 0,
+    5000
+  ) as Record<string, SimulatorStatus>;
 
   function openWizard() {
     setWizardStep(1);
     setWizardType("simulator");
     setWizardName("");
     setWizardBaseUrl("");
+    setWizardDefinitionPath("");
     setWizardError(null);
     setWizardOpen(true);
   }
@@ -144,27 +83,23 @@ export default function SourcesPage() {
   }
 
   async function handleWizardSubmit() {
-    if (wizardType !== "simulator" || !wizardName.trim() || !wizardBaseUrl.trim()) {
-      setWizardError("Name and Base URL are required");
+    if (!wizardName.trim() || !wizardDefinitionPath.trim()) {
+      setWizardError("Name and telemetry definition path are required");
+      return;
+    }
+    if (wizardType === "simulator" && !wizardBaseUrl.trim()) {
+      setWizardError("Simulator base URL is required");
       return;
     }
     setWizardSubmitting(true);
     setWizardError(null);
     try {
-      const res = await fetch(`${API_URL}/telemetry/sources`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source_type: "simulator",
-          name: wizardName.trim(),
-          base_url: wizardBaseUrl.trim(),
-        }),
+      await createSourceMutation.mutateAsync({
+        source_type: wizardType,
+        name: wizardName.trim(),
+        base_url: wizardType === "simulator" ? wizardBaseUrl.trim() : undefined,
+        telemetry_definition_path: wizardDefinitionPath.trim(),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || res.statusText);
-      }
-      await fetchSources();
       setWizardOpen(false);
     } catch (e) {
       setWizardError(e instanceof Error ? e.message : "Failed to create source");
@@ -177,24 +112,25 @@ export default function SourcesPage() {
     setEditingSourceId(source.id);
     setEditName(source.name);
     setEditBaseUrl(source.base_url || "");
+    setEditDefinitionPath(source.telemetry_definition_path || "");
+    setEditError(null);
   }
 
   async function handleEditSubmit() {
     if (!editingSourceId) return;
+    const source = sources.find((entry) => entry.id === editingSourceId);
+    const isSimulator = source?.source_type === "simulator";
     try {
-      const res = await fetch(`${API_URL}/telemetry/sources/${encodeURIComponent(editingSourceId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: editName.trim(),
-          base_url: editBaseUrl.trim() || undefined,
-        }),
+      setEditError(null);
+      await updateSourceMutation.mutateAsync({
+        sourceId: editingSourceId,
+        name: editName.trim(),
+        base_url: editBaseUrl.trim() || undefined,
+        telemetry_definition_path: isSimulator ? undefined : editDefinitionPath.trim() || undefined,
       });
-      if (!res.ok) throw new Error(await res.text());
-      await fetchSources();
       setEditingSourceId(null);
-    } catch {
-      // TODO: show error
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Failed to update source");
     }
   }
 
@@ -226,21 +162,82 @@ export default function SourcesPage() {
               <p className="text-sm text-muted-foreground">No vehicles registered.</p>
             ) : (
               <ul className="space-y-2">
-                {vehicles.map((s) => (
-                  <li
-                    key={s.id}
-                    className="flex items-center justify-between py-2 border-b last:border-0"
-                  >
-                    <div>
-                      <span className="font-medium">{s.name}</span>
-                      {s.description && (
-                        <span className="ml-2 text-sm text-muted-foreground">
-                          {s.description}
-                        </span>
+                {vehicles.map((s) => {
+                  const isEditing = editingSourceId === s.id;
+                  return (
+                    <li
+                      key={s.id}
+                      className="flex flex-col gap-2 py-3 border-b last:border-0"
+                    >
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div>
+                          <span className="font-medium">{s.name}</span>
+                          {s.description && (
+                            <span className="ml-2 text-sm text-muted-foreground">
+                              {s.description}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          {!isEditing ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openEdit(s)}
+                            >
+                              Edit
+                            </Button>
+                          ) : (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingSourceId(null);
+                                  setEditError(null);
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                              <Button size="sm" onClick={handleEditSubmit}>
+                                Save
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {!isEditing ? (
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {s.telemetry_definition_path || "—"}
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <div>
+                              <Label htmlFor={`edit-name-${s.id}`}>Name</Label>
+                              <Input
+                                id={`edit-name-${s.id}`}
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                className="mt-1"
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor={`edit-defpath-${s.id}`}>Definition path</Label>
+                              <Input
+                                id={`edit-defpath-${s.id}`}
+                                value={editDefinitionPath}
+                                onChange={(e) => setEditDefinitionPath(e.target.value)}
+                                className="mt-1"
+                              />
+                            </div>
+                          </div>
+                          {editError ? <p className="text-sm text-destructive">{editError}</p> : null}
+                        </div>
                       )}
-                    </div>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </CardContent>
@@ -296,7 +293,10 @@ export default function SourcesPage() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => setEditingSourceId(null)}
+                                onClick={() => {
+                                  setEditingSourceId(null);
+                                  setEditError(null);
+                                }}
                               >
                                 Cancel
                               </Button>
@@ -308,32 +308,41 @@ export default function SourcesPage() {
                         </div>
                       </div>
                       {!isEditing ? (
-                        <p className="text-xs text-muted-foreground font-mono">
-                          {s.base_url || "—"}
-                        </p>
+                        <div className="space-y-1 text-xs text-muted-foreground font-mono">
+                          <p>{s.base_url || "—"}</p>
+                          <p>{s.telemetry_definition_path || "—"}</p>
+                        </div>
                       ) : (
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          <div>
-                            <Label htmlFor={`edit-name-${s.id}`}>Name</Label>
-                            <Input
-                              id={`edit-name-${s.id}`}
-                              value={editName}
-                              onChange={(e) => setEditName(e.target.value)}
-                              className="mt-1"
-                            />
+                        <div className="space-y-2">
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <div>
+                              <Label htmlFor={`edit-name-${s.id}`}>Name</Label>
+                              <Input
+                                id={`edit-name-${s.id}`}
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                className="mt-1"
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor={`edit-baseurl-${s.id}`}>Base URL</Label>
+                              <Input
+                                id={`edit-baseurl-${s.id}`}
+                                value={editBaseUrl}
+                                onChange={(e) => setEditBaseUrl(e.target.value)}
+                                placeholder="http://simulator:8001"
+                                className="mt-1"
+                              />
+                            </div>
                           </div>
-                          <div>
-                            <Label htmlFor={`edit-baseurl-${s.id}`}>Base URL</Label>
-                            <Input
-                              id={`edit-baseurl-${s.id}`}
-                              value={editBaseUrl}
-                              onChange={(e) => setEditBaseUrl(e.target.value)}
-                              placeholder="http://simulator:8001"
-                              className="mt-1"
-                            />
-                          </div>
+                          {editError ? <p className="text-sm text-destructive">{editError}</p> : null}
                         </div>
                       )}
+                      {isEditing ? (
+                        <p className="text-xs text-muted-foreground font-mono">
+                          Definition path is fixed by the simulator runtime: {s.telemetry_definition_path || "—"}
+                        </p>
+                      ) : null}
                     </li>
                   );
                 })}
@@ -347,28 +356,31 @@ export default function SourcesPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {wizardStep === 1 ? "Add source" : "Add simulator"}
+              {wizardStep === 1 ? "Add source" : `Add ${wizardType}`}
             </DialogTitle>
             <DialogDescription>
               {wizardStep === 1
                 ? "Choose the type of source you want to add. Vehicles connect to physical or external telemetry streams; simulators run synthetic data for testing."
-                : "Enter the simulator connection details. The base URL is used by the server to reach the simulator."}
+                : "Enter the source details. The telemetry definition path must resolve inside the backend definitions directory."}
             </DialogDescription>
           </DialogHeader>
           {wizardStep === 1 ? (
             <div className="grid gap-3 py-4">
               <button
                 type="button"
-                disabled
-                className="flex items-start gap-4 rounded-lg border border-input bg-muted/30 p-4 text-left opacity-60 cursor-not-allowed"
+                onClick={() => {
+                  setWizardType("vehicle");
+                  handleWizardNext();
+                }}
+                className="flex items-start gap-4 rounded-lg border border-input bg-background p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
               >
-                <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted">
-                  <SatelliteIcon className="size-6 text-muted-foreground" />
+                <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                  <SatelliteIcon className="size-6 text-primary" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">Vehicle</p>
                   <p className="mt-0.5 text-sm text-muted-foreground">
-                    Connect to a physical spacecraft or external telemetry stream. Coming soon.
+                    Register a physical spacecraft or external telemetry stream using a shared telemetry definition file.
                   </p>
                 </div>
               </button>
@@ -386,7 +398,7 @@ export default function SourcesPage() {
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">Simulator</p>
                   <p className="mt-0.5 text-sm text-muted-foreground">
-                    Add an in-app or remote simulator instance to generate synthetic telemetry for testing and demos.
+                    Add an in-app or remote simulator instance backed by a source-specific telemetry definition file.
                   </p>
                 </div>
               </button>
@@ -404,18 +416,30 @@ export default function SourcesPage() {
                 />
               </div>
               <div>
-                <Label htmlFor="wizard-baseurl">Base URL</Label>
+                <Label htmlFor="wizard-definition-path">Telemetry definition path</Label>
                 <Input
-                  id="wizard-baseurl"
-                  value={wizardBaseUrl}
-                  onChange={(e) => setWizardBaseUrl(e.target.value)}
-                  placeholder="http://simulator:8001"
+                  id="wizard-definition-path"
+                  value={wizardDefinitionPath}
+                  onChange={(e) => setWizardDefinitionPath(e.target.value)}
+                  placeholder={wizardType === "simulator" ? "simulators/drogonsat.yaml" : "vehicles/aegon-relay.yaml"}
                   className="mt-1"
                 />
-                <p className="text-xs text-muted-foreground mt-1">
-                  URL the server uses to reach the simulator (e.g. http://simulator:8001).
-                </p>
               </div>
+              {wizardType === "simulator" ? (
+                <div>
+                  <Label htmlFor="wizard-baseurl">Base URL</Label>
+                  <Input
+                    id="wizard-baseurl"
+                    value={wizardBaseUrl}
+                    onChange={(e) => setWizardBaseUrl(e.target.value)}
+                    placeholder="http://simulator:8001"
+                    className="mt-1"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    URL the server uses to reach the simulator (e.g. http://simulator:8001).
+                  </p>
+                </div>
+              ) : null}
               {wizardError && (
                 <p className="text-sm text-destructive">{wizardError}</p>
               )}

@@ -73,7 +73,7 @@ To see a simulator’s position and trail on the globe:
 
 1. **Generate position telemetry** — On the [Sources](/sources) page, add a simulator (if needed), click **Manage**, then **Start**. The simulator emits position channels (e.g. `GPS_LAT`, `GPS_LON`, `GPS_ALT`) along with other telemetry.
 2. **Open Planning** — Go to the [Planning](/planning) tab. In the Earth view card, open **Show on globe** and select the simulator (and any other sources you want).
-3. **Set frame and channels** — In **Position mapping**, find the simulator row. If it shows “Not configured,” expand the row. Choose **frame** (e.g. GPS lat/lon/alt), set the channel names (e.g. `GPS_LAT`, `GPS_LON`, `GPS_ALT` for the default simulator), then click **Save mapping**.
+3. **Confirm the mapping** — Built-in and newly registered sources seed their position mapping from the telemetry definition file. In **Position mapping**, verify the frame and channel names if you want operator confirmation or an override. `DrogonSat` uses GPS/LLA channels; `RhaegalSat` uses ECEF XYZ channels.
 4. Planning resolves the simulator source to its **current run** automatically. The globe then shows the simulator’s **current position** (point and label), a **recent trail** (polyline), and the correct `Live` status as telemetry is received for that run.
 5. Use **Nominal** or **Orbit nominal** when you want a stable realistic path on the globe. Use **Orbit decay**, **Orbit highly elliptical**, **Orbit suborbital**, or **Orbit escape** only when you intentionally want the orbit-analysis badges and alerting to exercise those cases.
 
@@ -87,4 +87,4 @@ For sources that have a **position mapping** (and thus a position telemetry stre
 
 - **What anomalies mean** — *Escape trajectory*: orbital energy ≥ 0 (unbound). *Suborbital*: velocity < 7 km/s at altitude < 1000 km. *Orbit decay*: predicted perigee below 120 km. *Highly elliptical*: eccentricity > 0.2 for an expected LEO mission. Status updates are pushed in real time over the same WebSocket as telemetry and alerts.
 
-The built-in simulator keeps nominal `GPS_*` telemetry smooth and bounded so Planning trails stay readable. Orbit-analysis edge cases are exposed as explicit simulator presets instead of random GPS spikes.
+The built-in simulators keep their nominal position telemetry smooth and bounded so Planning trails stay readable. `DrogonSat` exercises GPS/LLA feeds, while `RhaegalSat` exercises ECEF feeds. Orbit-analysis edge cases are exposed as explicit simulator presets instead of random position spikes.

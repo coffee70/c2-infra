@@ -1,11 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
+import { useSimulatorStatusQuery } from "@/lib/query-hooks";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 export interface SimulatorRuntimeStatus {
   connected: boolean;
+  supported_scenarios?: {
+    name: string;
+    description: string;
+  }[];
   state?: "idle" | "running" | "paused";
   config?: {
     scenario: string;
@@ -69,72 +74,18 @@ export function useSimulatorRuntime({
 }: UseSimulatorRuntimeOptions): SimulatorRuntimeState & {
   refresh: () => Promise<void>;
 } {
-  const initialState = useMemo(
-    () => toRuntimeState(enabled ? initialStatus : null),
-    [enabled, initialStatus]
-  );
-  const [runtimeStore, setRuntimeStore] = useState<{
-    sourceId: string;
-    runtime: SimulatorRuntimeState;
-  }>(() => ({
-    sourceId,
-    runtime: initialState,
-  }));
-  const runtime =
-    enabled && runtimeStore.sourceId === sourceId
-      ? runtimeStore.runtime
-      : initialState;
-
-  const refresh = useCallback(async () => {
-    if (!enabled) return;
-    try {
-      const status = await fetchSimulatorRuntimeStatus(sourceId);
-      setRuntimeStore({
-        sourceId,
-        runtime: toRuntimeState(status),
-      });
-    } catch {
-      setRuntimeStore({
-        sourceId,
-        runtime: toRuntimeState({ connected: false }),
-      });
-    }
-  }, [enabled, sourceId]);
-
-  useEffect(() => {
-    if (!enabled) return;
-
-    let cancelled = false;
-
-    const load = async () => {
-      try {
-        const status = await fetchSimulatorRuntimeStatus(sourceId);
-        if (!cancelled) {
-          setRuntimeStore({
-            sourceId,
-            runtime: toRuntimeState(status),
-          });
-        }
-      } catch {
-        if (!cancelled) {
-          setRuntimeStore({
-            sourceId,
-            runtime: toRuntimeState({ connected: false }),
-          });
-        }
-      }
-    };
-
-    load();
-    const intervalId = setInterval(load, pollMs);
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-    };
-  }, [enabled, pollMs, sourceId]);
+  const initialState = useMemo(() => toRuntimeState(enabled ? initialStatus : null), [enabled, initialStatus]);
+  const statusQuery = useSimulatorStatusQuery(sourceId, {
+    enabled,
+    refetchInterval: pollMs,
+    initialData: initialStatus,
+  });
+  const runtime = enabled ? toRuntimeState(statusQuery.data ?? { connected: false }) : initialState;
 
   return {
     ...runtime,
-    refresh,
+    refresh: async () => {
+      await statusQuery.refetch();
+    },
   };
 }

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from app.utils.coordinates import ecef_to_lla
+from app.utils.coordinates import ecef_to_lla, eci_to_lla
 from app.orbit.math import (
     EARTH_RADIUS_KM,
     MU_KM3_S2,
@@ -22,6 +22,8 @@ from app.orbit import submit_position_sample, get_status
 from app.orbit.state import get_orbit_state
 from app.realtime.processor import RealtimeProcessor
 from app.services.source_run_service import clear_active_run, register_active_run
+from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID, RHAEGALSAT_SOURCE_ID
+from telemetry_catalog.coordinates import ecef_to_eci_m
 
 
 class TestLlaToEcefKm:
@@ -36,6 +38,16 @@ class TestLlaToEcefKm:
         x_km, y_km, z_km = lla_to_ecef_km(lat, lon, alt_m)
         x_m, y_m, z_m = x_km * 1000, y_km * 1000, z_km * 1000
         lat2, lon2, alt2 = ecef_to_lla(x_m, y_m, z_m)
+        assert lat2 == pytest.approx(lat, abs=1e-6)
+        assert lon2 == pytest.approx(lon, abs=1e-6)
+        assert alt2 == pytest.approx(alt_m, abs=0.01)
+
+    def test_roundtrip_with_eci_to_lla(self) -> None:
+        lat, lon, alt_m = 12.0, -45.0, 550_000.0
+        ts = datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc)
+        x_km, y_km, z_km = lla_to_ecef_km(lat, lon, alt_m)
+        x_eci, y_eci, z_eci = ecef_to_eci_m(x_km * 1000, y_km * 1000, z_km * 1000, ts)
+        lat2, lon2, alt2 = eci_to_lla(x_eci, y_eci, z_eci, ts)
         assert lat2 == pytest.approx(lat, abs=1e-6)
         assert lon2 == pytest.approx(lon, abs=1e-6)
         assert alt2 == pytest.approx(alt_m, abs=0.01)
@@ -195,7 +207,12 @@ class TestRealtimeProcessorOrbitHandoff:
         )
         processor = RealtimeProcessor()
         processor._orbit_mappings = {
-            "simulator": ("GPS_LAT", "GPS_LON", "GPS_ALT"),
+            DROGONSAT_SOURCE_ID: {
+                "frame_type": "gps_lla",
+                "lat": "GPS_LAT",
+                "lon": "GPS_LON",
+                "alt": "GPS_ALT",
+            },
         }
         processor._orbit_mappings_at = time.time()
         processor._orbit_position_buffer.clear()
@@ -212,28 +229,28 @@ class TestRealtimeProcessorOrbitHandoff:
         ts = datetime(2026, 3, 13, 17, 29, 17, tzinfo=timezone.utc)
         processor._maybe_submit_orbit_sample(
             MagicMock(),
-            "simulator-nominal-2026-03-13T17-29-17Z",
+            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
             "GPS_LAT",
             1.0,
             ts,
         )
         processor._maybe_submit_orbit_sample(
             MagicMock(),
-            "simulator-nominal-2026-03-13T17-29-17Z",
+            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
             "GPS_LON",
             2.0,
             ts,
         )
         processor._maybe_submit_orbit_sample(
             MagicMock(),
-            "simulator-nominal-2026-03-13T17-29-17Z",
+            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
             "GPS_ALT",
             400_000.0,
             ts,
         )
 
         assert submitted == [
-            ("simulator", ts.timestamp(), 1.0, 2.0, 400_000.0),
+            (DROGONSAT_SOURCE_ID, ts.timestamp(), 1.0, 2.0, 400_000.0),
         ]
 
     def test_submit_orbit_sample_does_not_mix_timestamps(
@@ -246,7 +263,12 @@ class TestRealtimeProcessorOrbitHandoff:
         )
         processor = RealtimeProcessor()
         processor._orbit_mappings = {
-            "simulator": ("GPS_LAT", "GPS_LON", "GPS_ALT"),
+            DROGONSAT_SOURCE_ID: {
+                "frame_type": "gps_lla",
+                "lat": "GPS_LAT",
+                "lon": "GPS_LON",
+                "alt": "GPS_ALT",
+            },
         }
         processor._orbit_mappings_at = time.time()
         processor._orbit_position_buffer.clear()
@@ -264,50 +286,55 @@ class TestRealtimeProcessorOrbitHandoff:
         ts2 = datetime(2026, 3, 13, 17, 29, 18, tzinfo=timezone.utc)
         processor._maybe_submit_orbit_sample(
             MagicMock(),
-            "simulator-nominal-2026-03-13T17-29-17Z",
+            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
             "GPS_LAT",
             1.0,
             ts1,
         )
         processor._maybe_submit_orbit_sample(
             MagicMock(),
-            "simulator-nominal-2026-03-13T17-29-17Z",
+            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
             "GPS_LON",
             2.0,
             ts2,
         )
         processor._maybe_submit_orbit_sample(
             MagicMock(),
-            "simulator-nominal-2026-03-13T17-29-17Z",
+            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
             "GPS_ALT",
             400_000.0,
             ts1,
         )
         processor._maybe_submit_orbit_sample(
             MagicMock(),
-            "simulator-nominal-2026-03-13T17-29-17Z",
+            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
             "GPS_LON",
             2.1,
             ts1,
         )
 
         assert submitted == [
-            ("simulator", ts1.timestamp(), 1.0, 2.1, 400_000.0),
+            (DROGONSAT_SOURCE_ID, ts1.timestamp(), 1.0, 2.1, 400_000.0),
         ]
 
     def test_older_run_events_do_not_overwrite_newer_active_run(
         self,
         monkeypatch,
     ) -> None:
-        clear_active_run("simulator")
-        register_active_run("simulator-orbit_escape-2026-03-13T19-26-42Z")
+        clear_active_run(DROGONSAT_SOURCE_ID)
+        register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-26-42Z")
         monkeypatch.setattr(
             "app.realtime.processor.get_realtime_bus",
             lambda: MagicMock(),
         )
         processor = RealtimeProcessor()
         processor._orbit_mappings = {
-            "simulator": ("GPS_LAT", "GPS_LON", "GPS_ALT"),
+            DROGONSAT_SOURCE_ID: {
+                "frame_type": "gps_lla",
+                "lat": "GPS_LAT",
+                "lon": "GPS_LON",
+                "alt": "GPS_ALT",
+            },
         }
         processor._orbit_mappings_at = time.time()
         processor._orbit_position_buffer.clear()
@@ -328,11 +355,105 @@ class TestRealtimeProcessorOrbitHandoff:
         ):
             processor._maybe_submit_orbit_sample(
                 MagicMock(),
-                "simulator-orbit_highly_elliptical-2026-03-13T19-26-16Z",
+                f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-26-16Z",
                 channel_name,
                 value,
                 ts,
             )
 
         assert submitted == []
-        clear_active_run("simulator")
+        clear_active_run(DROGONSAT_SOURCE_ID)
+
+    def test_submit_orbit_sample_converts_ecef_mapping(
+        self,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "app.realtime.processor.get_realtime_bus",
+            lambda: MagicMock(),
+        )
+        processor = RealtimeProcessor()
+        processor._orbit_mappings = {
+            RHAEGALSAT_SOURCE_ID: {
+                "frame_type": "ecef",
+                "x": "POS_ECEF_X",
+                "y": "POS_ECEF_Y",
+                "z": "POS_ECEF_Z",
+            },
+        }
+        processor._orbit_mappings_at = time.time()
+        processor._orbit_position_buffer.clear()
+
+        submitted = []
+        monkeypatch.setattr(
+            "app.orbit.submit_position_sample",
+            lambda source_id, timestamp, lat, lon, alt: submitted.append(
+                (source_id, timestamp, lat, lon, alt)
+            ),
+        )
+
+        ts = datetime(2026, 3, 13, 17, 29, 17, tzinfo=timezone.utc)
+        for channel_name, value in (
+            ("POS_ECEF_X", 6778137.0),
+            ("POS_ECEF_Y", 0.0),
+            ("POS_ECEF_Z", 0.0),
+        ):
+            processor._maybe_submit_orbit_sample(
+                MagicMock(),
+                f"{RHAEGALSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
+                channel_name,
+                value,
+                ts,
+            )
+
+        assert len(submitted) == 1
+        assert submitted[0][0] == RHAEGALSAT_SOURCE_ID
+
+    def test_submit_orbit_sample_converts_eci_mapping(
+        self,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "app.realtime.processor.get_realtime_bus",
+            lambda: MagicMock(),
+        )
+        processor = RealtimeProcessor()
+        processor._orbit_mappings = {
+            RHAEGALSAT_SOURCE_ID: {
+                "frame_type": "eci",
+                "x": "POS_ECI_X",
+                "y": "POS_ECI_Y",
+                "z": "POS_ECI_Z",
+            },
+        }
+        processor._orbit_mappings_at = time.time()
+        processor._orbit_position_buffer.clear()
+
+        submitted = []
+        monkeypatch.setattr(
+            "app.orbit.submit_position_sample",
+            lambda source_id, timestamp, lat, lon, alt: submitted.append(
+                (source_id, timestamp, lat, lon, alt)
+            ),
+        )
+
+        ts = datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc)
+        x_eci, y_eci, z_eci = ecef_to_eci_m(6778137.0, 0.0, 0.0, ts)
+        for channel_name, value in (
+            ("POS_ECI_X", x_eci),
+            ("POS_ECI_Y", y_eci),
+            ("POS_ECI_Z", z_eci),
+        ):
+            processor._maybe_submit_orbit_sample(
+                MagicMock(),
+                f"{RHAEGALSAT_SOURCE_ID}-2026-03-15T12-00-00Z",
+                channel_name,
+                value,
+                ts,
+            )
+
+        assert len(submitted) == 1
+        assert submitted[0][0] == RHAEGALSAT_SOURCE_ID
+        assert submitted[0][2] == pytest.approx(0.0, abs=1e-6)
+        assert submitted[0][3] == pytest.approx(0.0, abs=1e-6)
+        assert submitted[0][4] == pytest.approx(400_000.0, abs=0.1)

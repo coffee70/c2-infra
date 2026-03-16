@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-source telemetry definition files** — Vehicles and simulators now register with a JSON or YAML `telemetry_definition_path`. The backend validates the file, seeds that source’s telemetry catalog automatically, and seeds any inline position mapping so the system knows which channels to expect before the source goes live.
+- **Built-in source catalog refresh** — The local stack now ships with four named built-ins backed by fixed UUID source IDs: `Aegon Relay`, `Balerion Surveyor`, `DrogonSat`, and `RhaegalSat`.
 - **Simulator orbit anomaly presets** — The simulator now includes explicit `orbit_nominal`, `orbit_decay`, `orbit_highly_elliptical`, `orbit_suborbital`, and `orbit_escape` scenarios so operators can drive Planning and orbit-analysis workflows with intentional trajectory cases instead of random GPS corruption.
 - **Real-time orbit validation** — Backend orbit validation for sources with an active position channel mapping. Assembles position from GPS/LLA (or ECEF) channels, computes orbital parameters (perigee, apogee, eccentricity, velocity), classifies LEO/MEO/GEO, and detects anomalies (escape trajectory, suborbital, orbit decay, highly elliptical LEO). Status is exposed via `GET /telemetry/orbit/status` and broadcast over WebSocket (`orbit_status`) when status changes.
 - **Planning page orbit status and anomaly banner** — For sources with a position mapping that are shown on the globe, the left panel shows orbit status (VALID/LEO nominal or anomaly type). When any visible source has an orbit anomaly, a prominent alert banner appears in the left panel with source name and reason. Status updates in real time via WebSocket.
@@ -28,8 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Operator-facing **Position mapping** UI on the Planning page (overlay control) to configure which telemetry channels (e.g. `GPS_LAT`/`GPS_LON`/`GPS_ALT` or XYZ) should be treated as position for each source.
 - **Constellation: Sources tab and multi-sim support**
   - **Sources** tab (replaces Simulator): lists Vehicles and Simulators in separate sections
-  - Add-source wizard: add simulators with name and Base URL (server-reachable URL)
-  - Edit simulators: update name and Base URL from the Sources page
+  - Add-source wizard: add vehicles or simulators with a telemetry definition path; simulators also include a Base URL (server-reachable URL)
+  - Edit sources: update name, Base URL, and telemetry definition path from the Sources page
   - Overview source selector grouped by **Vehicles** and **Simulators**
   - Per-simulator backend proxy: all simulator routes require `source_id` and resolve URL from DB
   - Two simulator containers (`simulator`, `simulator2`) in docker-compose for testing multi-sim
@@ -55,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Built-in simulators are now distinct spacecraft instead of duplicate feeds. `DrogonSat` is a lighter GPS/LLA bus with fewer computers and a single propulsion tank; `RhaegalSat` is a heavier ECEF bus with multiple OBC temperature points, dual tanks, and a larger payload/comms set.
+- Telemetry detail navigation is now **source-first** across the stack. Channel detail pages use `/sources/{source_id}/telemetry/{channel_name}`, watchlists are scoped per source, and channel catalogs/search/filtering now only expose channels that belong to the selected source.
 - App bar navigation now treats Docs as a right-side help icon instead of a primary tab, aligning documentation access with other utility actions like keyboard shortcuts.
 - **Simulator nominal orbit telemetry** — Nominal `GPS_LAT`, `GPS_LON`, and `GPS_ALT` now come from a bounded continuous orbit perturbation model, so default Planning globe tracks stay smooth and physically plausible instead of picking up one-sample anomaly spikes.
 - **Cesium static assets:** No longer committed; `frontend/public/cesium` is in `.gitignore` and is copied from `node_modules/cesium/Build/Cesium` at build time (`prebuild` / `predev` script). Removes 392+ vendored files from the repo and keeps assets in sync with the installed `cesium` package. If your branch already had these files tracked, run `git rm -r --cached frontend/public/cesium` once.
@@ -75,6 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cross-source watchlist adds** — Adding the same channel name to different sources now persists correctly. A leftover legacy unique index on `watchlist.telemetry_name` was blocking source-scoped watchlists and causing add-to-watchlist actions to appear successful before the database commit failed.
+- Switching from a valid channel detail page to a source that does not expose that channel no longer leads operators into invalid channel pages or 404s. The app now redirects to the selected source’s Overview with an unavailable notice.
+- **Planning globe renderer startup:** Cesium static assets now resolve from the app’s `/cesium/` public path before the first globe render, preventing the Planning Earth view from crashing on startup and dropping otherwise-valid live simulator position markers.
 - **Orbit status WebSocket callbacks** — Orbit status updates now invoke registered per-source callbacks correctly, so live `orbit_status` broadcasts reach connected clients instead of being dropped by a mismatched status payload check.
 - **Planning run handoff on the globe:** The Planning page now resolves each selected source to its current run for live position and orbit status. A simulator with a position mapping stays source-oriented in the UI, but the globe, `Live`/`Stale` indicator, trail, and orbit badges now follow the simulator's active run instead of reading only from the base source id.
 - **Orbit anomaly badges after simulator scenario switches:** Orbit analysis now ignores late GPS frames from older simulator runs once a newer run has started, so Planning reliably promotes `orbit_decay`, `orbit_highly_elliptical`, `orbit_suborbital`, and `orbit_escape` to their intended anomaly badges instead of briefly inheriting stale status from the previous run.

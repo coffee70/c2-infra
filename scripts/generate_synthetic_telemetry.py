@@ -23,6 +23,8 @@ except ImportError:
     print("Install requests: pip install requests")
     sys.exit(1)
 
+from telemetry_catalog.builtins import DEFAULT_SOURCE_ID
+
 # Telemetry definitions: (name, units, description, mean, std_dev, subsystem_tag, red_low, red_high)
 # red_low/red_high are optional; use None for no limits
 TELEMETRY_DEFINITIONS = [
@@ -190,7 +192,10 @@ def main() -> None:
         try:
             r = requests.post(
                 f"{base_url}/telemetry/watchlist",
-                json={"telemetry_name": ch_name},
+                json={
+                    "telemetry_name": ch_name,
+                    "source_id": DEFAULT_SOURCE_ID,
+                },
                 timeout=10,
             )
             if r.status_code in (200, 201):

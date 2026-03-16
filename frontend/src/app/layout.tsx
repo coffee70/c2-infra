@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { AppProviders } from "@/components/app-providers";
 import { Nav } from "@/components/nav";
 import { KeyboardShortcutsHandler } from "@/components/keyboard-shortcuts-handler";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -38,13 +39,15 @@ export default function RootLayout({
         <a href="#main-content" className="sr-only">
           Skip to main content
         </a>
-        <TooltipProvider>
-          <Nav />
-          <KeyboardShortcutsHandler />
-          <main id="main-content" tabIndex={-1} className="flex-1 min-h-0">
-            {children}
-          </main>
-        </TooltipProvider>
+        <AppProviders>
+          <TooltipProvider>
+            <Nav />
+            <KeyboardShortcutsHandler />
+            <main id="main-content" tabIndex={-1} className="flex-1 min-h-0">
+              {children}
+            </main>
+          </TooltipProvider>
+        </AppProviders>
       </body>
     </html>
   );

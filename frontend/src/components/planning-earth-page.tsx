@@ -1,31 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { EarthOverviewView } from "@/components/earth-overview-view";
-import { runIdToSourceId } from "@/components/context-banner";
+import { runIdToSourceId } from "@/lib/source-ids";
 import { Spinner } from "@/components/ui/spinner";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
-const DEFAULT_SOURCE_ID = "default";
-
-async function fetchWithTimeoutAndFallback(path: string): Promise<Response> {
-  const bases = [API_URL, API_FALLBACK_URL].filter(
-    (v, i, arr) => arr.indexOf(v) === i
-  );
-  let lastError: unknown = null;
-  for (const base of bases) {
-    try {
-      const res = await fetch(`${base}${path}`, { cache: "no-store" });
-      if (res.ok) return res;
-      lastError = new Error(`HTTP ${res.status} from ${base}${path}`);
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  throw lastError ?? new Error("All API paths failed");
-}
+import { useTelemetrySourcesQuery } from "@/lib/query-hooks";
+import { DEFAULT_SOURCE_ID } from "@/lib/source-ids";
 
 interface TelemetrySource {
   id: string;
@@ -41,30 +21,10 @@ export function PlanningEarthPage() {
     ? runIdToSourceId(sourceFromUrl)
     : null;
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [sources, setSources] = useState<TelemetrySource[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetchWithTimeoutAndFallback("/telemetry/sources");
-        if (cancelled) return;
-        const data = res.ok ? await res.json() : [];
-        setSources(Array.isArray(data) ? data : []);
-        if (!res.ok) setError("Failed to load sources");
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load sources");
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    load();
-    return () => { cancelled = true; };
-  }, []);
+  const sourcesQuery = useTelemetrySourcesQuery<TelemetrySource[]>();
+  const loading = sourcesQuery.isLoading;
+  const error = sourcesQuery.error?.message ?? null;
+  const sources = sourcesQuery.data ?? [];
 
   const initialSourceId =
     normalizedSourceFromUrl &&

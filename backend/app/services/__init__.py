@@ -1,9 +1,11 @@
-"""Business logic services."""
+"""Business logic services.
 
-from app.services.embedding_service import SentenceTransformerEmbeddingProvider
-from app.services.llm_service import MockLLMProvider, OpenAICompatibleLLMProvider
-from app.services.telemetry_service import TelemetryService
-from app.services.statistics_service import StatisticsService
+Keep package imports lazy so test collection can import individual service modules
+without pulling in heavyweight model dependencies unless they are actually needed.
+"""
+
+from importlib import import_module
+from typing import Any
 
 __all__ = [
     "SentenceTransformerEmbeddingProvider",
@@ -12,3 +14,16 @@ __all__ = [
     "TelemetryService",
     "StatisticsService",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "SentenceTransformerEmbeddingProvider":
+        return import_module("app.services.embedding_service").SentenceTransformerEmbeddingProvider
+    if name in {"MockLLMProvider", "OpenAICompatibleLLMProvider"}:
+        module = import_module("app.services.llm_service")
+        return getattr(module, name)
+    if name == "TelemetryService":
+        return import_module("app.services.telemetry_service").TelemetryService
+    if name == "StatisticsService":
+        return import_module("app.services.statistics_service").StatisticsService
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

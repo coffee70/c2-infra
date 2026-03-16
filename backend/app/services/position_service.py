@@ -21,7 +21,7 @@ from app.models.schemas import (
     PositionSample,
 )
 from app.services.overview_service import _get_latest_value_and_ts
-from app.services.source_run_service import resolve_active_run_id
+from app.services.source_run_service import normalize_source_id, resolve_active_run_id, run_id_to_source_id
 from app.utils.coordinates import ecef_to_lla, eci_to_lla
 
 logger = logging.getLogger(__name__)
@@ -30,8 +30,11 @@ logger = logging.getLogger(__name__)
 VALID_FRAMES = {"gps_lla", "ecef", "eci"}
 
 
-def _get_meta_by_name(db: Session, name: str) -> Optional[TelemetryMetadata]:
-    stmt = select(TelemetryMetadata).where(TelemetryMetadata.name == name)
+def _get_meta_by_name(db: Session, source_id: str, name: str) -> Optional[TelemetryMetadata]:
+    stmt = select(TelemetryMetadata).where(
+        TelemetryMetadata.source_id == run_id_to_source_id(source_id),
+        TelemetryMetadata.name == name,
+    )
     return db.execute(stmt).scalars().first()
 
 
@@ -44,15 +47,16 @@ def _get_latest_for_channel(
     """Get latest value and timestamp for a named channel for a source."""
     if not channel_name:
         return None, None
-    meta = _get_meta_by_name(db, channel_name)
+    meta = _get_meta_by_name(db, source_id, channel_name)
     if not meta:
         return None, None
 
-    current = db.get(TelemetryCurrent, (source_id, meta.id))
+    data_source_id = normalize_source_id(source_id)
+    current = db.get(TelemetryCurrent, (data_source_id, meta.id))
     if current:
         return float(current.value), current.generation_time
 
-    latest = _get_latest_value_and_ts(db, meta.id, source_id=source_id)
+    latest = _get_latest_value_and_ts(db, meta.id, source_id=data_source_id)
     if not latest:
         return None, None
     value, ts = latest
@@ -343,4 +347,3 @@ def get_latest_positions(
         )
 
     return samples
-

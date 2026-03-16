@@ -21,8 +21,7 @@ import {
   deletePositionConfig,
   type PositionChannelMapping,
 } from "@/lib/position-client";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { useTelemetryListQuery } from "@/lib/query-hooks";
 
 interface TelemetrySource {
   id: string;
@@ -46,11 +45,12 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
   const [xChannel, setXChannel] = useState("");
   const [yChannel, setYChannel] = useState("");
   const [zChannel, setZChannel] = useState("");
-  const [allNames, setAllNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const telemetryListQuery = useTelemetryListQuery(selectedSourceId ?? "default", open);
+  const allNames = telemetryListQuery.data ?? [];
 
   const currentSource = useMemo(
     () => sources.find((s) => s.id === selectedSourceId) ?? sources[0],
@@ -63,29 +63,6 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
       setSelectedSourceId(sources[0].id);
     }
   }, [open, selectedSourceId, sources]);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-
-    async function loadNames() {
-      try {
-        const res = await fetch(`${API_URL}/telemetry/list`, { cache: "no-store" });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled && Array.isArray(data.names)) {
-          setAllNames(data.names);
-        }
-      } catch {
-        // ignore; mapping UI still usable with free text
-      }
-    }
-
-    loadNames();
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
 
   useEffect(() => {
     if (!open || !selectedSourceId) return;
@@ -372,4 +349,3 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
     </>
   );
 }
-

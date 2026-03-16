@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useMemo, useState } from "react";
 import { Trash2, Check } from "lucide-react";
-import { auditLog } from "@/lib/audit-log";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -18,27 +17,48 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import {
+  useAddToWatchlistMutation,
+  useRemoveFromWatchlistMutation,
+  useTelemetryListQuery,
+  useWatchlistQuery,
+} from "@/lib/query-hooks";
 const ADD_RESULTS_CAP = 30;
 const ADDED_SUCCESS_MS = 1500;
 
 interface WatchlistConfigProps {
+  sourceId: string;
   onChanged?: () => void | Promise<void>;
 }
 
-export function WatchlistConfig({ onChanged }: WatchlistConfigProps) {
+export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
   const [open, setOpen] = useState(false);
-  const [entries, setEntries] = useState<{ name: string; display_order: number }[]>([]);
-  const [allNames, setAllNames] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [addingName, setAddingName] = useState<string | null>(null);
-  const [removingName, setRemovingName] = useState<string | null>(null);
   const [addedName, setAddedName] = useState<string | null>(null);
+  const watchlistQuery = useWatchlistQuery(sourceId, open);
+  const telemetryListQuery = useTelemetryListQuery(sourceId, open);
+  const addMutation = useAddToWatchlistMutation(sourceId, {
+    onSuccess: async () => {
+      await onChanged?.();
+    },
+  });
+  const removeMutation = useRemoveFromWatchlistMutation(sourceId, {
+    onSuccess: async () => {
+      await onChanged?.();
+    },
+  });
 
-  const watchlistNames = new Set(entries.map((e) => e.name));
+  const entries = useMemo(() => watchlistQuery.data ?? [], [watchlistQuery.data]);
+  const allNames = telemetryListQuery.data ?? [];
+  const loading = watchlistQuery.isLoading || telemetryListQuery.isLoading;
+  const error = watchlistQuery.error?.message
+    || telemetryListQuery.error?.message
+    || (addMutation.isError ? "Failed to add" : null)
+    || (removeMutation.isError ? "Failed to remove" : null);
+  const addingName = addMutation.variables ?? null;
+  const removingName = removeMutation.variables ?? null;
+
+  const watchlistNames = useMemo(() => new Set(entries.map((e) => e.name)), [entries]);
   const availableToAdd = allNames.filter(
     (n) =>
       !watchlistNames.has(n) &&
@@ -46,82 +66,18 @@ export function WatchlistConfig({ onChanged }: WatchlistConfigProps) {
   );
   const displayedAvailable = availableToAdd.slice(0, ADD_RESULTS_CAP);
 
-  const clearAddedFlash = useCallback(() => setAddedName(null), []);
-
-  async function fetchData() {
-    setLoading(true);
-    setError(null);
-    try {
-      const [watchRes, listRes] = await Promise.all([
-        fetch(`${API_URL}/telemetry/watchlist`, { cache: "no-store" }),
-        fetch(`${API_URL}/telemetry/list`, { cache: "no-store" }),
-      ]);
-      if (watchRes.ok) {
-        const w = await watchRes.json();
-        setEntries(w.entries || []);
-      }
-      if (listRes.ok) {
-        const l = await listRes.json();
-        setAllNames(l.names || []);
-      }
-    } catch {
-      setError("Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (open) fetchData();
-  }, [open]);
-
   async function handleAdd(name: string) {
-    setAddingName(name);
-    setError(null);
     try {
-      const res = await fetch(`${API_URL}/telemetry/watchlist`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ telemetry_name: name }),
-      });
-      if (res.ok) {
-        auditLog("watchlist.add", { telemetry_name: name });
-        setAddedName(name);
-        setTimeout(clearAddedFlash, ADDED_SUCCESS_MS);
-        await fetchData();
-        await onChanged?.();
-      } else {
-        setError("Failed to add");
-      }
-    } catch {
-      auditLog("watchlist.add", { telemetry_name: name, error: "Failed to add" });
-      setError("Failed to add");
-    } finally {
-      setAddingName(null);
-    }
+      await addMutation.mutateAsync(name);
+      setAddedName(name);
+      window.setTimeout(() => setAddedName(null), ADDED_SUCCESS_MS);
+    } catch {}
   }
 
   async function handleRemove(name: string) {
-    setRemovingName(name);
-    setError(null);
     try {
-      const res = await fetch(
-        `${API_URL}/telemetry/watchlist/${encodeURIComponent(name)}`,
-        { method: "DELETE" }
-      );
-      if (res.ok) {
-        auditLog("watchlist.remove", { name });
-        await fetchData();
-        await onChanged?.();
-      } else {
-        setError("Failed to remove");
-      }
-    } catch {
-      auditLog("watchlist.remove", { name, error: "Failed to remove" });
-      setError("Failed to remove");
-    } finally {
-      setRemovingName(null);
-    }
+      await removeMutation.mutateAsync(name);
+    } catch {}
   }
 
   return (
@@ -181,7 +137,7 @@ export function WatchlistConfig({ onChanged }: WatchlistConfigProps) {
                         size="icon"
                         className="shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
                         onClick={() => handleRemove(e.name)}
-                        disabled={removingName !== null}
+                        disabled={removeMutation.isPending}
                         aria-label={`Remove ${e.name} from watchlist`}
                       >
                         {removingName === e.name ? (
@@ -226,7 +182,7 @@ export function WatchlistConfig({ onChanged }: WatchlistConfigProps) {
                       size="sm"
                       className="w-full justify-start text-left font-normal"
                       onClick={() => handleAdd(name)}
-                      disabled={addingName !== null && addingName !== name}
+                      disabled={addMutation.isPending && addingName !== name}
                     >
                       {addedName === name ? (
                         <>

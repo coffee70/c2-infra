@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { runIdToSourceId } from "@/components/context-banner";
 import { WatchlistConfig } from "@/components/watchlist-config";
 import { RealtimeOverviewWrapper } from "@/components/realtime-overview-wrapper";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -11,11 +10,10 @@ import {
   useSimulatorRuntime,
   type SimulatorRuntimeStatus,
 } from "@/lib/simulator-runtime";
+import { DEFAULT_SOURCE_ID, resolveSourceAlias, runIdToSourceId } from "@/lib/source-ids";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
-
-const DEFAULT_SOURCE_ID = "default";
 
 async function fetchWithTimeoutAndFallback(path: string): Promise<Response> {
   const bases = [API_URL, API_FALLBACK_URL].filter(
@@ -119,7 +117,7 @@ async function fetchOverviewSnapshot(
     fetchWithTimeoutAndFallback(
       `/telemetry/anomalies?source_id=${encodeURIComponent(runId)}`
     ),
-    fetchWithTimeoutAndFallback("/telemetry/watchlist"),
+    fetchWithTimeoutAndFallback(`/telemetry/watchlist?source_id=${encodeURIComponent(runId)}`),
   ]);
 
   const overviewData = overviewRes.ok ? await overviewRes.json() : { channels: [] };
@@ -151,6 +149,10 @@ export function OverviewContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const sourceFromUrl = searchParams.get("source");
+  const unavailableChannel = searchParams.get("channel_unavailable");
+  const unavailableMessage = unavailableChannel
+    ? `${unavailableChannel} is not available for this source`
+    : null;
 
   const [storedSource, setStoredSource] = useState<string | null>(null);
   const [storageChecked, setStorageChecked] = useState(false);
@@ -165,13 +167,22 @@ export function OverviewContent() {
   const [initialSimulatorStatus, setInitialSimulatorStatus] = useState<
     SimulatorRuntimeStatus | null
   >(null);
+  const [latestSimulatorRunId, setLatestSimulatorRunId] = useState<string | null>(
+    null
+  );
   const [committedRunId, setCommittedRunId] = useState<string | null>(null);
   const [desiredRunId, setDesiredRunId] = useState<string | null>(null);
   const [showSwitchingIndicator, setShowSwitchingIndicator] = useState(false);
   const [watchlistVersion, setWatchlistVersion] = useState(0);
 
-  let effectiveSource =
-    sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID;
+  useEffect(() => {
+    if (!unavailableChannel) return;
+    setError(unavailableMessage);
+  }, [unavailableChannel, unavailableMessage]);
+
+  let effectiveSource = resolveSourceAlias(
+    sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID
+  );
   if (effectiveSource && /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?$/.test(effectiveSource)) {
     effectiveSource = runIdToSourceId(effectiveSource);
     if (typeof window !== "undefined") {
@@ -206,7 +217,7 @@ export function OverviewContent() {
     if (!committedRunId) return;
 
     try {
-      setError(null);
+      setError(unavailableMessage);
       const snapshot = await fetchOverviewSnapshot(committedRunId);
       setChannels(snapshot.channels);
       setAnomalies(snapshot.anomalies);
@@ -216,7 +227,7 @@ export function OverviewContent() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load overview");
     }
-  }, [committedRunId]);
+  }, [committedRunId, unavailableMessage]);
 
   const handleWatchlistChanged = useCallback(async () => {
     try {
@@ -244,10 +255,11 @@ export function OverviewContent() {
     async function loadBootstrap() {
       try {
         setBootstrapLoading(true);
-        setError(null);
+        setError(unavailableMessage);
         setCommittedRunId(null);
         setDesiredRunId(null);
         setShowSwitchingIndicator(false);
+        setLatestSimulatorRunId(null);
 
         const sourcesPromise = fetchWithTimeoutAndFallback(
           "/telemetry/sources"
@@ -295,7 +307,7 @@ export function OverviewContent() {
             ? simStatus.config?.source_id ?? null
             : null;
         const effectiveRunId = isSimulatorSource
-          ? runtimeRunId ?? effectiveSource
+          ? runtimeRunId ?? runsList[0]?.source_id ?? effectiveSource
           : runsList[0]?.source_id ?? effectiveSource;
         const snapshot = await fetchOverviewSnapshot(effectiveRunId);
 
@@ -308,6 +320,9 @@ export function OverviewContent() {
         setDesiredRunId(effectiveRunId);
         setInitialSimulatorSourceId(simSourceId);
         setInitialSimulatorStatus(simStatus);
+        setLatestSimulatorRunId(
+          isSimulatorSource ? runtimeRunId ?? runsList[0]?.source_id ?? null : null
+        );
         if (snapshot.hasPartialFailure) {
           setError("Some data failed to load");
         }
@@ -326,20 +341,28 @@ export function OverviewContent() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveSource, sourceReady]);
+  }, [effectiveSource, sourceReady, unavailableMessage]);
+
+  useEffect(() => {
+    if (!isSimulatorSource || !simulatorRuntime.activeRunId) return;
+    setLatestSimulatorRunId((current) =>
+      current === simulatorRuntime.activeRunId ? current : simulatorRuntime.activeRunId
+    );
+  }, [isSimulatorSource, simulatorRuntime.activeRunId]);
 
   useEffect(() => {
     if (!sourceReady || !isSimulatorSource) return;
 
     const nextRunId = simulatorRuntime.isActive
       ? simulatorRuntime.activeRunId ?? desiredRunId ?? effectiveSource
-      : effectiveSource;
+      : latestSimulatorRunId ?? effectiveSource;
     if (!nextRunId || nextRunId === desiredRunId) return;
     setDesiredRunId(nextRunId);
   }, [
     desiredRunId,
     effectiveSource,
     isSimulatorSource,
+    latestSimulatorRunId,
     simulatorRuntime.activeRunId,
     simulatorRuntime.isActive,
     sourceReady,
@@ -362,7 +385,7 @@ export function OverviewContent() {
     async function switchSnapshot() {
       try {
         setShowSwitchingIndicator(true);
-        setError(null);
+        setError(unavailableMessage);
 
         const snapshot = await fetchOverviewSnapshot(runId);
 
@@ -385,7 +408,7 @@ export function OverviewContent() {
     return () => {
       cancelled = true;
     };
-  }, [bootstrapLoading, committedRunId, desiredRunId, sourceReady]);
+  }, [bootstrapLoading, committedRunId, desiredRunId, sourceReady, unavailableMessage]);
 
   useEffect(() => {
     if (isSwitchingRuns || !showSwitchingIndicator) return;
@@ -401,10 +424,19 @@ export function OverviewContent() {
 
   if (!sourceReady || bootstrapLoading || !committedRunId) {
     return (
-      <div className="min-h-full p-4 sm:p-6 lg:p-8 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <Spinner size="lg" className="h-10 w-10" />
-          <p className="text-sm text-muted-foreground">Loading overview…</p>
+      <div className="min-h-full p-4 sm:p-6 lg:p-8">
+        <div className="max-w-6xl mx-auto space-y-8">
+          <div className="space-y-1">
+            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+              Operator Overview
+            </h1>
+          </div>
+          <div className="flex min-h-[16rem] items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+              <Spinner size="lg" className="h-10 w-10" />
+              <p className="text-sm text-muted-foreground">Loading overview…</p>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -426,7 +458,7 @@ export function OverviewContent() {
               Operator Overview
             </h1>
           </div>
-          <WatchlistConfig onChanged={handleWatchlistChanged} />
+          <WatchlistConfig sourceId={effectiveSource} onChanged={handleWatchlistChanged} />
         </div>
         <RealtimeOverviewWrapper
           initialChannels={channels}

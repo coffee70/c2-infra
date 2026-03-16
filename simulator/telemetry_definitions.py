@@ -1,141 +1,53 @@
-"""Telemetry channel definitions for simulator (from scripts/generate_synthetic_telemetry.py)."""
+"""Telemetry definitions loaded from shared source definition files."""
 
-# (name, units, description, mean, std_dev, subsystem_tag, red_low, red_high)
+from __future__ import annotations
+
+import os
+
+from telemetry_catalog.definitions import (
+    TelemetryChannelDefinition,
+    TelemetryDefinitionFile,
+    channel_rate_hz,
+    load_definition_file,
+)
+
+DEFAULT_DEFINITION_PATH = "simulators/drogonsat.yaml"
+
+
+def _load_runtime_definition() -> TelemetryDefinitionFile:
+    path = os.environ.get("TELEMETRY_DEFINITION_PATH", DEFAULT_DEFINITION_PATH)
+    return load_definition_file(path)
+
+
+DEFINITION = _load_runtime_definition()
+CHANNEL_DEFINITIONS = DEFINITION.channels
+CHANNEL_BY_NAME = {channel.name: channel for channel in CHANNEL_DEFINITIONS}
 TELEMETRY_DEFINITIONS = [
-    ("PWR_BUS_A_VOLT", "V", "Power bus A voltage", 28.0, 0.5, "power", 26.0, 30.0),
-    ("PWR_BUS_B_VOLT", "V", "Power bus B voltage", 28.0, 0.5, "power", None, None),
-    ("PWR_BUS_C_VOLT", "V", "Power bus C voltage", 28.0, 0.5, "power", None, None),
-    ("PWR_BAT_VOLT", "V", "Battery voltage", 24.0, 1.0, "power", None, None),
-    ("PWR_BAT_CURR", "A", "Battery current", 2.5, 0.3, "power", None, None),
-    ("PWR_SOLAR_CURR", "A", "Solar panel current", 5.0, 0.8, "power", None, None),
-    ("THERM_PANEL_1_TEMP", "C", "Thermal panel 1 temperature", 25.0, 5.0, "thermal", None, None),
-    ("THERM_PANEL_2_TEMP", "C", "Thermal panel 2 temperature", 25.0, 5.0, "thermal", None, None),
-    ("THERM_PANEL_3_TEMP", "C", "Thermal panel 3 temperature", 24.0, 5.0, "thermal", None, None),
-    ("THERM_PANEL_4_TEMP", "C", "Thermal panel 4 temperature", 26.0, 5.0, "thermal", None, None),
-    ("THERM_BAT_TEMP", "C", "Battery temperature", 20.0, 3.0, "thermal", None, None),
-    ("THERM_CPU_TEMP", "C", "CPU temperature", 45.0, 8.0, "thermal", None, None),
-    ("THERM_RAD_TEMP", "C", "Radiator temperature", 15.0, 4.0, "thermal", None, None),
-    ("ADCS_RW_1_SPEED", "rpm", "Reaction wheel 1 speed", 0.0, 500.0, "adcs", None, None),
-    ("ADCS_RW_2_SPEED", "rpm", "Reaction wheel 2 speed", 0.0, 500.0, "adcs", None, None),
-    ("ADCS_RW_3_SPEED", "rpm", "Reaction wheel 3 speed", 0.0, 500.0, "adcs", None, None),
-    ("ADCS_RW_4_SPEED", "rpm", "Reaction wheel 4 speed", 0.0, 500.0, "adcs", None, None),
-    ("ADCS_MAG_X", "nT", "Magnetometer X axis", 0.0, 100.0, "adcs", None, None),
-    ("ADCS_MAG_Y", "nT", "Magnetometer Y axis", 0.0, 100.0, "adcs", None, None),
-    ("ADCS_MAG_Z", "nT", "Magnetometer Z axis", 0.0, 100.0, "adcs", None, None),
-    ("ADCS_GYRO_X", "deg/s", "Gyroscope X rate", 0.0, 0.1, "adcs", None, None),
-    ("ADCS_GYRO_Y", "deg/s", "Gyroscope Y rate", 0.0, 0.1, "adcs", None, None),
-    ("ADCS_GYRO_Z", "deg/s", "Gyroscope Z rate", 0.0, 0.1, "adcs", None, None),
-    ("ADCS_SUN_X", "V", "Sun sensor X", 2.5, 0.2, "adcs", None, None),
-    ("ADCS_SUN_Y", "V", "Sun sensor Y", 2.5, 0.2, "adcs", None, None),
-    ("ADCS_SUN_Z", "V", "Sun sensor Z", 2.5, 0.2, "adcs", None, None),
-    ("COMM_RSSI", "dBm", "Communication RSSI", -70.0, 10.0, "comms", None, None),
-    ("COMM_BER", "1", "Bit error rate", 1e-6, 1e-7, "comms", None, None),
-    ("COMM_TX_PWR", "dBm", "Transmit power", 30.0, 2.0, "comms", None, None),
-    ("OBC_CPU_LOAD", "%", "CPU load percentage", 40.0, 20.0, "obc", None, None),
-    ("OBC_MEM_USED", "%", "Memory used percentage", 60.0, 15.0, "obc", None, None),
-    ("OBC_DISK_USED", "%", "Disk used percentage", 45.0, 10.0, "obc", None, None),
-    ("OBC_UPTIME", "s", "System uptime seconds", 86400.0, 10000.0, "obc", None, None),
-    ("PAY_CAM_TEMP", "C", "Camera temperature", 30.0, 5.0, "payload", None, None),
-    ("PAY_CAM_GAIN", "dB", "Camera gain", 20.0, 5.0, "payload", None, None),
-    ("PAY_SPEC_TEMP", "C", "Spectrometer temperature", 25.0, 3.0, "payload", None, None),
-    ("PAY_SPEC_INT", "counts", "Spectrometer intensity", 1000.0, 200.0, "payload", None, None),
-    ("EPS_3V3_CURR", "mA", "3.3V rail current", 500.0, 50.0, "power", None, None),
-    ("EPS_5V_CURR", "mA", "5V rail current", 300.0, 40.0, "power", None, None),
-    ("EPS_12V_CURR", "mA", "12V rail current", 100.0, 20.0, "power", None, None),
-    ("EPS_3V3_VOLT", "V", "3.3V rail voltage", 3.3, 0.05, "power", None, None),
-    ("EPS_5V_VOLT", "V", "5V rail voltage", 5.0, 0.08, "power", None, None),
-    ("EPS_12V_VOLT", "V", "12V rail voltage", 12.0, 0.15, "power", None, None),
-    ("PROP_TANK_PRES", "kPa", "Propellant tank pressure", 200.0, 20.0, "propulsion", None, None),
-    ("PROP_TANK_TEMP", "C", "Propellant tank temperature", 15.0, 5.0, "propulsion", None, None),
-    ("PROP_VALVE_1", "0/1", "Propulsion valve 1 state", 0.0, 0.1, "propulsion", None, None),
-    ("PROP_VALVE_2", "0/1", "Propulsion valve 2 state", 0.0, 0.1, "propulsion", None, None),
-    ("GPS_LAT", "deg", "GPS latitude", 0.0, 5.0, "gps", None, None),
-    ("GPS_LON", "deg", "GPS longitude", 0.0, 5.0, "gps", None, None),
-    ("GPS_ALT", "m", "GPS altitude", 400000.0, 10000.0, "gps", None, None),
-    ("GPS_SATS", "1", "GPS satellites in view", 8.0, 2.0, "gps", None, None),
-    ("SAFE_MODE", "0/1", "Safe mode indicator", 0.0, 0.05, "safety", None, None),
-    ("WATCHDOG_CNT", "1", "Watchdog reset count", 0.0, 0.5, "safety", None, None),
-    ("ERR_CNT", "1", "Error counter", 0.0, 2.0, "safety", None, None),
-    ("HEALTH_STATUS", "0/1", "Overall health status", 1.0, 0.1, "safety", None, None),
+    (
+        channel.name,
+        channel.units,
+        channel.description,
+        channel.mean,
+        channel.std_dev,
+        channel.subsystem,
+        channel.red_low,
+        channel.red_high,
+    )
+    for channel in CHANNEL_DEFINITIONS
 ]
-
-RATES_HZ = {
-    "power": 1.0,
-    "thermal": 0.2,
-    "adcs": 5.0,
-    "comms": 0.5,
-    "obc": 0.5,
-    "payload": 0.2,
-    "propulsion": 0.1,
-    "gps": 1.0,
-    "safety": 0.2,
-}
-
+RATES_HZ = {channel.name: channel_rate_hz(channel) for channel in CHANNEL_DEFINITIONS}
 SCENARIOS = {
-    "nominal": {
-        "description": "Normal operation, occasional minor anomalies",
-        "anomaly_fraction": 0.02,
-        "events": [],
-        "orbit_profile": "nominal",
-    },
-    "power_sag": {
-        "description": "Power bus voltage sag after t=30s",
-        "anomaly_fraction": 0.01,
-        "events": [
-            {"t0": 30, "duration": 45, "type": "offset", "channels": ["PWR_BUS_A_VOLT", "PWR_BAT_VOLT"], "magnitude": -2.5},
-        ],
-        "orbit_profile": "nominal",
-    },
-    "thermal_runaway": {
-        "description": "Thermal panel temps rise after t=20s",
-        "anomaly_fraction": 0.01,
-        "events": [
-            {"t0": 20, "duration": 60, "type": "ramp", "channels": ["THERM_PANEL_1_TEMP", "THERM_PANEL_2_TEMP", "THERM_CPU_TEMP"], "magnitude": 15},
-        ],
-        "orbit_profile": "nominal",
-    },
-    "comm_dropout": {
-        "description": "Comms dropout window at t=40-55s",
-        "anomaly_fraction": 0.01,
-        "dropout": {"t0": 40, "duration": 15},
-        "orbit_profile": "nominal",
-    },
-    "safe_mode": {
-        "description": "Safe mode triggered at t=25s",
-        "anomaly_fraction": 0.0,
-        "events": [
-            {"t0": 25, "duration": 999, "type": "set", "channels": ["SAFE_MODE"], "magnitude": 1.0},
-        ],
-        "orbit_profile": "nominal",
-    },
-    "orbit_nominal": {
-        "description": "Smooth physically plausible orbit without random GPS spikes",
-        "anomaly_fraction": 0.0,
-        "events": [],
-        "orbit_profile": "orbit_nominal",
-    },
-    "orbit_decay": {
-        "description": "Low-perigee orbit that should trigger orbit decay analysis",
-        "anomaly_fraction": 0.0,
-        "events": [],
-        "orbit_profile": "orbit_decay",
-    },
-    "orbit_highly_elliptical": {
-        "description": "High-eccentricity LEO-like orbit for anomaly testing",
-        "anomaly_fraction": 0.0,
-        "events": [],
-        "orbit_profile": "orbit_highly_elliptical",
-    },
-    "orbit_suborbital": {
-        "description": "Insufficient orbital velocity for sustained orbit",
-        "anomaly_fraction": 0.0,
-        "events": [],
-        "orbit_profile": "orbit_suborbital",
-    },
-    "orbit_escape": {
-        "description": "Unbound trajectory for escape anomaly testing",
-        "anomaly_fraction": 0.0,
-        "events": [],
-        "orbit_profile": "orbit_escape",
-    },
+    name: scenario.model_dump()
+    for name, scenario in DEFINITION.scenarios.items()
 }
+POSITION_MAPPING = DEFINITION.position_mapping
+
+
+def load_definition(path: str | None = None) -> TelemetryDefinitionFile:
+    if path:
+        return load_definition_file(path)
+    return DEFINITION
+
+
+def get_channel(name: str) -> TelemetryChannelDefinition:
+    return CHANNEL_BY_NAME[name]

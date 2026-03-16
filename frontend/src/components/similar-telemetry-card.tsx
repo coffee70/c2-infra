@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 
 function formatWithUnits(
   value: number,
@@ -45,10 +46,11 @@ export interface RelatedChannel {
 }
 
 interface SimilarTelemetryCardProps {
+  detailSourceId: string;
   channels: RelatedChannel[];
 }
 
-export function SimilarTelemetryCard({ channels }: SimilarTelemetryCardProps) {
+export function SimilarTelemetryCard({ detailSourceId, channels }: SimilarTelemetryCardProps) {
   if (channels.length === 0) return null;
 
   return (
@@ -64,7 +66,7 @@ export function SimilarTelemetryCard({ channels }: SimilarTelemetryCardProps) {
           {channels.map((r) => (
             <li key={r.name}>
               <Link
-                href={`/telemetry/${encodeURIComponent(r.name)}`}
+                href={buildTelemetryDetailHref(detailSourceId, r.name)}
                 className="block p-2 rounded-md border hover:bg-accent transition-colors duration-200 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 text-primary hover:underline underline-offset-4"
               >
                 <div className="flex items-center justify-between gap-2 flex-wrap">

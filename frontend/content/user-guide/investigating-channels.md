@@ -17,6 +17,8 @@ Go to **Overview** and use the search bar under the Context Banner. Enter a sema
 
 Click a channel (from Overview search, a watchlist card, or the anomaly queue) to open its detail page.
 
+The canonical detail URL is source-first: `/sources/{source_id}/telemetry/{channel_name}`. This means the page always represents one channel in one source’s catalog, not a global channel name with a source filter layered on later.
+
 The page is organized into **vertical tabs** so you can quickly switch between different views of the same channel:
 
 - **Summary** – current value, state badge (Normal, Caution, Warning), compact statistics (P5/P95, min/max, sample count), and description.
@@ -30,7 +32,7 @@ The page is organized into **vertical tabs** so you can quickly switch between d
   - Copy an individual row to the clipboard or **flag** samples you want to keep an eye on; flagged samples are highlighted for the current session.
 - **Explanation & Events** – AI explanation plus recent ops events (alerts opened, acked, resolved) for that channel.
 
-**Source and run:** The **Context Banner** is the only place to change the **source** (vehicle or simulator). The whole page is for that source. Summary, Live & Trends, and the default run in History use the source’s **current run** (e.g. newest). In the History tab, the **Run** dropdown lists only runs for that source so you can narrow the table to a chosen run (e.g. to export one orbit).
+**Source and run:** The **Context Banner** is the only place to change the **source** (vehicle or simulator). The whole page is for that source. Summary, Live & Trends, and the default run in History use the source’s **current run** (e.g. newest). In the History tab, the **Run** dropdown lists only runs for that source so you can narrow the table to a chosen run (e.g. to export one orbit). If the target source does not provide the current channel, the app sends you back to that source’s Overview with a clear unavailable message.
 
 ## 3. LLM Explanation
 

@@ -3,6 +3,7 @@
 import { useEffect, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { getRecentChannels } from "@/lib/recent-telemetry";
+import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 import {
   AUTO_FOCUS_STORAGE_KEY,
   OVERVIEW_SEARCH_FOCUS_EVENT,
@@ -27,7 +28,8 @@ function isTypingInInput(): boolean {
 }
 
 export function useTelemetryKeyboardShortcuts(
-  currentChannelName?: string | null
+  currentChannelName?: string | null,
+  currentSourceId: string = "default"
 ) {
   const router = useRouter();
   const pathname = usePathname();
@@ -58,30 +60,33 @@ export function useTelemetryKeyboardShortcuts(
       if (e.key === "j" || e.key === "ArrowDown") {
         const recent = getRecentChannels();
         if (recent.length < 2) return;
-        const current = currentChannelName ?? recent[0];
-        const idx = recent.indexOf(current);
+        const scopedRecent = recent.filter((entry) => entry.sourceId === currentSourceId);
+        if (scopedRecent.length < 2) return;
+        const current = currentChannelName ?? scopedRecent[0]?.name;
+        const idx = scopedRecent.findIndex((entry) => entry.name === current);
         const nextIdx = idx < 0 ? 1 : idx + 1;
-        const target = recent[nextIdx % recent.length];
+        const target = scopedRecent[nextIdx % scopedRecent.length];
         e.preventDefault();
-        router.push(`/telemetry/${encodeURIComponent(target)}`);
+        router.push(buildTelemetryDetailHref(target.sourceId, target.name));
         return;
       }
 
       // k / ArrowUp: Previous channel (wrap to last in recent)
       if (e.key === "k" || e.key === "ArrowUp") {
         const recent = getRecentChannels();
-        if (recent.length < 2) return;
-        const current = currentChannelName ?? recent[0];
-        const idx = recent.indexOf(current);
-        const prevIdx = idx <= 0 ? recent.length - 1 : idx - 1;
-        const target = recent[prevIdx];
+        const scopedRecent = recent.filter((entry) => entry.sourceId === currentSourceId);
+        if (scopedRecent.length < 2) return;
+        const current = currentChannelName ?? scopedRecent[0]?.name;
+        const idx = scopedRecent.findIndex((entry) => entry.name === current);
+        const prevIdx = idx <= 0 ? scopedRecent.length - 1 : idx - 1;
+        const target = scopedRecent[prevIdx];
         e.preventDefault();
-        router.push(`/telemetry/${encodeURIComponent(target)}`);
+        router.push(buildTelemetryDetailHref(target.sourceId, target.name));
         return;
       }
 
       // f: Toggle favorite (detail page only)
-      if (e.key === "f" && pathname?.match(/^\/telemetry\/[^/]+$/)) {
+      if (e.key === "f" && pathname?.match(/^\/sources\/[^/]+\/telemetry\/[^/]+$/)) {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("telemetry-toggle-favorite"));
         return;
@@ -94,7 +99,7 @@ export function useTelemetryKeyboardShortcuts(
         return;
       }
     },
-    [pathname, router, currentChannelName]
+    [pathname, router, currentChannelName, currentSourceId]
   );
 
   useEffect(() => {

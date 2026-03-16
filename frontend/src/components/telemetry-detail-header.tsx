@@ -47,6 +47,7 @@ function formatOperationalStatus(
 
 interface TelemetryDetailHeaderProps {
   name: string;
+  sourceId: string;
   value: number;
   units?: string | null;
   state: string;
@@ -60,6 +61,7 @@ interface TelemetryDetailHeaderProps {
 
 export function TelemetryDetailHeader({
   name,
+  sourceId,
   value,
   units,
   state,
@@ -174,7 +176,7 @@ export function TelemetryDetailHeader({
               <TooltipContent>Copy channel name and timestamp</TooltipContent>
             </Tooltip>
           )}
-          <TelemetryDetailActions name={name} />
+          <TelemetryDetailActions name={name} sourceId={sourceId} />
         </div>
       </div>
     </header>

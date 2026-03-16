@@ -359,10 +359,15 @@ export function EarthOverviewView({
   }, [expandedSourceId, mappingsBySource]);
 
   useEffect(() => {
+    const catalogSourceId = expandedSourceId ?? sources[0]?.id;
+    if (!catalogSourceId) return;
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/telemetry/list`, { cache: "no-store" });
+        const res = await fetch(
+          `${API_URL}/telemetry/list?source_id=${encodeURIComponent(catalogSourceId)}`,
+          { cache: "no-store" }
+        );
         if (!res.ok || cancelled) return;
         const data = await res.json();
         if (cancelled) return;
@@ -372,7 +377,7 @@ export function EarthOverviewView({
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [expandedSourceId, sources]);
 
   const liveStatus = useMemo(() => {
     return positions.some((p) => p.valid) ? "live" : "stale";

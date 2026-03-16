@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RealtimeWsClient } from "@/lib/realtime-ws-client";
+import { buildTelemetryApiBase } from "@/lib/telemetry-routes";
+import { runIdToSourceId } from "@/lib/source-ids";
 import {
   Line,
   XAxis,
@@ -204,16 +206,28 @@ export function TrendChartAnalysis({
     return 1000;
   }, [zoomRefetch, useCustomRange, rangeMinutes]);
 
+  const canonicalSourceId = useMemo(
+    () => runIdToSourceId(sourceId),
+    [sourceId]
+  );
+
   const fetchData = useCallback(
     async (name: string, since: string, until: string | null) => {
-      let url = `${API_URL}/telemetry/${encodeURIComponent(name)}/recent?limit=${fetchLimit}&since=${encodeURIComponent(since)}&source_id=${encodeURIComponent(sourceId)}`;
-      if (until) url += `&until=${encodeURIComponent(until)}`;
+      const runIdParam =
+        canonicalSourceId === sourceId ? undefined : sourceId;
+      const params = new URLSearchParams({
+        limit: `${fetchLimit}`,
+        since,
+      });
+      if (until) params.set("until", until);
+      if (runIdParam) params.set("run_id", runIdParam);
+      const url = `${API_URL}${buildTelemetryApiBase(canonicalSourceId, name)}/recent?${params.toString()}`;
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`Failed to fetch ${name}`);
       const json = await res.json();
       return (json.data || []) as DataPoint[];
     },
-    [fetchLimit, sourceId]
+    [fetchLimit, sourceId, canonicalSourceId]
   );
 
   useEffect(() => {
@@ -256,11 +270,11 @@ export function TrendChartAnalysis({
   }, []);
 
   useEffect(() => {
-    fetch(`${API_URL}/telemetry/list`, { cache: "no-store" })
+    fetch(`${API_URL}/telemetry/list?source_id=${encodeURIComponent(canonicalSourceId)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => setChannelList(json.names || []))
       .catch(() => setChannelList([]));
-  }, []);
+  }, [canonicalSourceId]);
 
   useEffect(() => {
     const client = new RealtimeWsClient();

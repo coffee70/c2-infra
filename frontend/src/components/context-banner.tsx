@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
 import { useRealtimeFeedStatus } from "@/lib/realtime-telemetry-context";
+import { runIdToSourceId } from "@/lib/source-ids";
 import {
   useSimulatorRuntime,
   type SimulatorRuntimeStatus,
@@ -57,15 +58,6 @@ interface ContextBannerProps {
 
 function scrollToAlerts(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
-}
-
-/** Resolve run id to source id for URL/banner. simulator-{scenario}-{ts} -> simulator; {source_id}-{ts} -> source_id. */
-export function runIdToSourceId(runId: string): string {
-  const match = runId.match(/^(.+)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?$/);
-  if (!match) return runId;
-  const prefix = match[1]!;
-  if (prefix.startsWith("simulator-")) return "simulator";
-  return prefix;
 }
 
 /** Label when sourceId is not in sources list (e.g. legacy run id); prefer resolving to source. */

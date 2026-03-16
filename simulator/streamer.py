@@ -13,10 +13,14 @@ from urllib3.util.retry import Retry
 from simulator.lib.audit import audit_log
 from simulator.orbit import position_at_time
 from simulator.telemetry_definitions import (
+    POSITION_MAPPING,
     RATES_HZ,
     SCENARIOS,
     TELEMETRY_DEFINITIONS,
+    load_definition,
 )
+from telemetry_catalog.coordinates import ecef_to_eci_m
+from telemetry_catalog.definitions import channel_rate_hz, lla_to_ecef_m
 
 # Retry on timeout/connection errors; backoff avoids hammering a slow backend
 def _make_session() -> requests.Session:
@@ -31,35 +35,13 @@ def _make_session() -> requests.Session:
     s.mount("https://", HTTPAdapter(max_retries=retries))
     return s
 
-# Default circular LEO orbit for GPS position telemetry
+# Default circular LEO orbit for position telemetry
 _ORBIT_PERIOD_SEC = 90.0 * 60.0  # ~90 min
 _ORBIT_INCLINATION_DEG = 51.6
 _ORBIT_ALT_M = 400_000.0
 _ORBIT_NOISE_DEG = 0.00002
 _ORBIT_NOISE_M = 2.0
-_GPS_SAMPLE_PERIOD_SEC = 1.0 / max(RATES_HZ.get("gps", 1.0), 0.1)
-
-
-def get_subsystem(name: str) -> str:
-    prefixes = [
-        ("PWR_", "power"), ("EPS_", "power"),
-        ("THERM_", "thermal"),
-        ("ADCS_", "adcs"),
-        ("COMM_", "comms"),
-        ("OBC_", "obc"),
-        ("PAY_", "payload"),
-        ("PROP_", "propulsion"),
-        ("GPS_", "gps"),
-        ("SAFE_", "safety"), ("WATCHDOG_", "safety"), ("ERR_", "safety"), ("HEALTH_", "safety"),
-    ]
-    for prefix, sub in prefixes:
-        if name.startswith(prefix):
-            return sub
-    return "other"
-
-
-def get_rate(name: str) -> float:
-    return RATES_HZ.get(get_subsystem(name), 0.5)
+_DEFAULT_POSITION_SAMPLE_PERIOD_SEC = 1.0
 
 
 class StreamerState:
@@ -79,18 +61,49 @@ class TelemetryStreamer:
         speed: float = 1.0,
         drop_prob: float = 0.0,
         jitter: float = 0.1,
-        source_id: str = "simulator",
+        source_id: str = "",
+        telemetry_definition_path: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.ingest_url = f"{self.base_url}/telemetry/realtime/ingest"
         self.scenario_name = scenario
-        self.scenario = SCENARIOS.get(scenario, SCENARIOS["nominal"])
+        if telemetry_definition_path:
+            definition = load_definition(telemetry_definition_path)
+            self.telemetry_rows = [
+                (
+                    channel.name,
+                    channel.units,
+                    channel.description,
+                    channel.mean,
+                    channel.std_dev,
+                    channel.subsystem,
+                    channel.red_low,
+                    channel.red_high,
+                )
+                for channel in definition.channels
+            ]
+            self._rates = {
+                channel.name: channel_rate_hz(channel) for channel in definition.channels
+            }
+            scenario_map = {
+                name: scenario.model_dump()
+                for name, scenario in definition.scenarios.items()
+            }
+            self.scenario = scenario_map.get(scenario)
+            self.position_mapping = definition.position_mapping or POSITION_MAPPING
+        else:
+            self.telemetry_rows = TELEMETRY_DEFINITIONS
+            self._rates = RATES_HZ.copy()
+            scenario_map = SCENARIOS
+            self.scenario = scenario_map.get(scenario)
+            self.position_mapping = POSITION_MAPPING
+        if self.scenario is None:
+            self.scenario = next(iter(scenario_map.values()))
         self.duration = duration
         self.speed = speed
         self.drop_prob = drop_prob
         self.jitter = jitter
         self.source_id = source_id
-
         self._state = StreamerState.IDLE
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -103,8 +116,48 @@ class TelemetryStreamer:
         self._next_gps_emit_sim: float = 0.0
         self._paused_at_sim: float = 0.0
         self._session = _make_session()
+        self._position_channel_names = self._build_position_channels()
+        position_rates = [
+            max(self._channel_rate(name), 0.01) for name in self._position_channel_names
+        ]
+        if position_rates:
+            self.position_sample_period_sec = 1.0 / max(position_rates)
+        else:
+            self.position_sample_period_sec = _DEFAULT_POSITION_SAMPLE_PERIOD_SEC
 
-    def _append_gps_batch(
+    def _channel_rate(self, name: str) -> float:
+        return self._rates.get(name, 0.5)
+
+    def _build_position_channels(self) -> set[str]:
+        mapping = self.position_mapping
+        names: set[str] = set()
+        if mapping and mapping.frame_type in {"ecef", "eci"}:
+            names.update(
+                filter(
+                    None,
+                    [
+                        mapping.x_channel_name or "POS_X",
+                        mapping.y_channel_name or "POS_Y",
+                        mapping.z_channel_name or "POS_Z",
+                    ],
+                )
+            )
+        elif mapping:
+            names.update(
+                filter(
+                    None,
+                    [
+                        mapping.lat_channel_name or "GPS_LAT",
+                        mapping.lon_channel_name or "GPS_LON",
+                        mapping.alt_channel_name or "GPS_ALT",
+                    ],
+                )
+            )
+        else:
+            names.update({"GPS_LAT", "GPS_LON", "GPS_ALT"})
+        return names
+
+    def _append_position_batch(
         self,
         batch: list[dict[str, Any]],
         *,
@@ -113,7 +166,7 @@ class TelemetryStreamer:
         generation_time: datetime,
         orbit_profile: str,
     ) -> int:
-        """Emit a coherent GPS frame so position/orbit logic sees aligned samples."""
+        """Emit a coherent position frame so position/orbit logic sees aligned samples."""
         lat_deg, lon_deg, alt_m = position_at_time(
             sim_elapsed,
             period_sec=_ORBIT_PERIOD_SEC,
@@ -121,20 +174,39 @@ class TelemetryStreamer:
             alt_m=_ORBIT_ALT_M,
             profile=orbit_profile,
         )
-        gps_values = {
-            "GPS_LAT": lat_deg + random.gauss(0, _ORBIT_NOISE_DEG),
-            "GPS_LON": lon_deg + random.gauss(0, _ORBIT_NOISE_DEG),
-            "GPS_ALT": alt_m + random.gauss(0, _ORBIT_NOISE_M),
-            "GPS_SATS": max(4.0, round(random.gauss(8.0, 1.0))),
-        }
-        for name in ("GPS_LAT", "GPS_LON", "GPS_ALT", "GPS_SATS"):
+        noisy_lat = lat_deg + random.gauss(0, _ORBIT_NOISE_DEG)
+        noisy_lon = lon_deg + random.gauss(0, _ORBIT_NOISE_DEG)
+        noisy_alt = alt_m + random.gauss(0, _ORBIT_NOISE_M)
+        mapping = self.position_mapping
+        if mapping and mapping.frame_type in {"ecef", "eci"}:
+            x_m, y_m, z_m = lla_to_ecef_m(noisy_lat, noisy_lon, noisy_alt)
+            if mapping.frame_type == "eci":
+                x_m, y_m, z_m = ecef_to_eci_m(x_m, y_m, z_m, generation_time)
+            frame_values = {
+                mapping.x_channel_name or "POS_X": x_m,
+                mapping.y_channel_name or "POS_Y": y_m,
+                mapping.z_channel_name or "POS_Z": z_m,
+            }
+        elif mapping:
+            frame_values = {
+                mapping.lat_channel_name or "GPS_LAT": noisy_lat,
+                mapping.lon_channel_name or "GPS_LON": noisy_lon,
+                mapping.alt_channel_name or "GPS_ALT": noisy_alt,
+            }
+        else:
+            frame_values = {
+                "GPS_LAT": noisy_lat,
+                "GPS_LON": noisy_lon,
+                "GPS_ALT": noisy_alt,
+            }
+        for name, value in frame_values.items():
             seq += 1
             batch.append(
                 {
                     "source_id": self.source_id,
                     "channel_name": name,
                     "generation_time": generation_time.isoformat(),
-                    "value": gps_values[name],
+                    "value": value,
                     "quality": "valid",
                     "sequence": seq,
                 }
@@ -196,20 +268,20 @@ class TelemetryStreamer:
             while sim_elapsed >= self._next_gps_emit_sim:
                 gps_elapsed = self._next_gps_emit_sim
                 gps_generation_time = self._sim_epoch + timedelta(seconds=gps_elapsed)
-                seq = self._append_gps_batch(
+                seq = self._append_position_batch(
                     batch,
                     seq=seq,
                     sim_elapsed=gps_elapsed,
                     generation_time=gps_generation_time,
                     orbit_profile=orbit_profile,
                 )
-                self._next_gps_emit_sim += _GPS_SAMPLE_PERIOD_SEC
+                self._next_gps_emit_sim += self.position_sample_period_sec
 
-            for row in TELEMETRY_DEFINITIONS:
+            for row in self.telemetry_rows:
                 name, mean, std = row[0], row[3], row[4]
-                if name.startswith("GPS_"):
+                if name in self._position_channel_names:
                     continue
-                rate = get_rate(name)
+                rate = self._channel_rate(name)
                 dt = 0.1
                 if random.random() > rate * dt:
                     continue
@@ -226,8 +298,8 @@ class TelemetryStreamer:
                             elif ev["type"] == "set":
                                 value = ev["magnitude"]
 
-                # Keep orbit telemetry physically plausible; orbit anomalies come from explicit orbit profiles.
-                if not name.startswith("GPS_") and random.random() < anomaly_frac:
+                # Keep position telemetry physically plausible; orbit anomalies come from explicit orbit profiles.
+                if random.random() < anomaly_frac:
                     value += random.choice([-1, 1]) * random.uniform(2.5, 5.0) * std
 
                 seq += 1
