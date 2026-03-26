@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.telemetry import TelemetryData, TelemetryMetadata, TelemetrySource, TelemetryStatistics
 from app.models.schemas import (
+    ActiveRunUpdate,
     AnomaliesResponse,
     ChannelSourceItem,
     ChannelSourcesResponse,
