@@ -55,10 +55,12 @@
 ## Efficient Codebase Exploration
 
 - Minimize token usage during exploration. Gather precise context first, then read only the smallest code regions needed to complete the task.
+- If the Code Index MCP tool is available, use it first for file discovery, symbol lookup, and targeted code reads to conserve tokens. Fall back to shell searches when the index is unavailable, stale, or the task is better suited to raw text search.
 - Exploration priority order:
-  - First: use `rg` for fast text search across the repository.
-  - Second: use `ast-grep` for syntax-aware structural search.
-  - Third: read only the relevant sections of files returned by those searches.
+  - First: use the Code Index MCP tool for indexed file discovery, symbol lookup, and narrow code reads.
+  - Second: use `rg` for fast text search across the repository.
+  - Third: use `ast-grep` for syntax-aware structural search.
+  - Fourth: read only the relevant sections of files returned by those searches.
   - Last: read full files only if absolutely necessary.
 - Never begin by opening large files.
 - Avoid scanning entire directories by reading files sequentially.
@@ -69,7 +71,8 @@
 
 ### Recommended Search Workflow
 
-- Start with `rg -n` to identify likely files and exact match locations.
+- Start with the Code Index MCP tool when available to identify likely files, symbols, and bounded code regions.
+- Use `rg -n` when you need broad text matches, to validate index results, or when the index is unavailable.
 - Use `ast-grep` when structure matters more than text, such as finding definitions, call sites, or React hook usage.
 - After search results narrow the target, read only the matching region with a bounded window.
 - Re-run search with tighter patterns before reading more files.
