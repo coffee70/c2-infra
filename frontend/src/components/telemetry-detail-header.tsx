@@ -50,6 +50,7 @@ interface TelemetryDetailHeaderProps {
   sourceId: string;
   value: number;
   units?: string | null;
+  channelOrigin?: string | null;
   state: string;
   stateReason?: string | null;
   zScore?: number | null;
@@ -64,6 +65,7 @@ export function TelemetryDetailHeader({
   sourceId,
   value,
   units,
+  channelOrigin,
   state,
   stateReason,
   zScore,
@@ -107,6 +109,11 @@ export function TelemetryDetailHeader({
             <Badge variant={stateVariant} className="shrink-0 text-xs">
               {statusLabel}
             </Badge>
+            {channelOrigin === "discovered" && (
+              <Badge variant="outline" className="shrink-0 text-xs">
+                Discovered
+              </Badge>
+            )}
             {live && (
               <Badge variant="default" className="shrink-0 text-xs gap-1.5 bg-emerald-600 text-white hover:bg-emerald-600">
                 <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse opacity-80" />

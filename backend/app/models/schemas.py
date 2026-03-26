@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class ChannelListItem(BaseModel):
+    """Single telemetry channel entry for source-scoped pickers."""
+
+    name: str
+    channel_origin: str = "catalog"
+    discovery_namespace: Optional[str] = None
 
 
 # --- Schema ingestion ---
@@ -58,6 +66,8 @@ class SearchResult(BaseModel):
     description: Optional[str] = None
     subsystem_tag: Optional[str] = None
     units: str = ""
+    channel_origin: str = "catalog"
+    discovery_namespace: Optional[str] = None
     current_value: Optional[float] = None
     current_status: Optional[str] = None  # normal, caution, warning
     last_timestamp: Optional[str] = None
@@ -101,6 +111,8 @@ class ExplainResponse(BaseModel):
     name: str
     description: Optional[str] = None
     units: Optional[str] = None
+    channel_origin: str = "catalog"
+    discovery_namespace: Optional[str] = None
     statistics: StatisticsResponse
     recent_value: float
     z_score: Optional[float] = None
@@ -164,6 +176,7 @@ class OverviewChannel(BaseModel):
     units: Optional[str] = None
     description: Optional[str] = None
     subsystem_tag: str
+    channel_origin: str = "catalog"
     current_value: float
     last_timestamp: str
     state: str
@@ -209,6 +222,8 @@ class WatchlistEntrySchema(BaseModel):
     source_id: str
     name: str
     display_order: int
+    channel_origin: str = "catalog"
+    discovery_namespace: Optional[str] = None
 
 
 class WatchlistResponse(BaseModel):
@@ -228,6 +243,7 @@ class TelemetryListResponse(BaseModel):
     """Response for GET /telemetry/list."""
 
     names: list[str]
+    channels: list[ChannelListItem] = []
 
 
 # --- Realtime: canonical measurement event (ingest) ---
@@ -235,13 +251,33 @@ class MeasurementEvent(BaseModel):
     """Canonical internal measurement event from realtime ingest."""
 
     source_id: str = "default"
-    channel_name: str
+    channel_name: Optional[str] = None
     generation_time: str  # RFC3339
     reception_time: Optional[str] = None  # RFC3339; server assigns if omitted
     value: float
     quality: str = "valid"  # valid | suspect | invalid
     sequence: Optional[int] = None
     tags: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_channel_identifier(self) -> "MeasurementEvent":
+        channel_name = (self.channel_name or "").strip()
+        tags = self.tags or {}
+
+        dynamic_channel_name = tags.get("dynamic_channel_name")
+        field_name = tags.get("field_name") or tags.get("field") or tags.get("key")
+        decoder = tags.get("decoder") or tags.get("decoder_name") or tags.get("parser")
+        namespace = tags.get("namespace")
+
+        has_dynamic_name = isinstance(dynamic_channel_name, str) and dynamic_channel_name.strip() != ""
+        has_field_name = isinstance(field_name, str) and field_name.strip() != ""
+        has_decoder = isinstance(decoder, str) and decoder.strip() != ""
+        has_namespace = isinstance(namespace, str) and namespace.strip() != ""
+
+        if channel_name or has_dynamic_name or (has_field_name and (has_decoder or has_namespace)):
+            return self
+
+        raise ValueError("measurement event requires channel_name or dynamic channel tags")
 
 
 class MeasurementEventBatch(BaseModel):
@@ -259,6 +295,8 @@ class RealtimeChannelUpdate(BaseModel):
     units: Optional[str] = None
     description: Optional[str] = None
     subsystem_tag: str
+    channel_origin: str = "catalog"
+    discovery_namespace: Optional[str] = None
     current_value: float
     generation_time: str
     reception_time: str

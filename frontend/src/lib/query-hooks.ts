@@ -16,6 +16,14 @@ import { buildTelemetryApiBase } from "@/lib/telemetry-routes";
 export interface WatchlistEntry {
   name: string;
   display_order: number;
+  channel_origin?: string;
+  discovery_namespace?: string | null;
+}
+
+export interface TelemetryListEntry {
+  name: string;
+  channel_origin?: string;
+  discovery_namespace?: string | null;
 }
 
 export interface TelemetrySource {
@@ -33,6 +41,8 @@ export interface SearchResult {
   description?: string | null;
   subsystem_tag?: string | null;
   units: string;
+  channel_origin?: string;
+  discovery_namespace?: string | null;
   current_value?: number | null;
   current_status?: string | null;
   last_timestamp?: string | null;
@@ -72,6 +82,8 @@ export interface OpsEventSchema {
 }
 
 export interface ExplainResponse {
+  channel_origin?: string;
+  discovery_namespace?: string | null;
   what_this_means: string;
   llm_explanation: string;
   what_to_check_next: {
@@ -231,15 +243,22 @@ export function useRemoveFromWatchlistMutation(
 }
 
 export function useTelemetryListQuery(sourceId: string, enabled = true) {
-  return useQuery<string[]>({
+  return useQuery<TelemetryListEntry[]>({
     queryKey: queryKeys.telemetryList(sourceId),
     enabled,
     staleTime: 0,
     queryFn: async ({ signal }) => {
-      const data = await fetchJson<{ names?: string[] }>(`/telemetry/list?source_id=${encodeURIComponent(sourceId)}`, {
+      const data = await fetchJson<{ channels?: TelemetryListEntry[]; names?: string[] }>(
+        `/telemetry/list?source_id=${encodeURIComponent(sourceId)}`,
+        {
         signal,
-      });
-      return Array.isArray(data.names) ? data.names : [];
+        }
+      );
+      if (Array.isArray(data.channels)) return data.channels;
+      if (Array.isArray(data.names)) {
+        return data.names.map((name) => ({ name, channel_origin: "catalog", discovery_namespace: null }));
+      }
+      return [];
     },
   });
 }

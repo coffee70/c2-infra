@@ -675,6 +675,9 @@ export function OverviewSearch({
                               {result.subsystem_tag && (
                                 <Badge variant="secondary">{result.subsystem_tag}</Badge>
                               )}
+                              {result.channel_origin === "discovered" && (
+                                <Badge variant="outline">Discovered</Badge>
+                              )}
                               {result.current_status && (
                                 <Badge variant={statusVariant(result.current_status)}>
                                   {result.current_status}

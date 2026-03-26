@@ -1,6 +1,7 @@
 """Realtime processor: persist measurements, compute state, manage alert lifecycle."""
 
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -32,6 +33,7 @@ from app.lib.audit import audit_log
 from app.realtime.bus import get_realtime_bus
 from app.realtime.feed_health import get_feed_health_tracker
 from app.services.ops_events_service import write_event as write_ops_event
+from app.services.realtime_service import create_discovered_channel_metadata
 from app.services.source_run_service import (
     get_cached_active_run_id,
     normalize_source_id,
@@ -90,6 +92,87 @@ def _get_orbit_mappings(db: Session) -> dict[str, dict[str, str]]:
             if x and y and z:
                 out[r[0]] = {"frame_type": frame_type, "x": x, "y": y, "z": z}
     return out
+
+
+def _normalize_dynamic_channel_segment(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+    return normalized
+
+
+def _normalize_explicit_dynamic_channel_name(value: str) -> tuple[str | None, str | None]:
+    """Normalize explicit dynamic names into URL-safe dot namespaces."""
+    raw = value.strip()
+    if not raw:
+        return None, None
+
+    raw_parts = [part for part in re.split(r"[./\\\\]+", raw) if part.strip()]
+    normalized_parts = [
+        normalized
+        for normalized in (_normalize_dynamic_channel_segment(part) for part in raw_parts)
+        if normalized
+    ]
+    if not normalized_parts:
+        return None, None
+
+    channel_name = ".".join(normalized_parts)
+    discovery_namespace = ".".join(normalized_parts[:-1]) or None
+    return channel_name, discovery_namespace
+
+
+def _build_channel_name_from_tags(tags: dict[str, object] | None) -> tuple[str | None, str | None]:
+    """Derive a stable dynamic channel name from decoder/message context when possible."""
+    if not tags:
+        return None, None
+
+    explicit_name = tags.get("dynamic_channel_name")
+    if isinstance(explicit_name, str) and explicit_name.strip():
+        return _normalize_explicit_dynamic_channel_name(explicit_name)
+
+    field_name = tags.get("field_name") or tags.get("field") or tags.get("key")
+    if not isinstance(field_name, str) or not field_name.strip():
+        return None, None
+
+    field_segment = _normalize_dynamic_channel_segment(field_name)
+    if not field_segment:
+        return None, None
+
+    namespace_parts: list[str] = []
+
+    decoder = tags.get("decoder") or tags.get("decoder_name") or tags.get("parser")
+    if isinstance(decoder, str) and decoder.strip():
+        decoder_segment = _normalize_dynamic_channel_segment(decoder)
+        if decoder_segment:
+            namespace_parts.extend(["decoder", decoder_segment])
+    else:
+        namespace = tags.get("namespace")
+        if isinstance(namespace, str) and namespace.strip():
+            namespace_parts.extend(
+                part
+                for part in (_normalize_dynamic_channel_segment(part) for part in namespace.split("."))
+                if part
+            )
+
+    if not namespace_parts:
+        return None, None
+
+    discovery_namespace = ".".join(namespace_parts)
+    return f"{discovery_namespace}.{field_segment}", discovery_namespace
+
+
+def _resolve_measurement_channel(
+    event: MeasurementEvent,
+) -> tuple[str | None, str | None, bool]:
+    """Resolve the canonical channel name and whether dynamic discovery is allowed."""
+    explicit_channel_name = (event.channel_name or "").strip() or None
+    derived_channel_name, discovery_namespace = _build_channel_name_from_tags(event.tags)
+
+    if derived_channel_name is not None:
+        return derived_channel_name, discovery_namespace, True
+
+    if explicit_channel_name is not None:
+        return explicit_channel_name, None, False
+
+    return None, None, False
 
 
 class RealtimeProcessor:
@@ -158,25 +241,42 @@ class RealtimeProcessor:
         register_active_run(source_id)
         get_feed_health_tracker().record_reception(source_id)
         logical_source_id = run_id_to_source_id(source_id)
-
-        meta = db.execute(
-            select(TelemetryMetadata).where(
-                TelemetryMetadata.source_id == logical_source_id,
-                TelemetryMetadata.name == event.channel_name,
-            )
-        ).scalars().first()
-        if not meta:
-            logger.debug("Unknown channel %s, skipping", event.channel_name)
-            return
-
         gen_time = _parse_time(event.generation_time)
         recv_time = (
             _parse_time(event.reception_time)
             if event.reception_time
             else datetime.now(timezone.utc)
         )
+        channel_name, discovery_namespace, allow_dynamic_discovery = _resolve_measurement_channel(event)
+        if channel_name is None:
+            logger.warning("Skipping measurement without channel name or derivation tags")
+            return
 
-        # Persist to Timescale
+        meta = db.execute(
+            select(TelemetryMetadata).where(
+                TelemetryMetadata.source_id == logical_source_id,
+                TelemetryMetadata.name == channel_name,
+            )
+        ).scalars().first()
+        if not meta:
+            if not allow_dynamic_discovery:
+                logger.debug("Unknown strict-catalog channel %s, skipping", channel_name)
+                return
+            meta = create_discovered_channel_metadata(
+                db,
+                source_id=logical_source_id,
+                channel_name=channel_name,
+                discovery_namespace=discovery_namespace,
+                observed_at=recv_time,
+            )
+        elif meta.channel_origin == "discovered":
+            meta.last_seen_at = recv_time
+            if discovery_namespace and not meta.discovery_namespace:
+                meta.discovery_namespace = discovery_namespace
+
+        # Persist to Timescale. Use a savepoint so duplicate sample retries do not
+        # roll back a newly discovered metadata row created earlier in this transaction.
+        savepoint = db.begin_nested()
         try:
             db.add(
                 TelemetryData(
@@ -188,9 +288,11 @@ class RealtimeProcessor:
             )
             db.flush()
         except IntegrityError as e:
-            logger.debug("Insert skipped for %s (e.g. duplicate): %s", event.channel_name, e)
-            db.rollback()
-            # Session starts new transaction; continue to update current
+            logger.debug("Insert skipped for %s (e.g. duplicate): %s", channel_name, e)
+            savepoint.rollback()
+            # Continue to update current/state without losing discovery metadata.
+        else:
+            savepoint.commit()
 
         # Out-of-order: only update current if generation_time is newer
         current = db.get(TelemetryCurrent, (source_id, meta.id))
@@ -218,7 +320,7 @@ class RealtimeProcessor:
 
         # Debounce: update history (lock guards dict and deque for thread-pool concurrency)
         with self._state_history_lock:
-            history = self._get_state_history(source_id, event.channel_name)
+            history = self._get_state_history(source_id, channel_name)
             history.append(state)
             should_open_alert = list(history) == ["warning"] * DEBOUNCE_CONSECUTIVE
             should_clear_alert = list(history) == ["normal"] * DEBOUNCE_CONSECUTIVE
@@ -255,7 +357,7 @@ class RealtimeProcessor:
             RecentDataPoint(timestamp=gen_time.isoformat(), value=event.value),
         )
 
-        subsystem = infer_subsystem(event.channel_name, meta)
+        subsystem = infer_subsystem(channel_name, meta)
 
         # Build update for UI
         update = RealtimeChannelUpdate(
@@ -264,6 +366,8 @@ class RealtimeProcessor:
             units=meta.units,
             description=meta.description,
             subsystem_tag=subsystem,
+            channel_origin=meta.channel_origin or "catalog",
+            discovery_namespace=meta.discovery_namespace,
             current_value=event.value,
             generation_time=gen_time.isoformat(),
             reception_time=recv_time.isoformat(),
@@ -390,7 +494,7 @@ class RealtimeProcessor:
         self._broadcast_telemetry_update(update)
 
         # Orbit: if this source has a position mapping and channel is lat/lon/alt, buffer and maybe push
-        self._maybe_submit_orbit_sample(db, source_id, event.channel_name, event.value, gen_time)
+        self._maybe_submit_orbit_sample(db, source_id, channel_name, event.value, gen_time)
 
     def _publish_alert_event(
         self,

@@ -21,6 +21,8 @@ interface ExplainResponse {
   name: string;
   description: string | null;
   units?: string | null;
+  channel_origin?: string | null;
+  discovery_namespace?: string | null;
   statistics: {
     mean: number;
     std_dev: number;

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dynamic telemetry channel discovery** — Realtime ingest now creates durable source-scoped `discovered` channels for unknown live fields instead of dropping them. Decoder-tagged payloads can derive stable names such as `decoder.aprs.payload_temp`, and those channels now appear in source-scoped lists, search, summaries, and watchlist configuration.
 - **Per-source telemetry definition files** — Vehicles and simulators now register with a JSON or YAML `telemetry_definition_path`. The backend validates the file, seeds that source’s telemetry catalog automatically, and seeds any inline position mapping so the system knows which channels to expect before the source goes live.
 - **Built-in source catalog refresh** — The local stack now ships with four named built-ins backed by fixed UUID source IDs: `Aegon Relay`, `Balerion Surveyor`, `DrogonSat`, and `RhaegalSat`.
 - **Simulator orbit anomaly presets** — The simulator now includes explicit `orbit_nominal`, `orbit_decay`, `orbit_highly_elliptical`, `orbit_suborbital`, and `orbit_escape` scenarios so operators can drive Planning and orbit-analysis workflows with intentional trajectory cases instead of random GPS corruption.
@@ -79,6 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Search and watchlist access for runtime-discovered channels** — Newly discovered live fields are now searchable from Overview and visible in watchlist/source pickers with a `Discovered` badge, so operators can inspect and pin dynamic payload telemetry without waiting for a catalog update.
 - **Cross-source watchlist adds** — Adding the same channel name to different sources now persists correctly. A leftover legacy unique index on `watchlist.telemetry_name` was blocking source-scoped watchlists and causing add-to-watchlist actions to appear successful before the database commit failed.
 - Switching from a valid channel detail page to a source that does not expose that channel no longer leads operators into invalid channel pages or 404s. The app now redirects to the selected source’s Overview with an unavailable notice.
 - **Planning globe renderer startup:** Cesium static assets now resolve from the app’s `/cesium/` public path before the first globe render, preventing the Planning Earth view from crashing on startup and dropping otherwise-valid live simulator position markers.

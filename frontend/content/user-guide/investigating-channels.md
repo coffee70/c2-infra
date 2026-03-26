@@ -9,6 +9,7 @@ When you see an anomaly or want to understand a telemetry channel, follow this f
 Go to **Overview** and use the search bar under the Context Banner. Enter a semantic query (e.g. "voltage", "temperature", "speed"). The platform uses semantic search, so you find channels by meaning, not exact names.
 
 - Search is scoped to the source selected in the Context Banner; results and current values follow that source.
+- Runtime-discovered channels appear in search and watchlist pickers with a **Discovered** badge. These are fields the source emitted live even though they were not in the seeded definition catalog.
 - Expand **Advanced filters** to filter by subsystem, units, anomalous status, or recent activity
 - Add a channel to the watchlist
 - Click a result to open the channel detail page
@@ -22,6 +23,7 @@ The canonical detail URL is source-first: `/sources/{source_id}/telemetry/{chann
 The page is organized into **vertical tabs** so you can quickly switch between different views of the same channel:
 
 - **Summary** – current value, state badge (Normal, Caution, Warning), compact statistics (P5/P95, min/max, sample count), and description.
+- Discovered channels stay queryable like catalog channels, but they may have no units, no description, and no engineering limits until you curate them.
 - **Live & Trends** – live time-series view plus the full **Trend Analysis** chart with range presets (15m, 1h, 6h, 24h, Custom), UTC/local toggle, comparison channels, and zoom controls.
 - **History** – a tabular view of archived samples for this channel:
   - Choose **Run** to restrict the table (and copy/export) to a specific run of the selected source. The dropdown lists only runs that belong to the source in the Context Banner, labeled by start time (e.g. "Run started at 2026-03-11 19:03 UTC"). Defaults to the current run (newest for that source).

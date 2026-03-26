@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Trash2, Check } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/empty-state";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -49,7 +50,7 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
   });
 
   const entries = useMemo(() => watchlistQuery.data ?? [], [watchlistQuery.data]);
-  const allNames = telemetryListQuery.data ?? [];
+  const allChannels = telemetryListQuery.data ?? [];
   const loading = watchlistQuery.isLoading || telemetryListQuery.isLoading;
   const error = watchlistQuery.error?.message
     || telemetryListQuery.error?.message
@@ -59,10 +60,10 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
   const removingName = removeMutation.variables ?? null;
 
   const watchlistNames = useMemo(() => new Set(entries.map((e) => e.name)), [entries]);
-  const availableToAdd = allNames.filter(
-    (n) =>
-      !watchlistNames.has(n) &&
-      n.toLowerCase().includes(searchQuery.toLowerCase())
+  const availableToAdd = allChannels.filter(
+    (channel) =>
+      !watchlistNames.has(channel.name) &&
+      channel.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
   const displayedAvailable = availableToAdd.slice(0, ADD_RESULTS_CAP);
 
@@ -132,6 +133,11 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
                       <span className="text-sm font-medium truncate">
                         {e.name}
                       </span>
+                      {e.channel_origin === "discovered" && (
+                        <Badge variant="outline" className="shrink-0">
+                          Discovered
+                        </Badge>
+                      )}
                       <Button
                         variant="outline"
                         size="icon"
@@ -156,7 +162,7 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
 
             <section aria-labelledby="add-channel-heading">
               <h4 id="add-channel-heading" className="text-sm font-medium mb-2">
-                Add channel — {availableToAdd.length} of {allNames.length} available
+                Add channel — {availableToAdd.length} of {allChannels.length} available
               </h4>
               <Label htmlFor="watchlist-search" className="sr-only">
                 Search by name to add a channel
@@ -175,24 +181,22 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
                 </p>
               )}
               <ul className="space-y-1 max-h-48 overflow-y-auto" role="list">
-                {displayedAvailable.map((name) => (
-                  <li key={name}>
+                {displayedAvailable.map((channel) => (
+                  <li key={channel.name}>
                     <Button
                       variant="outline"
                       size="sm"
-                      className="w-full justify-start text-left font-normal"
-                      onClick={() => handleAdd(name)}
-                      disabled={addMutation.isPending && addingName !== name}
+                      className="w-full justify-between gap-2 text-left font-normal"
+                      onClick={() => handleAdd(channel.name)}
+                      disabled={addMutation.isPending && addingName !== channel.name}
                     >
-                      {addedName === name ? (
-                        <>
-                          <Check className="size-4 shrink-0 mr-2 text-green-600" aria-hidden />
-                          Added
-                        </>
-                      ) : addingName === name ? (
-                        "Adding..."
-                      ) : (
-                        `+ ${name}`
+                      <span className="truncate">
+                        {addedName === channel.name ? "Added" : addingName === channel.name ? "Adding..." : `+ ${channel.name}`}
+                      </span>
+                      {channel.channel_origin === "discovered" && (
+                        <Badge variant="outline" className="shrink-0">
+                          Discovered
+                        </Badge>
                       )}
                     </Button>
                   </li>
@@ -204,7 +208,7 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
                   description="Try a different search term."
                 />
               )}
-              {availableToAdd.length === 0 && !searchQuery && allNames.length > 0 && (
+              {availableToAdd.length === 0 && !searchQuery && allChannels.length > 0 && (
                 <EmptyState
                   icon="chart"
                   title="All telemetry already in watchlist"

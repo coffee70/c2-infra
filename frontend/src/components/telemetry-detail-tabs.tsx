@@ -39,6 +39,8 @@ interface ExplainResponse {
   name: string;
   description: string | null;
   units?: string | null;
+  channel_origin?: string | null;
+  discovery_namespace?: string | null;
   statistics: {
     mean: number;
     std_dev: number;
@@ -259,6 +261,7 @@ function TelemetryDetailTabsContent({
                   sourceId={sourceId}
                   value={liveChannel?.value ?? explain.recent_value}
                   units={explain.units}
+                  channelOrigin={explain.channel_origin}
                   state={liveChannel?.state ?? explain.state}
                   stateReason={liveChannel?.stateReason ?? explain.state_reason}
                   zScore={liveChannel?.zScore ?? explain.z_score}

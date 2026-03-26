@@ -31,27 +31,65 @@ def get_all_telemetry_names(db: Session) -> list[str]:
     return [r[0] for r in db.execute(stmt).fetchall()]
 
 
-def get_all_telemetry_names_for_source(db: Session, source_id: str) -> list[str]:
-    """Get telemetry names for one source."""
+def get_all_telemetry_channels_for_source(db: Session, source_id: str) -> list[dict]:
+    """Get source-scoped telemetry channel metadata for picker/search UIs."""
     logical_source_id = run_id_to_source_id(source_id)
     stmt = (
-        select(TelemetryMetadata.name)
+        select(
+            TelemetryMetadata.name,
+            TelemetryMetadata.channel_origin,
+            TelemetryMetadata.discovery_namespace,
+        )
         .where(TelemetryMetadata.source_id == logical_source_id)
         .order_by(TelemetryMetadata.name)
     )
-    return [r[0] for r in db.execute(stmt).fetchall()]
+    rows = db.execute(stmt).fetchall()
+    return [
+        {
+            "name": row[0],
+            "channel_origin": row[1] or "catalog",
+            "discovery_namespace": row[2],
+        }
+        for row in rows
+    ]
+
+
+def get_all_telemetry_names_for_source(db: Session, source_id: str) -> list[str]:
+    """Get telemetry names for one source."""
+    return [row["name"] for row in get_all_telemetry_channels_for_source(db, source_id)]
 
 
 def get_watchlist(db: Session, source_id: str) -> list[dict]:
     """Get watchlist entries ordered by display_order."""
     logical_source_id = run_id_to_source_id(source_id)
     stmt = (
-        select(WatchlistEntry.source_id, WatchlistEntry.telemetry_name, WatchlistEntry.display_order)
+        select(
+            WatchlistEntry.source_id,
+            WatchlistEntry.telemetry_name,
+            WatchlistEntry.display_order,
+            TelemetryMetadata.channel_origin,
+            TelemetryMetadata.discovery_namespace,
+        )
+        .join(
+            TelemetryMetadata,
+            (TelemetryMetadata.source_id == WatchlistEntry.source_id)
+            & (TelemetryMetadata.name == WatchlistEntry.telemetry_name),
+            isouter=True,
+        )
         .where(WatchlistEntry.source_id == logical_source_id)
         .order_by(WatchlistEntry.display_order)
     )
     rows = db.execute(stmt).fetchall()
-    return [{"source_id": r[0], "name": r[1], "display_order": r[2]} for r in rows]
+    return [
+        {
+            "source_id": r[0],
+            "name": r[1],
+            "display_order": r[2],
+            "channel_origin": r[3] or "catalog",
+            "discovery_namespace": r[4],
+        }
+        for r in rows
+    ]
 
 
 def add_to_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
@@ -198,6 +236,8 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
             "units": meta.units,
             "description": meta.description,
             "subsystem_tag": infer_subsystem(name, meta),
+            "channel_origin": meta.channel_origin or "catalog",
+            "discovery_namespace": meta.discovery_namespace,
             "current_value": value,
             "last_timestamp": ts.isoformat(),
             "state": state,

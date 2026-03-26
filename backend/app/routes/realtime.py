@@ -203,12 +203,14 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                                         units=o.get("units"),
                                         description=o.get("description"),
                                         subsystem_tag=o["subsystem_tag"],
+                                        channel_origin=o.get("channel_origin", "catalog"),
                                         current_value=o["current_value"],
                                         generation_time=o["last_timestamp"],
                                         reception_time=o["last_timestamp"],
                                         state=o["state"],
                                         state_reason=o.get("state_reason"),
                                         z_score=o.get("z_score"),
+                                        discovery_namespace=o.get("discovery_namespace"),
                                         sparkline_data=[
                                             RecentDataPoint(timestamp=p["timestamp"], value=p["value"])
                                             for p in o.get("sparkline_data", [])

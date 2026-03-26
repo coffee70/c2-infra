@@ -2,10 +2,11 @@
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import delete, desc, func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.interfaces.embedding_provider import EmbeddingProvider
@@ -32,6 +33,8 @@ from telemetry_catalog.definitions import (
 logger = logging.getLogger(__name__)
 
 SPARKLINE_POINTS = 30
+CHANNEL_ORIGIN_CATALOG = "catalog"
+CHANNEL_ORIGIN_DISCOVERED = "discovered"
 
 
 def _source_to_dict(src: TelemetrySource) -> dict:
@@ -45,6 +48,61 @@ def _source_to_dict(src: TelemetrySource) -> dict:
     }
 
 
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def create_discovered_channel_metadata(
+    db: Session,
+    *,
+    source_id: str,
+    channel_name: str,
+    discovery_namespace: str | None = None,
+    observed_at: datetime | None = None,
+) -> TelemetryMetadata:
+    """Create or update metadata for a runtime-discovered channel."""
+    seen_at = observed_at or _now_utc()
+    meta = db.execute(
+        select(TelemetryMetadata).where(
+            TelemetryMetadata.source_id == source_id,
+            TelemetryMetadata.name == channel_name,
+        )
+    ).scalars().first()
+    if meta is None:
+        meta = TelemetryMetadata(
+            source_id=source_id,
+            name=channel_name,
+            units="",
+            description=None,
+            subsystem_tag="dynamic",
+            channel_origin=CHANNEL_ORIGIN_DISCOVERED,
+            discovery_namespace=discovery_namespace,
+            discovered_at=seen_at,
+            last_seen_at=seen_at,
+        )
+        db.add(meta)
+        try:
+            db.flush()
+            return meta
+        except IntegrityError:
+            # Another ingest worker won the race to create the same discovered channel.
+            db.rollback()
+            meta = db.execute(
+                select(TelemetryMetadata).where(
+                    TelemetryMetadata.source_id == source_id,
+                    TelemetryMetadata.name == channel_name,
+                )
+            ).scalars().first()
+            if meta is None:
+                raise
+
+    if meta.channel_origin == CHANNEL_ORIGIN_DISCOVERED:
+        meta.last_seen_at = seen_at
+        if discovery_namespace and not meta.discovery_namespace:
+            meta.discovery_namespace = discovery_namespace
+    return meta
+
+
 def _seed_metadata_for_source(
     db: Session,
     *,
@@ -55,7 +113,8 @@ def _seed_metadata_for_source(
     refresh_embeddings: bool = True,
     preserve_existing_embeddings: bool = False,
     overwrite_position_mapping: bool = True,
-) -> None:
+) -> bool:
+    needs_embedding_backfill = False
     definition = load_definition_file(telemetry_definition_path)
     existing_rows = db.execute(
         select(TelemetryMetadata).where(TelemetryMetadata.source_id == source_id)
@@ -64,7 +123,11 @@ def _seed_metadata_for_source(
     expected_names = {channel.name for channel in definition.channels}
 
     if prune_missing:
-        removed_names = {row.name for row in existing_rows if row.name not in expected_names}
+        removed_names = {
+            row.name
+            for row in existing_rows
+            if row.channel_origin != CHANNEL_ORIGIN_DISCOVERED and row.name not in expected_names
+        }
         if removed_names:
             db.execute(
                 delete(WatchlistEntry).where(
@@ -73,7 +136,7 @@ def _seed_metadata_for_source(
                 )
             )
         for row in existing_rows:
-            if row.name not in expected_names:
+            if row.channel_origin != CHANNEL_ORIGIN_DISCOVERED and row.name not in expected_names:
                 db.delete(row)
 
     for channel in definition.channels:
@@ -82,8 +145,13 @@ def _seed_metadata_for_source(
             meta = TelemetryMetadata(
                 source_id=source_id,
                 name=channel.name,
+                channel_origin=CHANNEL_ORIGIN_CATALOG,
             )
             db.add(meta)
+        elif meta.channel_origin == CHANNEL_ORIGIN_DISCOVERED:
+            meta.channel_origin = CHANNEL_ORIGIN_CATALOG
+            if meta.embedding is None:
+                needs_embedding_backfill = True
         if refresh_embeddings and not (preserve_existing_embeddings and meta.embedding is not None):
             if embedding_provider is None:
                 raise ValueError("embedding_provider is required when refresh_embeddings=True")
@@ -92,6 +160,7 @@ def _seed_metadata_for_source(
         meta.units = channel.units
         meta.description = channel.description
         meta.subsystem_tag = channel.subsystem
+        meta.discovery_namespace = None
         meta.red_low = Decimal(str(channel.red_low)) if channel.red_low is not None else None
         meta.red_high = Decimal(str(channel.red_high)) if channel.red_high is not None else None
 
@@ -103,11 +172,11 @@ def _seed_metadata_for_source(
         )
     ).scalars().first()
     if not overwrite_position_mapping and existing_mapping is not None:
-        return
+        return needs_embedding_backfill
     if mapping is None:
         if existing_mapping is not None:
             db.delete(existing_mapping)
-        return
+        return needs_embedding_backfill
 
     if existing_mapping is None:
         existing_mapping = PositionChannelMapping(source_id=source_id)
@@ -121,6 +190,7 @@ def _seed_metadata_for_source(
     existing_mapping.y_channel_name = mapping.y_channel_name
     existing_mapping.z_channel_name = mapping.z_channel_name
     existing_mapping.active = True
+    return needs_embedding_backfill
 def _merge_builtin_duplicate_source(
     db: Session,
     *,
@@ -594,6 +664,8 @@ def get_realtime_snapshot_for_channels(
                 units=meta.units,
                 description=meta.description,
                 subsystem_tag=infer_subsystem(meta.name, meta),
+                channel_origin=meta.channel_origin or CHANNEL_ORIGIN_CATALOG,
+                discovery_namespace=meta.discovery_namespace,
                 current_value=float(curr.value),
                 generation_time=curr.generation_time.isoformat(),
                 reception_time=curr.reception_time.isoformat(),
@@ -798,6 +870,7 @@ def bootstrap_builtin_sources(
 ) -> list[str]:
     """Ensure all registered sources and built-in local-stack sources have seeded metadata."""
     repaired_source_ids: set[str] = set()
+    sources_needing_embedding_backfill: set[str] = set()
     for spec in BUILT_IN_SOURCES:
         src = db.get(TelemetrySource, spec.id)
         if src is None:
@@ -819,7 +892,7 @@ def bootstrap_builtin_sources(
 
     for src in all_sources:
         try:
-            _seed_metadata_for_source(
+            needs_embedding_backfill = _seed_metadata_for_source(
                 db,
                 source_id=src.id,
                 telemetry_definition_path=src.telemetry_definition_path,
@@ -827,11 +900,43 @@ def bootstrap_builtin_sources(
                 overwrite_position_mapping=False,
             )
             repaired_source_ids.add(src.id)
+            if needs_embedding_backfill:
+                sources_needing_embedding_backfill.add(src.id)
         except Exception:
             logger.exception(
                 "Skipping bootstrap metadata repair for source %s due to invalid definition path %s",
                 src.id,
                 src.telemetry_definition_path,
             )
+
+    if sources_needing_embedding_backfill:
+        try:
+            from app.services.embedding_service import SentenceTransformerEmbeddingProvider
+
+            provider = SentenceTransformerEmbeddingProvider()
+        except Exception:
+            logger.exception(
+                "Skipping bootstrap embedding backfill for promoted channels due to provider initialization failure"
+            )
+        else:
+            for source_id in sorted(sources_needing_embedding_backfill):
+                src = db.get(TelemetrySource, source_id)
+                if src is None:
+                    continue
+                try:
+                    _seed_metadata_for_source(
+                        db,
+                        source_id=src.id,
+                        telemetry_definition_path=src.telemetry_definition_path,
+                        embedding_provider=provider,
+                        refresh_embeddings=True,
+                        preserve_existing_embeddings=True,
+                        overwrite_position_mapping=False,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Skipping bootstrap embedding backfill for source %s",
+                        src.id,
+                    )
     db.commit()
     return sorted(repaired_source_ids)

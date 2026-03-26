@@ -42,8 +42,7 @@ from app.services.embedding_service import SentenceTransformerEmbeddingProvider
 from app.services.llm_service import MockLLMProvider, OpenAICompatibleLLMProvider
 from app.services.overview_service import (
     add_to_watchlist,
-    get_all_telemetry_names,
-    get_all_telemetry_names_for_source,
+    get_all_telemetry_channels_for_source,
     get_anomalies,
     get_overview,
     get_watchlist,
@@ -336,6 +335,8 @@ def list_watchlist(
                 "source_id": e["source_id"],
                 "name": e["name"],
                 "display_order": e["display_order"],
+                "channel_origin": e["channel_origin"],
+                "discovery_namespace": e["discovery_namespace"],
             }
             for e in entries
         ]
@@ -376,8 +377,11 @@ def list_telemetry(
     db: Session = Depends(get_db),
 ):
     """List all telemetry names for watchlist config."""
-    names = get_all_telemetry_names_for_source(db, source_id)
-    return TelemetryListResponse(names=names)
+    channels = get_all_telemetry_channels_for_source(db, source_id)
+    return TelemetryListResponse(
+        names=[channel["name"] for channel in channels],
+        channels=channels,
+    )
 
 
 @router.get("/subsystems")
@@ -493,6 +497,8 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
         name=meta.name,
         description=meta.description,
         units=meta.units,
+        channel_origin=meta.channel_origin or "catalog",
+        discovery_namespace=meta.discovery_namespace,
         statistics=StatisticsResponse(
             mean=mean,
             std_dev=std_dev,

@@ -38,6 +38,8 @@ With anomalies:
 
 The streamer posts to `POST /telemetry/realtime/ingest` with the built-in mock vehicle source id. Its telemetry catalog also comes from a committed definition file, so the backend and streamer agree on the expected channels.
 
+If an external decoder or payload stream emits a field that is not in the seeded catalog, the backend now creates a source-scoped **discovered** channel instead of dropping the sample. When the producer sends structured decoder tags such as `decoder=APRS` and `field_name=Payload Temp`, the stored channel name is derived into a stable namespace like `decoder.aprs.payload_temp`.
+
 ## Data Flow
 
 ```

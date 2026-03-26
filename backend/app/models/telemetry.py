@@ -1,7 +1,7 @@
 """Telemetry database models."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from pgvector.sqlalchemy import Vector
@@ -41,12 +41,17 @@ class TelemetryMetadata(Base):
     units: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     subsystem_tag: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    channel_origin: Mapped[str] = mapped_column(Text, nullable=False, default="catalog")
+    discovery_namespace: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    discovered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     red_low: Mapped[Optional[float]] = mapped_column(Numeric(20, 10), nullable=True)
     red_high: Mapped[Optional[float]] = mapped_column(Numeric(20, 10), nullable=True)
     embedding: Mapped[Optional[list]] = mapped_column(Vector(384), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -126,7 +131,7 @@ class WatchlistEntry(Base):
     display_order: Mapped[int] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
     )
 
 
@@ -143,7 +148,7 @@ class TelemetrySource(Base):
     telemetry_definition_path: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
 

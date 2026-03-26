@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import pytest
+import sys
 import uuid
 from unittest.mock import MagicMock
+from types import SimpleNamespace
+from sqlalchemy.exc import IntegrityError
 
 from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID
 from telemetry_catalog.builtins import MOCK_VEHICLE_SOURCE_ID
 from telemetry_catalog.builtins import BUILT_IN_SOURCES
 
 from app.services.realtime_service import _seed_metadata_for_source
+from app.services.realtime_service import create_discovered_channel_metadata
 from app.services.realtime_service import create_source
 from app.services.realtime_service import bootstrap_builtin_sources
 from app.services.realtime_service import refresh_source_embeddings
@@ -467,6 +471,7 @@ def test_seed_metadata_prunes_watchlist_entries_for_removed_channels(monkeypatch
     embedding_provider = MagicMock()
     obsolete_meta = MagicMock()
     obsolete_meta.name = "obsolete_channel"
+    obsolete_meta.channel_origin = "catalog"
     stale_watchlist_delete = []
 
     retained_channel = MagicMock()
@@ -520,6 +525,320 @@ def test_seed_metadata_prunes_watchlist_entries_for_removed_channels(monkeypatch
     db.delete.assert_called_once_with(obsolete_meta)
 
 
+def test_seed_metadata_does_not_prune_discovered_channels(monkeypatch) -> None:
+    """Discovered channels must survive definition reseeds even when prune_missing=True."""
+
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    discovered_meta = MagicMock()
+    discovered_meta.name = "decoder.aprs.payload_temp"
+    discovered_meta.channel_origin = "discovered"
+    watchlist_delete_statements = []
+
+    retained_channel = MagicMock()
+    retained_channel.name = "retained_channel"
+    retained_channel.units = "V"
+    retained_channel.description = "Retained"
+    retained_channel.subsystem = "power"
+    retained_channel.red_low = None
+    retained_channel.red_high = None
+    definition = MagicMock()
+    definition.channels = [retained_channel]
+    definition.position_mapping = None
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    def fake_execute(statement):
+        statement_sql = str(statement)
+        if "DELETE FROM watchlist" in statement_sql:
+            watchlist_delete_statements.append(statement_sql)
+            return MagicMock()
+        if "FROM telemetry_metadata" in statement_sql:
+            return MagicMock(scalars=lambda: ScalarResult([discovered_meta]))
+        if "FROM position_channel_mappings" in statement_sql:
+            return MagicMock(scalars=lambda: ScalarResult([]))
+        raise AssertionError(f"Unexpected statement: {statement_sql}")
+
+    db.execute.side_effect = fake_execute
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_definition_file",
+        lambda _path: definition,
+    )
+
+    _seed_metadata_for_source(
+        db,
+        source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        embedding_provider=embedding_provider,
+        prune_missing=True,
+    )
+
+    assert watchlist_delete_statements == []
+    db.delete.assert_not_called()
+
+
+def test_seed_metadata_promotes_discovered_channel_when_definition_catches_up(monkeypatch) -> None:
+    """A discovered channel should become catalog-managed when it appears in the source definition."""
+
+    db = MagicMock()
+    existing_meta = MagicMock()
+    existing_meta.name = "decoder.aprs.payload_temp"
+    existing_meta.channel_origin = "discovered"
+    existing_meta.discovery_namespace = "decoder.aprs"
+    existing_meta.embedding = None
+
+    channel = MagicMock()
+    channel.name = "decoder.aprs.payload_temp"
+    channel.units = "C"
+    channel.description = "Payload temperature from APRS decoder"
+    channel.subsystem = "payload"
+    channel.red_low = -10.0
+    channel.red_high = 60.0
+    definition = MagicMock()
+    definition.channels = [channel]
+    definition.position_mapping = None
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    def fake_execute(statement):
+        statement_sql = str(statement)
+        if "FROM telemetry_metadata" in statement_sql:
+            return ScalarResult([existing_meta])
+        if "FROM position_channel_mappings" in statement_sql:
+            return ScalarResult([])
+        raise AssertionError(f"Unexpected statement: {statement_sql}")
+
+    db.execute.side_effect = fake_execute
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_definition_file",
+        lambda _path: definition,
+    )
+
+    _seed_metadata_for_source(
+        db,
+        source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        embedding_provider=None,
+        refresh_embeddings=False,
+    )
+
+    assert existing_meta.channel_origin == "catalog"
+    assert existing_meta.discovery_namespace is None
+    assert existing_meta.units == "C"
+    assert existing_meta.description == "Payload temperature from APRS decoder"
+
+
+def test_seed_metadata_flags_promoted_discovered_channel_without_embedding_for_backfill(monkeypatch) -> None:
+    db = MagicMock()
+    existing_meta = MagicMock()
+    existing_meta.name = "decoder.aprs.payload_temp"
+    existing_meta.channel_origin = "discovered"
+    existing_meta.discovery_namespace = "decoder.aprs"
+    existing_meta.embedding = None
+
+    channel = MagicMock()
+    channel.name = "decoder.aprs.payload_temp"
+    channel.units = "C"
+    channel.description = "Payload temperature from APRS decoder"
+    channel.subsystem = "payload"
+    channel.red_low = -10.0
+    channel.red_high = 60.0
+    definition = MagicMock()
+    definition.channels = [channel]
+    definition.position_mapping = None
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    def fake_execute(statement):
+        statement_sql = str(statement)
+        if "FROM telemetry_metadata" in statement_sql:
+            return ScalarResult([existing_meta])
+        if "FROM position_channel_mappings" in statement_sql:
+            return ScalarResult([])
+        raise AssertionError(f"Unexpected statement: {statement_sql}")
+
+    db.execute.side_effect = fake_execute
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_definition_file",
+        lambda _path: definition,
+    )
+
+    needs_backfill = _seed_metadata_for_source(
+        db,
+        source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        refresh_embeddings=False,
+        overwrite_position_mapping=False,
+    )
+
+    assert needs_backfill is True
+
+
+def test_bootstrap_builtin_sources_backfills_embeddings_for_promoted_channels(monkeypatch) -> None:
+    db = MagicMock()
+    source = MagicMock()
+    source.id = DROGONSAT_SOURCE_ID
+    source.telemetry_definition_path = "simulators/drogonsat.yaml"
+    db.get.side_effect = lambda model, source_id: source if source_id == DROGONSAT_SOURCE_ID else None
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+    seed_calls: list[dict] = []
+
+    def fake_seed_metadata_for_source(*args, **kwargs):
+        seed_calls.append(kwargs)
+        return kwargs.get("refresh_embeddings", False) is False
+
+    monkeypatch.setattr(
+        "app.services.realtime_service._seed_metadata_for_source",
+        fake_seed_metadata_for_source,
+    )
+    fake_provider = MagicMock()
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.embedding_service",
+        SimpleNamespace(SentenceTransformerEmbeddingProvider=lambda: fake_provider),
+    )
+    db.execute.return_value = ScalarResult([source])
+
+    bootstrap_builtin_sources(db)
+
+    assert seed_calls[0]["refresh_embeddings"] is False
+    assert seed_calls[1]["refresh_embeddings"] is True
+    assert seed_calls[1]["embedding_provider"] is fake_provider
+    db.commit.assert_called_once()
+
+
+def test_bootstrap_builtin_sources_ignores_embedding_provider_init_failures(monkeypatch) -> None:
+    db = MagicMock()
+    source = MagicMock()
+    source.id = DROGONSAT_SOURCE_ID
+    source.telemetry_definition_path = "simulators/drogonsat.yaml"
+    db.get.side_effect = lambda model, source_id: source if source_id == DROGONSAT_SOURCE_ID else None
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+    seed_calls: list[dict] = []
+
+    def fake_seed_metadata_for_source(*args, **kwargs):
+        seed_calls.append(kwargs)
+        return kwargs.get("refresh_embeddings", False) is False
+
+    monkeypatch.setattr(
+        "app.services.realtime_service._seed_metadata_for_source",
+        fake_seed_metadata_for_source,
+    )
+
+    class BrokenProvider:
+        def __init__(self):
+            raise RuntimeError("model unavailable")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.embedding_service",
+        SimpleNamespace(SentenceTransformerEmbeddingProvider=BrokenProvider),
+    )
+    db.execute.return_value = ScalarResult([source])
+
+    bootstrap_builtin_sources(db)
+
+    assert [call["refresh_embeddings"] for call in seed_calls] == [False]
+    db.commit.assert_called_once()
+
+
+def test_bootstrap_builtin_sources_ignores_backfill_failures_per_source(monkeypatch) -> None:
+    db = MagicMock()
+    source = MagicMock()
+    source.id = DROGONSAT_SOURCE_ID
+    source.telemetry_definition_path = "simulators/drogonsat.yaml"
+    db.get.side_effect = lambda model, source_id: source if source_id == DROGONSAT_SOURCE_ID else None
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+    seed_calls: list[dict] = []
+
+    def fake_seed_metadata_for_source(*args, **kwargs):
+        seed_calls.append(kwargs)
+        if kwargs.get("refresh_embeddings") is True:
+            raise RuntimeError("embedding refresh failed")
+        return True
+
+    monkeypatch.setattr(
+        "app.services.realtime_service._seed_metadata_for_source",
+        fake_seed_metadata_for_source,
+    )
+    fake_provider = MagicMock()
+    monkeypatch.setitem(
+        sys.modules,
+        "app.services.embedding_service",
+        SimpleNamespace(SentenceTransformerEmbeddingProvider=lambda: fake_provider),
+    )
+    db.execute.return_value = ScalarResult([source])
+
+    bootstrap_builtin_sources(db)
+
+    assert [call["refresh_embeddings"] for call in seed_calls] == [False, True]
+    assert seed_calls[1]["embedding_provider"] is fake_provider
+    db.commit.assert_called_once()
+
+
 def test_update_source_prunes_missing_channels_when_vehicle_definition_changes(monkeypatch) -> None:
     """Changing a vehicle definition before ingest should drop channels not in the new catalog."""
 
@@ -565,6 +884,41 @@ def test_update_source_prunes_missing_channels_when_vehicle_definition_changes(m
             },
         )
     ]
+
+
+def test_create_discovered_channel_metadata_recovers_from_concurrent_insert() -> None:
+    """Concurrent first-discovery inserts should recover by re-reading the winning row."""
+
+    db = MagicMock()
+    existing = MagicMock()
+    existing.channel_origin = "discovered"
+    existing.discovery_namespace = None
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    db.execute.side_effect = [
+        ScalarResult([]),
+        ScalarResult([existing]),
+    ]
+    db.flush.side_effect = IntegrityError("insert", {}, Exception("duplicate key"))
+
+    meta = create_discovered_channel_metadata(
+        db,
+        source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        channel_name="decoder.aprs.payload_temp",
+        discovery_namespace="decoder.aprs",
+    )
+
+    assert meta is existing
+    db.rollback.assert_called_once()
 
 
 def test_source_has_telemetry_history_checks_custom_source_ids() -> None:

@@ -1,12 +1,13 @@
 """Telemetry business logic service."""
 
+import math
 import logging
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import desc, or_, select
+from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.interfaces.embedding_provider import EmbeddingProvider
@@ -20,6 +21,7 @@ from app.models.schemas import (
 )
 from app.services.source_run_service import normalize_source_id, run_id_to_source_id
 from app.utils.subsystem import infer_subsystem
+from app.services.realtime_service import CHANNEL_ORIGIN_CATALOG
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,7 @@ class TelemetryService:
             units=units,
             description=description,
             subsystem_tag=subsystem_tag,
+            channel_origin=CHANNEL_ORIGIN_CATALOG,
             red_low=Decimal(str(red_low)) if red_low is not None else None,
             red_high=Decimal(str(red_high)) if red_high is not None else None,
             embedding=embedding,
@@ -179,7 +182,7 @@ class TelemetryService:
         results: list[SearchResult] = []
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=recent_minutes) if recent_minutes else None
 
-        seen_names: set[str] = set()
+        result_by_name: dict[str, SearchResult] = {}
 
         def append_result(meta: TelemetryMetadata, match_confidence: float) -> bool:
             subsys = infer_subsystem(meta.name, meta)
@@ -222,56 +225,87 @@ class TelemetryService:
                 # Need state for anomalous filter but we don't have stats/latest
                 return False
 
-            results.append(
-                SearchResult(
-                    name=meta.name,
-                    match_confidence=match_confidence,
-                    description=meta.description,
-                    subsystem_tag=subsys,
-                    units=meta.units,
-                    current_value=current_value,
-                    current_status=current_status,
-                    last_timestamp=last_timestamp,
-                )
+            existing = result_by_name.get(meta.name)
+            if existing is not None:
+                if match_confidence <= existing.match_confidence:
+                    return False
+                existing.match_confidence = match_confidence
+                existing.description = meta.description
+                existing.subsystem_tag = subsys
+                existing.units = meta.units
+                existing.channel_origin = meta.channel_origin or "catalog"
+                existing.discovery_namespace = meta.discovery_namespace
+                existing.current_value = current_value
+                existing.current_status = current_status
+                existing.last_timestamp = last_timestamp
+                return True
+
+            result = SearchResult(
+                name=meta.name,
+                match_confidence=match_confidence,
+                description=meta.description,
+                subsystem_tag=subsys,
+                units=meta.units,
+                channel_origin=meta.channel_origin or "catalog",
+                discovery_namespace=meta.discovery_namespace,
+                current_value=current_value,
+                current_status=current_status,
+                last_timestamp=last_timestamp,
             )
-            seen_names.add(meta.name)
+            results.append(result)
+            result_by_name[meta.name] = result
             return True
 
         for meta, dist in rows:
-            if append_result(meta, 1.0 - float(dist)) and len(results) >= limit:
-                break
+            confidence = 1.0 - float(dist)
+            if not math.isfinite(confidence):
+                confidence = -1.0
+            append_result(meta, confidence)
 
-        if len(results) < limit:
-            raw_query = query.strip()
-            terms = [term for term in raw_query.lower().split() if term]
-            lexical_patterns = [f"%{term}%" for term in terms] or [f"%{raw_query.lower()}%"]
-            lexical_clauses = [
-                or_(
-                    TelemetryMetadata.name.ilike(pattern),
-                    TelemetryMetadata.description.ilike(pattern),
-                    TelemetryMetadata.subsystem_tag.ilike(pattern),
-                )
-                for pattern in lexical_patterns
-            ]
-            lexical_stmt = (
-                select(TelemetryMetadata)
-                .where(TelemetryMetadata.source_id == logical_source_id)
-                .where(TelemetryMetadata.name.not_in(seen_names) if seen_names else True)
-                .where(or_(*lexical_clauses))
-                .limit(fetch_limit)
+        raw_query = query.strip()
+        raw_query_lower = raw_query.lower()
+        terms = [term for term in raw_query_lower.split() if term]
+        lexical_patterns = [f"%{term}%" for term in terms] or [f"%{raw_query_lower}%"]
+        lexical_clauses = [
+            or_(
+                TelemetryMetadata.name.ilike(pattern),
+                TelemetryMetadata.description.ilike(pattern),
+                TelemetryMetadata.subsystem_tag.ilike(pattern),
             )
-            lexical_rows = self._db.execute(lexical_stmt).scalars().all()
+            for pattern in lexical_patterns
+        ]
+        lowered_name = func.lower(TelemetryMetadata.name)
+        lexical_priority = case(
+            (lowered_name == raw_query_lower, 0),
+            (lowered_name.like(f"{raw_query_lower}.%"), 1),
+            (lowered_name.like(f"{raw_query_lower}%"), 2),
+            (lowered_name.like(f"%{raw_query_lower}%"), 3),
+            else_=4,
+        )
+        lexical_stmt = (
+            select(TelemetryMetadata)
+            .where(TelemetryMetadata.source_id == logical_source_id)
+            .where(or_(*lexical_clauses))
+            .order_by(lexical_priority, lowered_name)
+            .limit(fetch_limit)
+        )
+        lexical_rows = self._db.execute(lexical_stmt).scalars().all()
 
-            for meta in lexical_rows:
-                haystack = " ".join(
-                    filter(None, [meta.name.lower(), (meta.description or "").lower(), (meta.subsystem_tag or "").lower()])
-                )
-                term_hits = sum(term in haystack for term in terms) if terms else int(raw_query.lower() in haystack)
+        for meta in lexical_rows:
+            haystack = " ".join(
+                filter(None, [meta.name.lower(), (meta.description or "").lower(), (meta.subsystem_tag or "").lower()])
+            )
+            if meta.name.lower() == raw_query_lower:
+                lexical_confidence = 0.99
+            elif raw_query_lower and raw_query_lower in meta.name.lower():
+                lexical_confidence = 0.94
+            else:
+                term_hits = sum(term in haystack for term in terms) if terms else int(raw_query_lower in haystack)
                 lexical_confidence = min(0.89, 0.5 + 0.15 * max(term_hits, 1))
-                if append_result(meta, lexical_confidence) and len(results) >= limit:
-                    break
+            append_result(meta, lexical_confidence)
 
-        return results
+        results.sort(key=lambda result: result.match_confidence, reverse=True)
+        return results[:limit]
 
     def get_recent_values(
         self,
@@ -505,6 +539,8 @@ class TelemetryService:
             name=meta.name,
             description=meta.description,
             units=meta.units,
+            channel_origin=meta.channel_origin or "catalog",
+            discovery_namespace=meta.discovery_namespace,
             statistics=StatisticsResponse(
                 mean=mean,
                 std_dev=std_dev,
