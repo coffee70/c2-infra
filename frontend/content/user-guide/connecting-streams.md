@@ -42,6 +42,8 @@ If an external decoder or payload stream emits a field that is not in the seeded
 
 Some external decoders only know when a packet was heard, not when it was generated onboard. Those streams may send `reception_time` without `generation_time`; the backend will synthesize `generation_time = reception_time` so the packet still flows through realtime ingest. For those packets, ordering and freshness are reception-based.
 
+For catalog-backed telemetry, the definition file can now carry **channel aliases**. This lets external producers keep sending names such as `BAT_V`, `BATTERY_VOLT`, or `VBAT` while the platform resolves them to one canonical channel like `PWR_MAIN_BUS_VOLT`. Alias matching is source-scoped, and stored watchlists, position mappings, alerts, and history still use the canonical channel name after resolution.
+
 ## Data Flow
 
 ```

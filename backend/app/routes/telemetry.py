@@ -40,6 +40,7 @@ from app.models.schemas import (
 )
 from app.services.embedding_service import SentenceTransformerEmbeddingProvider
 from app.services.llm_service import MockLLMProvider, OpenAICompatibleLLMProvider
+from app.services.channel_alias_service import get_aliases_by_telemetry_ids, resolve_channel_metadata
 from app.services.overview_service import (
     add_to_watchlist,
     get_all_telemetry_channels_for_source,
@@ -75,13 +76,7 @@ _llm_provider = None
 
 
 def _get_channel_meta(db: Session, source_id: str, name: str) -> TelemetryMetadata | None:
-    logical_source_id = run_id_to_source_id(source_id)
-    return db.execute(
-        select(TelemetryMetadata).where(
-            TelemetryMetadata.source_id == logical_source_id,
-            TelemetryMetadata.name == name,
-        )
-    ).scalars().first()
+    return resolve_channel_metadata(db, source_id=source_id, channel_name=name)
 
 
 def _resolve_scoped_run_id(source_id: str, run_id: Optional[str] = None) -> str:
@@ -334,6 +329,7 @@ def list_watchlist(
             {
                 "source_id": e["source_id"],
                 "name": e["name"],
+                "aliases": e.get("aliases", []),
                 "display_order": e["display_order"],
                 "channel_origin": e["channel_origin"],
                 "discovery_namespace": e["discovery_namespace"],
@@ -495,6 +491,7 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
 
     return ExplainResponse(
         name=meta.name,
+        aliases=get_aliases_by_telemetry_ids(db, source_id=source_id, telemetry_ids=[meta.id]).get(meta.id, []),
         description=meta.description,
         units=meta.units,
         channel_origin=meta.channel_origin or "catalog",

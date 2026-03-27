@@ -20,6 +20,7 @@ from app.models.schemas import (
     PositionChannelMappingUpsert,
     PositionSample,
 )
+from app.services.channel_alias_service import resolve_channel_metadata, resolve_channel_name
 from app.services.overview_service import _get_latest_value_and_ts
 from app.services.source_run_service import normalize_source_id, resolve_active_run_id, run_id_to_source_id
 from app.utils.coordinates import ecef_to_lla, eci_to_lla
@@ -30,12 +31,17 @@ logger = logging.getLogger(__name__)
 VALID_FRAMES = {"gps_lla", "ecef", "eci"}
 
 
+def _resolve_mapping_channel_name(db: Session, source_id: str, channel_name: str | None) -> str | None:
+    if not channel_name:
+        return None
+    resolved = resolve_channel_name(db, source_id=source_id, channel_name=channel_name)
+    if resolved is None:
+        raise ValueError(f"Telemetry not found: {channel_name}")
+    return resolved
+
+
 def _get_meta_by_name(db: Session, source_id: str, name: str) -> Optional[TelemetryMetadata]:
-    stmt = select(TelemetryMetadata).where(
-        TelemetryMetadata.source_id == run_id_to_source_id(source_id),
-        TelemetryMetadata.name == name,
-    )
-    return db.execute(stmt).scalars().first()
+    return resolve_channel_metadata(db, source_id=source_id, channel_name=name)
 
 
 def _get_latest_for_channel(
@@ -101,6 +107,13 @@ def upsert_mapping(
     elif body.frame_type in {"ecef", "eci"}:
         if not body.x_channel_name or not body.y_channel_name or not body.z_channel_name:
             raise ValueError(f"{body.frame_type} mappings require x/y/z channel names")
+
+    body.lat_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.lat_channel_name)
+    body.lon_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.lon_channel_name)
+    body.alt_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.alt_channel_name)
+    body.x_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.x_channel_name)
+    body.y_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.y_channel_name)
+    body.z_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.z_channel_name)
 
     existing = (
         db.execute(

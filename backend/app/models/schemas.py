@@ -11,6 +11,7 @@ class ChannelListItem(BaseModel):
     """Single telemetry channel entry for source-scoped pickers."""
 
     name: str
+    aliases: list[str] = []
     channel_origin: str = "catalog"
     discovery_namespace: Optional[str] = None
 
@@ -62,6 +63,7 @@ class SearchResult(BaseModel):
     """Single search result."""
 
     name: str
+    aliases: list[str] = []
     match_confidence: float
     description: Optional[str] = None
     subsystem_tag: Optional[str] = None
@@ -109,6 +111,7 @@ class ExplainResponse(BaseModel):
     """Response for GET /telemetry/{name}/explain."""
 
     name: str
+    aliases: list[str] = []
     description: Optional[str] = None
     units: Optional[str] = None
     channel_origin: str = "catalog"
@@ -173,6 +176,7 @@ class OverviewChannel(BaseModel):
     """Single channel in overview response."""
 
     name: str
+    aliases: list[str] = []
     units: Optional[str] = None
     description: Optional[str] = None
     subsystem_tag: str
@@ -221,6 +225,7 @@ class WatchlistEntrySchema(BaseModel):
 
     source_id: str
     name: str
+    aliases: list[str] = []
     display_order: int
     channel_origin: str = "catalog"
     discovery_namespace: Optional[str] = None

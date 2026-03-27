@@ -11,6 +11,7 @@ vehicle_profile:
     - "Training baseline vehicle for the local stack"
 channels:
   - name: PWR_MAIN_BUS_VOLT
+    aliases: [BAT_V, BATTERY_VOLT, VBAT]
     units: V
     description: Main regulated bus voltage
     subsystem: power
@@ -157,4 +158,3 @@ position_mapping:
   lat_channel_name: GPS_LAT
   lon_channel_name: GPS_LON
   alt_channel_name: GPS_ALT
-

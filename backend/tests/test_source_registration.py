@@ -20,6 +20,8 @@ from app.services.realtime_service import bootstrap_builtin_sources
 from app.services.realtime_service import refresh_source_embeddings
 from app.services.realtime_service import source_has_telemetry_history
 from app.services.realtime_service import update_source
+from app.models.telemetry import TelemetryChannelAlias
+from app.models.telemetry import TelemetryMetadata
 
 
 def test_create_source_flushes_before_seeding_metadata(monkeypatch) -> None:
@@ -167,6 +169,72 @@ def test_bootstrap_builtin_sources_flushes_before_seeding_new_sources(monkeypatc
     assert "add" in call_order
     assert "flush" in call_order
     assert "seed" in call_order
+
+
+def test_seed_metadata_for_source_creates_channel_alias_rows(tmp_path, monkeypatch) -> None:
+    db = MagicMock()
+    added: list[object] = []
+    definition = SimpleNamespace(
+        channels=[
+            SimpleNamespace(
+                name="PWR_MAIN_BUS_VOLT",
+                aliases=["BAT_V", "VBAT"],
+                units="V",
+                description="Main bus voltage",
+                subsystem="power",
+                red_low=None,
+                red_high=None,
+            )
+        ],
+        position_mapping=None,
+    )
+
+    class _ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    execute_results = [
+        _ScalarResult([]),  # existing metadata
+        _ScalarResult([]),  # existing aliases
+        _ScalarResult([]),  # alias prune delete
+        _ScalarResult([]),  # existing position mappings
+    ]
+    db.execute.side_effect = lambda *args, **kwargs: execute_results.pop(0)
+    db.add.side_effect = added.append
+
+    def fake_flush() -> None:
+        for obj in added:
+            if isinstance(obj, TelemetryMetadata) and obj.id is None:
+                obj.id = uuid.uuid4()
+
+    db.flush.side_effect = fake_flush
+    embedding_provider = MagicMock()
+    embedding_provider.embed.return_value = [0.1, 0.2, 0.3]
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_definition_file",
+        lambda _path: definition,
+    )
+
+    _seed_metadata_for_source(
+        db,
+        source_id="source-a",
+        telemetry_definition_path="ignored.yaml",
+        embedding_provider=embedding_provider,
+        refresh_embeddings=True,
+    )
+
+    aliases = [obj for obj in added if isinstance(obj, TelemetryChannelAlias)]
+    assert sorted(alias.alias_name for alias in aliases) == ["BAT_V", "VBAT"]
+    assert all(alias.telemetry_id is not None for alias in aliases)
 
 
 def test_bootstrap_builtin_sources_does_not_prune_existing_metadata(monkeypatch) -> None:
@@ -425,6 +493,28 @@ def test_reconcile_builtin_source_duplicates_ignores_custom_sources(monkeypatch)
     assert merge_calls == []
 
 
+def test_merge_builtin_duplicate_source_moves_channel_aliases() -> None:
+    from app.services.realtime_service import _merge_builtin_duplicate_source
+
+    db = MagicMock()
+    statements: list[str] = []
+
+    def fake_execute(statement, params=None):
+        statements.append(str(statement))
+        return MagicMock()
+
+    db.execute.side_effect = fake_execute
+
+    _merge_builtin_duplicate_source(
+        db,
+        old_source_id="old-source",
+        new_source_id="new-source",
+    )
+
+    assert any("INSERT INTO telemetry_channel_aliases" in stmt for stmt in statements)
+    assert any("DELETE FROM telemetry_channel_aliases" in stmt for stmt in statements)
+
+
 def test_bootstrap_builtin_sources_skips_invalid_catalogs_without_aborting(monkeypatch) -> None:
     """One stale definition path should not prevent startup repair for other sources."""
 
@@ -500,6 +590,8 @@ def test_seed_metadata_prunes_watchlist_entries_for_removed_channels(monkeypatch
         if "DELETE FROM watchlist" in statement_sql:
             stale_watchlist_delete.append(statement_sql)
             return MagicMock()
+        if "FROM telemetry_channel_aliases" in statement_sql:
+            return MagicMock(scalars=lambda: ScalarResult([]))
         if "FROM telemetry_metadata" in statement_sql:
             return MagicMock(scalars=lambda: ScalarResult([obsolete_meta]))
         if "FROM position_channel_mappings" in statement_sql:
@@ -561,6 +653,8 @@ def test_seed_metadata_does_not_prune_discovered_channels(monkeypatch) -> None:
         if "DELETE FROM watchlist" in statement_sql:
             watchlist_delete_statements.append(statement_sql)
             return MagicMock()
+        if "FROM telemetry_channel_aliases" in statement_sql:
+            return MagicMock(scalars=lambda: ScalarResult([]))
         if "FROM telemetry_metadata" in statement_sql:
             return MagicMock(scalars=lambda: ScalarResult([discovered_meta]))
         if "FROM position_channel_mappings" in statement_sql:
@@ -584,6 +678,319 @@ def test_seed_metadata_does_not_prune_discovered_channels(monkeypatch) -> None:
 
     assert watchlist_delete_statements == []
     db.delete.assert_not_called()
+
+
+def test_seed_metadata_prunes_removed_aliases_even_without_metadata_pruning(monkeypatch) -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    delete_statements: list[str] = []
+
+    retained_meta = MagicMock()
+    retained_meta.name = "retained_channel"
+    retained_meta.channel_origin = "catalog"
+
+    retained_channel = MagicMock()
+    retained_channel.name = "retained_channel"
+    retained_channel.aliases = ["NEW_ALIAS"]
+    retained_channel.units = "V"
+    retained_channel.description = "Retained"
+    retained_channel.subsystem = "power"
+    retained_channel.red_low = None
+    retained_channel.red_high = None
+    definition = MagicMock()
+    definition.channels = [retained_channel]
+    definition.position_mapping = None
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    def fake_execute(statement):
+        statement_sql = str(statement)
+        if "DELETE FROM telemetry_channel_aliases" in statement_sql:
+            delete_statements.append(statement_sql)
+            return MagicMock()
+        if "FROM telemetry_channel_aliases" in statement_sql:
+            return MagicMock(scalars=lambda: ScalarResult([]))
+        if "FROM telemetry_metadata" in statement_sql:
+            return MagicMock(scalars=lambda: ScalarResult([retained_meta]))
+        if "FROM position_channel_mappings" in statement_sql:
+            return MagicMock(scalars=lambda: ScalarResult([]))
+        raise AssertionError(f"Unexpected statement: {statement_sql}")
+
+    db.execute.side_effect = fake_execute
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_definition_file",
+        lambda _path: definition,
+    )
+
+    _seed_metadata_for_source(
+        db,
+        source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        embedding_provider=embedding_provider,
+        prune_missing=False,
+    )
+
+    assert delete_statements
+    assert "DELETE FROM telemetry_channel_aliases" in delete_statements[0]
+
+
+def test_seed_metadata_merges_discovered_alias_conflict_into_canonical_channel(monkeypatch) -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    statements: list[str] = []
+
+    catalog_meta = MagicMock()
+    catalog_meta.id = uuid.UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    catalog_meta.name = "PWR_MAIN_BUS_VOLT"
+    catalog_meta.channel_origin = "catalog"
+    discovered_meta = MagicMock()
+    discovered_meta.id = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    discovered_meta.name = "VBAT"
+    discovered_meta.channel_origin = "discovered"
+
+    channel = MagicMock()
+    channel.name = "PWR_MAIN_BUS_VOLT"
+    channel.aliases = ["VBAT"]
+    channel.units = "V"
+    channel.description = "Main bus voltage"
+    channel.subsystem = "power"
+    channel.red_low = None
+    channel.red_high = None
+    definition = MagicMock()
+    definition.channels = [channel]
+    definition.position_mapping = None
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    def fake_execute(statement, params=None):
+        statement_sql = str(statement)
+        statements.append(statement_sql)
+        if "DELETE FROM telemetry_channel_aliases" in statement_sql:
+            return MagicMock()
+        if "FROM telemetry_channel_aliases" in statement_sql:
+            return ScalarResult([])
+        if "FROM telemetry_metadata" in statement_sql:
+            return ScalarResult([catalog_meta, discovered_meta])
+        if "FROM position_channel_mappings" in statement_sql:
+            return ScalarResult([])
+        return MagicMock()
+
+    db.execute.side_effect = fake_execute
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_definition_file",
+        lambda _path: definition,
+    )
+
+    _seed_metadata_for_source(
+        db,
+        source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        embedding_provider=embedding_provider,
+        prune_missing=False,
+    )
+
+    assert any("INSERT INTO telemetry_data" in stmt for stmt in statements)
+    assert any("INSERT INTO telemetry_current" in stmt for stmt in statements)
+    assert any("INSERT INTO telemetry_statistics" in stmt for stmt in statements)
+    assert any("UPDATE telemetry_alerts" in stmt for stmt in statements)
+    current_merge_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_current" in stmt)
+    assert "EXCLUDED.generation_time > telemetry_current.generation_time" in current_merge_sql
+    assert "EXCLUDED.generation_time = telemetry_current.generation_time" in current_merge_sql
+    assert "EXCLUDED.reception_time >= telemetry_current.reception_time" in current_merge_sql
+    stats_recompute_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_statistics" in stmt)
+    assert "AVG(td.value)" in stats_recompute_sql
+    assert "COALESCE(STDDEV_POP(td.value), 0)" in stats_recompute_sql
+    assert "PERCENTILE_CONT(0.05) WITHIN GROUP (ORDER BY td.value)" in stats_recompute_sql
+    assert "GROUP BY td.source_id" in stats_recompute_sql
+    stats_delete_sql = next(
+        stmt for stmt in statements if "DELETE FROM telemetry_statistics" in stmt
+    )
+    assert "telemetry_id IN (:old_id, :new_id)" in stats_delete_sql
+    db.delete.assert_called_once_with(discovered_meta)
+
+
+def test_seed_metadata_allows_renamed_channel_to_keep_old_name_as_alias_when_pruning(monkeypatch) -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+
+    old_meta = MagicMock()
+    old_meta.id = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    old_meta.name = "VBAT"
+    old_meta.channel_origin = "catalog"
+
+    channel = MagicMock()
+    channel.name = "PWR_MAIN_BUS_VOLT"
+    channel.aliases = ["VBAT"]
+    channel.units = "V"
+    channel.description = "Main bus voltage"
+    channel.subsystem = "power"
+    channel.red_low = None
+    channel.red_high = None
+    definition = MagicMock()
+    definition.channels = [channel]
+    definition.position_mapping = None
+
+    added: list[object] = []
+    watchlist_statements: list[object] = []
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    def fake_execute(statement, params=None):
+        statement_sql = str(statement)
+        if "DELETE FROM telemetry_channel_aliases" in statement_sql:
+            return MagicMock()
+        if "watchlist" in statement_sql:
+            watchlist_statements.append((statement, params))
+            return MagicMock()
+        if "FROM telemetry_channel_aliases" in statement_sql:
+            return ScalarResult([])
+        if "FROM telemetry_metadata" in statement_sql:
+            return ScalarResult([old_meta])
+        if "FROM position_channel_mappings" in statement_sql:
+            return ScalarResult([])
+        raise AssertionError(f"Unexpected statement: {statement_sql}")
+
+    db.execute.side_effect = fake_execute
+    db.add.side_effect = added.append
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_definition_file",
+        lambda _path: definition,
+    )
+
+    _seed_metadata_for_source(
+        db,
+        source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        embedding_provider=embedding_provider,
+        prune_missing=True,
+    )
+
+    db.delete.assert_not_called()
+    assert old_meta.name == "PWR_MAIN_BUS_VOLT"
+    assert len(watchlist_statements) == 2
+    assert watchlist_statements[0][1] == {
+        "source_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "old_name": "VBAT",
+        "new_name": "PWR_MAIN_BUS_VOLT",
+    }
+    aliases = [obj for obj in added if isinstance(obj, TelemetryChannelAlias)]
+    assert len(aliases) == 1
+    assert aliases[0].alias_name == "VBAT"
+    assert aliases[0].telemetry_id == old_meta.id
+
+
+def test_seed_metadata_does_not_prune_watchlist_for_preserved_alias_name(monkeypatch) -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+
+    old_meta = MagicMock()
+    old_meta.id = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    old_meta.name = "VBAT"
+    old_meta.channel_origin = "catalog"
+
+    obsolete_meta = MagicMock()
+    obsolete_meta.name = "OBSOLETE"
+    obsolete_meta.channel_origin = "catalog"
+
+    channel = MagicMock()
+    channel.name = "PWR_MAIN_BUS_VOLT"
+    channel.aliases = ["VBAT"]
+    channel.units = "V"
+    channel.description = "Main bus voltage"
+    channel.subsystem = "power"
+    channel.red_low = None
+    channel.red_high = None
+    definition = MagicMock()
+    definition.channels = [channel]
+    definition.position_mapping = None
+
+    watchlist_statements: list[tuple[object, object]] = []
+
+    class ScalarResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def first(self):
+            return self._rows[0] if self._rows else None
+
+    def fake_execute(statement, params=None):
+        statement_sql = str(statement)
+        if "DELETE FROM telemetry_channel_aliases" in statement_sql:
+            return MagicMock()
+        if "watchlist" in statement_sql:
+            watchlist_statements.append((statement, params))
+            return MagicMock()
+        if "FROM telemetry_channel_aliases" in statement_sql:
+            return ScalarResult([])
+        if "FROM telemetry_metadata" in statement_sql:
+            return ScalarResult([old_meta, obsolete_meta])
+        if "FROM position_channel_mappings" in statement_sql:
+            return ScalarResult([])
+        raise AssertionError(f"Unexpected statement: {statement_sql}")
+
+    db.execute.side_effect = fake_execute
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_definition_file",
+        lambda _path: definition,
+    )
+
+    _seed_metadata_for_source(
+        db,
+        source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        embedding_provider=embedding_provider,
+        prune_missing=True,
+    )
+
+    prune_deletes = [
+        statement.compile().params
+        for statement, _params in watchlist_statements
+        if "telemetry_name_1" in statement.compile().params
+    ]
+    assert prune_deletes == [{"telemetry_name_1": ["OBSOLETE"], "source_id_1": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]
 
 
 def test_seed_metadata_promotes_discovered_channel_when_definition_catches_up(monkeypatch) -> None:
@@ -624,6 +1031,8 @@ def test_seed_metadata_promotes_discovered_channel_when_definition_catches_up(mo
         statement_sql = str(statement)
         if "FROM telemetry_metadata" in statement_sql:
             return ScalarResult([existing_meta])
+        if "FROM telemetry_channel_aliases" in statement_sql:
+            return ScalarResult([])
         if "FROM position_channel_mappings" in statement_sql:
             return ScalarResult([])
         raise AssertionError(f"Unexpected statement: {statement_sql}")
@@ -685,6 +1094,8 @@ def test_seed_metadata_flags_promoted_discovered_channel_without_embedding_for_b
         statement_sql = str(statement)
         if "FROM telemetry_metadata" in statement_sql:
             return ScalarResult([existing_meta])
+        if "FROM telemetry_channel_aliases" in statement_sql:
+            return ScalarResult([])
         if "FROM position_channel_mappings" in statement_sql:
             return ScalarResult([])
         raise AssertionError(f"Unexpected statement: {statement_sql}")

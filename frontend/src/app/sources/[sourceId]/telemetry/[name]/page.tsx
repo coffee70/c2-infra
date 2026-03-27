@@ -19,6 +19,7 @@ interface RelatedChannel {
 
 interface ExplainResponse {
   name: string;
+  aliases?: string[];
   description: string | null;
   units?: string | null;
   channel_origin?: string | null;
@@ -98,10 +99,13 @@ async function fetchRecent(name: string, sourceId: string, runId: string): Promi
 
 export default async function TelemetryDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ sourceId: string; name: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { sourceId: rawSourceId, name } = await params;
+  const resolvedSearchParams = await searchParams;
   const requestedSourceId = decodeURIComponent(rawSourceId);
   const decodedName = decodeURIComponent(name);
   const isHistoricalRunId = /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?$/.test(requestedSourceId);
@@ -120,6 +124,19 @@ export default async function TelemetryDetailPage({
     redirect(`/overview?source=${encodeURIComponent(sourceId)}&channel_unavailable=${encodeURIComponent(decodedName)}`);
   }
   if (!explain) notFound();
+  if (explain.name !== decodedName) {
+    const redirectParams = new URLSearchParams();
+    const selectedRun =
+      resolvedSearchParams.run ??
+      resolvedSearchParams.run_id;
+    if (typeof selectedRun === "string" && selectedRun) {
+      redirectParams.set("run", selectedRun);
+    }
+    const suffix = redirectParams.toString();
+    redirect(
+      `/sources/${encodeURIComponent(requestedSourceId)}/telemetry/${encodeURIComponent(explain.name)}${suffix ? `?${suffix}` : ""}`
+    );
+  }
 
   return (
     <TelemetryDetailTabs

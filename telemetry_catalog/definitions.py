@@ -67,6 +67,7 @@ class VehicleProfileDefinition(BaseModel):
 
 class TelemetryChannelDefinition(BaseModel):
     name: str
+    aliases: list[str] = Field(default_factory=list)
     units: str
     description: str
     subsystem: str
@@ -88,10 +89,30 @@ class TelemetryDefinitionFile(BaseModel):
     @model_validator(mode="after")
     def validate_channels(self) -> "TelemetryDefinitionFile":
         seen: set[str] = set()
+        aliases_seen: dict[str, str] = {}
         for channel in self.channels:
             if channel.name in seen:
                 raise ValueError(f"duplicate channel name: {channel.name}")
             seen.add(channel.name)
+            local_aliases: set[str] = set()
+            for alias in channel.aliases:
+                if alias == channel.name:
+                    raise ValueError(f"channel alias duplicates canonical name: {alias}")
+                if alias in seen:
+                    raise ValueError(f"channel alias collides with canonical name: {alias}")
+                if alias in local_aliases:
+                    raise ValueError(f"duplicate alias for channel {channel.name}: {alias}")
+                existing_owner = aliases_seen.get(alias)
+                if existing_owner is not None:
+                    raise ValueError(
+                        f"channel alias {alias} is already assigned to {existing_owner}"
+                    )
+                local_aliases.add(alias)
+                aliases_seen[alias] = channel.name
+
+        for alias_name, owner in aliases_seen.items():
+            if alias_name in seen and alias_name != owner:
+                raise ValueError(f"channel alias collides with canonical name: {alias_name}")
 
         if self.position_mapping is not None:
             referenced = [

@@ -9,6 +9,7 @@ When you see an anomaly or want to understand a telemetry channel, follow this f
 Go to **Overview** and use the search bar under the Context Banner. Enter a semantic query (e.g. "voltage", "temperature", "speed"). The platform uses semantic search, so you find channels by meaning, not exact names.
 
 - Search is scoped to the source selected in the Context Banner; results and current values follow that source.
+- If a source defines channel aliases, search can match either the canonical name or an accepted alias. Results still open the canonical channel page.
 - Runtime-discovered channels appear in search and watchlist pickers with a **Discovered** badge. These are fields the source emitted live even though they were not in the seeded definition catalog.
 - Expand **Advanced filters** to filter by subsystem, units, anomalous status, or recent activity
 - Add a channel to the watchlist
@@ -19,6 +20,8 @@ Go to **Overview** and use the search bar under the Context Banner. Enter a sema
 Click a channel (from Overview search, a watchlist card, or the anomaly queue) to open its detail page.
 
 The canonical detail URL is source-first: `/sources/{source_id}/telemetry/{channel_name}`. This means the page always represents one channel in one source’s catalog, not a global channel name with a source filter layered on later.
+
+If you open the page using an alias instead of the canonical channel name, the app resolves the alias and redirects to the canonical URL. This keeps history, watchlists, and copied links anchored to one channel identity.
 
 The page is organized into **vertical tabs** so you can quickly switch between different views of the same channel:
 
