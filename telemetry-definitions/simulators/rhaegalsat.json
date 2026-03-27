@@ -10,7 +10,7 @@
     "notes": ["Heavier, more redundant platform with dense thermal instrumentation"]
   },
   "channels": [
-    {"name": "PWR_MAIN_BUS_VOLT", "units": "V", "description": "Main bus voltage", "subsystem": "power", "mean": 28.0, "std_dev": 0.22, "red_low": 27.1, "red_high": 29.0, "sample_rate_hz": 1.0},
+    {"name": "PWR_MAIN_BUS_VOLT", "aliases": ["BAT_V", "BATTERY_VOLT", "VBAT"], "units": "V", "description": "Main bus voltage", "subsystem": "power", "mean": 28.0, "std_dev": 0.22, "red_low": 27.1, "red_high": 29.0, "sample_rate_hz": 1.0},
     {"name": "PWR_MAIN_BUS_CURR", "units": "A", "description": "Main bus current", "subsystem": "power", "mean": 7.1, "std_dev": 0.55, "red_low": 4.5, "red_high": 8.8},
     {"name": "EPS_BATTERY_SOC", "units": "%", "description": "Battery state of charge", "subsystem": "power", "mean": 84.0, "std_dev": 3.8, "red_low": 42.0, "red_high": 99.0},
     {"name": "THERM_OBC_A_TEMP", "units": "C", "description": "OBC A board temperature", "subsystem": "thermal", "mean": 34.0, "std_dev": 2.8, "red_low": 0.0, "red_high": 58.0},

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.interfaces.embedding_provider import EmbeddingProvider
 from app.interfaces.llm_provider import LLMProvider
-from app.models.telemetry import TelemetryData, TelemetryMetadata, TelemetryStatistics
+from app.models.telemetry import TelemetryChannelAlias, TelemetryData, TelemetryMetadata, TelemetryStatistics
 from app.models.schemas import (
     RelatedChannel,
     StatisticsResponse,
@@ -20,6 +20,10 @@ from app.models.schemas import (
     SearchResult,
 )
 from app.services.source_run_service import normalize_source_id, run_id_to_source_id
+from app.services.channel_alias_service import (
+    get_aliases_by_telemetry_ids,
+    resolve_channel_metadata,
+)
 from app.utils.subsystem import infer_subsystem
 from app.services.realtime_service import CHANNEL_ORIGIN_CATALOG
 
@@ -112,12 +116,7 @@ class TelemetryService:
 
     def get_by_name(self, source_id: str, name: str) -> Optional[TelemetryMetadata]:
         """Fetch metadata by source and name."""
-        logical_source_id = run_id_to_source_id(source_id)
-        stmt = select(TelemetryMetadata).where(
-            TelemetryMetadata.source_id == logical_source_id,
-            TelemetryMetadata.name == name,
-        )
-        return self._db.execute(stmt).scalar_one_or_none()
+        return resolve_channel_metadata(self._db, source_id=source_id, channel_name=name)
 
     def get_by_id(self, telemetry_id: UUID) -> Optional[TelemetryMetadata]:
         """Fetch metadata by ID."""
@@ -181,8 +180,15 @@ class TelemetryService:
 
         results: list[SearchResult] = []
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=recent_minutes) if recent_minutes else None
+        alias_rows: list[TelemetryMetadata] = []
+        candidate_ids = [meta.id for meta, _dist in rows]
 
         result_by_name: dict[str, SearchResult] = {}
+        aliases_by_id: dict[UUID, list[str]] = get_aliases_by_telemetry_ids(
+            self._db,
+            source_id=source_id,
+            telemetry_ids=candidate_ids,
+        )
 
         def append_result(meta: TelemetryMetadata, match_confidence: float) -> bool:
             subsys = infer_subsystem(meta.name, meta)
@@ -238,6 +244,7 @@ class TelemetryService:
                 existing.current_value = current_value
                 existing.current_status = current_status
                 existing.last_timestamp = last_timestamp
+                existing.aliases = aliases_by_id.get(meta.id, [])
                 return True
 
             result = SearchResult(
@@ -251,16 +258,11 @@ class TelemetryService:
                 current_value=current_value,
                 current_status=current_status,
                 last_timestamp=last_timestamp,
+                aliases=aliases_by_id.get(meta.id, []),
             )
             results.append(result)
             result_by_name[meta.name] = result
             return True
-
-        for meta, dist in rows:
-            confidence = 1.0 - float(dist)
-            if not math.isfinite(confidence):
-                confidence = -1.0
-            append_result(meta, confidence)
 
         raw_query = query.strip()
         raw_query_lower = raw_query.lower()
@@ -290,6 +292,63 @@ class TelemetryService:
             .limit(fetch_limit)
         )
         lexical_rows = self._db.execute(lexical_stmt).scalars().all()
+        candidate_ids.extend(meta.id for meta in lexical_rows)
+
+        lowered_alias = func.lower(TelemetryChannelAlias.alias_name)
+        alias_priority = case(
+            (lowered_alias == raw_query_lower, 0),
+            (lowered_alias.like(f"{raw_query_lower}.%"), 1),
+            (lowered_alias.like(f"{raw_query_lower}%"), 2),
+            (lowered_alias.like(f"%{raw_query_lower}%"), 3),
+            else_=4,
+        )
+        alias_match_ids = (
+            select(
+                TelemetryMetadata.id.label("telemetry_id"),
+                lowered_name.label("lowered_name"),
+                func.min(lowered_alias).label("lowered_alias"),
+                func.min(alias_priority).label("alias_priority"),
+            )
+            .join(TelemetryChannelAlias, TelemetryChannelAlias.telemetry_id == TelemetryMetadata.id)
+            .where(TelemetryMetadata.source_id == logical_source_id)
+            .where(
+                or_(
+                    *[
+                        TelemetryChannelAlias.alias_name.ilike(pattern)
+                        for pattern in lexical_patterns
+                    ]
+                )
+            )
+            .group_by(TelemetryMetadata.id, TelemetryMetadata.name)
+            .order_by("alias_priority", "lowered_alias", "lowered_name")
+            .limit(fetch_limit)
+            .subquery()
+        )
+        alias_lexical_stmt = (
+            select(TelemetryMetadata)
+            .join(alias_match_ids, alias_match_ids.c.telemetry_id == TelemetryMetadata.id)
+            .order_by(
+                alias_match_ids.c.alias_priority,
+                alias_match_ids.c.lowered_alias,
+                alias_match_ids.c.lowered_name,
+            )
+        )
+        alias_rows = self._db.execute(alias_lexical_stmt).scalars().all()
+        candidate_ids.extend(meta.id for meta in alias_rows)
+        candidate_ids = list(dict.fromkeys(candidate_ids))
+        aliases_by_id.update(
+            get_aliases_by_telemetry_ids(
+                self._db,
+                source_id=source_id,
+                telemetry_ids=candidate_ids,
+            )
+        )
+
+        for meta, dist in rows:
+            confidence = 1.0 - float(dist)
+            if not math.isfinite(confidence):
+                confidence = -1.0
+            append_result(meta, confidence)
 
         for meta in lexical_rows:
             haystack = " ".join(
@@ -303,6 +362,15 @@ class TelemetryService:
                 term_hits = sum(term in haystack for term in terms) if terms else int(raw_query_lower in haystack)
                 lexical_confidence = min(0.89, 0.5 + 0.15 * max(term_hits, 1))
             append_result(meta, lexical_confidence)
+
+        for meta in alias_rows:
+            alias_text = " ".join(aliases_by_id.get(meta.id, [])).lower()
+            if raw_query_lower and raw_query_lower in alias_text:
+                alias_confidence = 0.95
+            else:
+                term_hits = sum(term in alias_text for term in terms) if terms else int(raw_query_lower in alias_text)
+                alias_confidence = min(0.9, 0.55 + 0.15 * max(term_hits, 1))
+            append_result(meta, alias_confidence)
 
         results.sort(key=lambda result: result.match_confidence, reverse=True)
         return results[:limit]
@@ -359,6 +427,7 @@ class TelemetryService:
         meta = self.get_by_name(source_id, name)
         if not meta:
             return []
+        canonical_name = meta.name
 
         subsys = infer_subsystem(meta.name, meta)
         units = meta.units or ""
@@ -366,7 +435,7 @@ class TelemetryService:
         # Fetch all metadata except self
         stmt = select(TelemetryMetadata).where(
             TelemetryMetadata.source_id == run_id_to_source_id(source_id),
-            TelemetryMetadata.name != name,
+            TelemetryMetadata.name != canonical_name,
         )
         all_meta = self._db.execute(stmt).scalars().all()
 
@@ -390,9 +459,7 @@ class TelemetryService:
 
         # If fewer than limit, add semantic search within same subsystem
         if len(ordered) < limit:
-            semantic_results = self.semantic_search(
-                meta.name, limit=limit, subsystem=subsys, source_id=source_id
-            )
+            semantic_results = self.semantic_search(canonical_name, limit=limit, subsystem=subsys, source_id=source_id)
             seen = {m.name for m, _ in ordered}
             for r in semantic_results:
                 if r.name not in seen:
@@ -461,6 +528,12 @@ class TelemetryService:
         meta = self.get_by_name(source_id, name)
         if not meta:
             raise ValueError(f"Telemetry not found: {name}")
+        canonical_name = meta.name
+        aliases = get_aliases_by_telemetry_ids(
+            self._db,
+            source_id=source_id,
+            telemetry_ids=[meta.id],
+        ).get(meta.id, [])
 
         stats_row = self._db.get(TelemetryStatistics, (data_source_id, meta.id))
         if not stats_row:
@@ -470,7 +543,7 @@ class TelemetryService:
             stats_service._recompute_one(meta.id, source_id=data_source_id)
             self._db.flush()
             stats_row = self._db.get(TelemetryStatistics, (data_source_id, meta.id))
-        recent_row = self.get_recent_value_with_timestamp(name, source_id=source_id)
+        recent_row = self.get_recent_value_with_timestamp(canonical_name, source_id=source_id)
         recent_value = recent_row[0] if recent_row else None  # (value, timestamp)
         last_timestamp = recent_row[1].isoformat() if recent_row else None
 
@@ -531,12 +604,13 @@ class TelemetryService:
                     s = sentences[0]
                     what_this_means = s if s.endswith(".") else s + "."
 
-            related = self.get_related_channels(name, limit=5, source_id=source_id)
+            related = self.get_related_channels(canonical_name, limit=5, source_id=source_id)
         n_samples = getattr(stats_row, "n_samples", 0)
         confidence = self._compute_confidence_indicator(n_samples, last_timestamp)
 
         return ExplainResponse(
             name=meta.name,
+            aliases=aliases,
             description=meta.description,
             units=meta.units,
             channel_origin=meta.channel_origin or "catalog",

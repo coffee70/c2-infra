@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Source-scoped channel aliases** — Telemetry definition files can now declare alias names for catalog channels. Ingest, watchlist changes, position mapping, channel detail APIs, and channel search accept either the canonical name or a configured alias, then normalize back to the canonical channel identity for storage and URLs.
 - **Dynamic telemetry channel discovery** — Realtime ingest now creates durable source-scoped `discovered` channels for unknown live fields instead of dropping them. Decoder-tagged payloads can derive stable names such as `decoder.aprs.payload_temp`, and those channels now appear in source-scoped lists, search, summaries, and watchlist configuration.
 - **Per-source telemetry definition files** — Vehicles and simulators now register with a JSON or YAML `telemetry_definition_path`. The backend validates the file, seeds that source’s telemetry catalog automatically, and seeds any inline position mapping so the system knows which channels to expect before the source goes live.
 - **Built-in source catalog refresh** — The local stack now ships with four named built-ins backed by fixed UUID source IDs: `Aegon Relay`, `Balerion Surveyor`, `DrogonSat`, and `RhaegalSat`.

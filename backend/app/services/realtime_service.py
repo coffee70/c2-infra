@@ -14,12 +14,14 @@ from app.models.schemas import RealtimeChannelUpdate, RecentDataPoint, Telemetry
 from app.models.telemetry import (
     PositionChannelMapping,
     TelemetryAlert,
+    TelemetryChannelAlias,
     TelemetryCurrent,
     TelemetryData,
     TelemetryMetadata,
     TelemetrySource,
     WatchlistEntry,
 )
+from app.services.channel_alias_service import get_aliases_by_telemetry_ids
 from app.services.source_run_service import normalize_source_id, run_id_to_source_id
 from app.utils.subsystem import infer_subsystem
 from telemetry_catalog.builtins import BUILT_IN_SOURCES
@@ -103,6 +105,309 @@ def create_discovered_channel_metadata(
     return meta
 
 
+def _retarget_watchlist_entries(
+    db: Session,
+    *,
+    source_id: str,
+    old_name: str,
+    new_name: str,
+) -> None:
+    if old_name == new_name:
+        return
+    params = {
+        "source_id": source_id,
+        "old_name": old_name,
+        "new_name": new_name,
+    }
+    db.execute(
+        text(
+            """
+            UPDATE watchlist
+            SET telemetry_name = :new_name
+            WHERE source_id = :source_id
+              AND telemetry_name = :old_name
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            DELETE FROM watchlist
+            WHERE id IN (
+              SELECT id
+              FROM (
+                SELECT
+                  id,
+                  row_number() OVER (
+                    PARTITION BY source_id, telemetry_name
+                    ORDER BY display_order, created_at, id
+                  ) AS row_num
+                FROM watchlist
+                WHERE source_id = :source_id
+                  AND telemetry_name = :new_name
+              ) AS ranked
+              WHERE row_num > 1
+            )
+            """
+        ),
+        params,
+    )
+
+
+def _merge_same_source_metadata(
+    db: Session,
+    *,
+    source_id: str,
+    old_meta: TelemetryMetadata,
+    new_meta: TelemetryMetadata,
+) -> None:
+    if old_meta.id == new_meta.id:
+        return
+
+    params = {
+        "source_id": source_id,
+        "run_prefix": f"{source_id}-%",
+        "old_id": old_meta.id,
+        "new_id": new_meta.id,
+    }
+
+    db.execute(
+        text(
+            """
+            INSERT INTO telemetry_channel_aliases (
+              source_id,
+              alias_name,
+              telemetry_id,
+              created_at
+            )
+            SELECT
+              :source_id,
+              tca.alias_name,
+              :new_id,
+              tca.created_at
+            FROM telemetry_channel_aliases AS tca
+            WHERE tca.source_id = :source_id
+              AND tca.telemetry_id = :old_id
+            ON CONFLICT (source_id, alias_name) DO UPDATE
+            SET telemetry_id = EXCLUDED.telemetry_id
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            DELETE FROM telemetry_channel_aliases
+            WHERE source_id = :source_id
+              AND telemetry_id = :old_id
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO telemetry_data (source_id, telemetry_id, timestamp, value)
+            SELECT
+              td.source_id,
+              :new_id,
+              td.timestamp,
+              td.value
+            FROM telemetry_data AS td
+            WHERE (td.source_id = :source_id OR td.source_id LIKE :run_prefix)
+              AND td.telemetry_id = :old_id
+            ON CONFLICT (source_id, telemetry_id, timestamp) DO NOTHING
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            DELETE FROM telemetry_data
+            WHERE (source_id = :source_id OR source_id LIKE :run_prefix)
+              AND telemetry_id = :old_id
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO telemetry_current (
+              source_id,
+              telemetry_id,
+              generation_time,
+              reception_time,
+              value,
+              state,
+              state_reason,
+              z_score,
+              quality,
+              sequence
+            )
+            SELECT
+              tc.source_id,
+              :new_id,
+              tc.generation_time,
+              tc.reception_time,
+              tc.value,
+              tc.state,
+              tc.state_reason,
+              tc.z_score,
+              tc.quality,
+              tc.sequence
+            FROM telemetry_current AS tc
+            WHERE (tc.source_id = :source_id OR tc.source_id LIKE :run_prefix)
+              AND tc.telemetry_id = :old_id
+            ON CONFLICT (source_id, telemetry_id) DO UPDATE
+            SET
+              generation_time = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.generation_time
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.generation_time
+                ELSE telemetry_current.generation_time
+              END,
+              reception_time = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.reception_time
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.reception_time
+                ELSE telemetry_current.reception_time
+              END,
+              value = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.value
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.value
+                ELSE telemetry_current.value
+              END,
+              state = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.state
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.state
+                ELSE telemetry_current.state
+              END,
+              state_reason = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.state_reason
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.state_reason
+                ELSE telemetry_current.state_reason
+              END,
+              z_score = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.z_score
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.z_score
+                ELSE telemetry_current.z_score
+              END,
+              quality = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.quality
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.quality
+                ELSE telemetry_current.quality
+              END,
+              sequence = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.sequence
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.sequence
+                ELSE telemetry_current.sequence
+              END
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            DELETE FROM telemetry_current
+            WHERE (source_id = :source_id OR source_id LIKE :run_prefix)
+              AND telemetry_id = :old_id
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            DELETE FROM telemetry_statistics
+            WHERE (source_id = :source_id OR source_id LIKE :run_prefix)
+              AND telemetry_id IN (:old_id, :new_id)
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            INSERT INTO telemetry_statistics (
+              source_id,
+              telemetry_id,
+              mean,
+              std_dev,
+              min_value,
+              max_value,
+              p5,
+              p50,
+              p95,
+              n_samples,
+              last_computed_at
+            )
+            SELECT
+              td.source_id,
+              :new_id,
+              AVG(td.value),
+              COALESCE(STDDEV_POP(td.value), 0),
+              MIN(td.value),
+              MAX(td.value),
+              PERCENTILE_CONT(0.05) WITHIN GROUP (ORDER BY td.value),
+              PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY td.value),
+              PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY td.value),
+              COUNT(*),
+              NOW()
+            FROM telemetry_data AS td
+            WHERE (td.source_id = :source_id OR td.source_id LIKE :run_prefix)
+              AND td.telemetry_id = :new_id
+            GROUP BY td.source_id
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            UPDATE telemetry_alerts
+            SET telemetry_id = :new_id
+            WHERE telemetry_id = :old_id
+              AND (source_id = :source_id OR source_id LIKE :run_prefix)
+            """
+        ),
+        params,
+    )
+
+    _retarget_watchlist_entries(
+        db,
+        source_id=source_id,
+        old_name=old_meta.name,
+        new_name=new_meta.name,
+    )
+    db.delete(old_meta)
+
+
 def _seed_metadata_for_source(
     db: Session,
     *,
@@ -120,13 +425,29 @@ def _seed_metadata_for_source(
         select(TelemetryMetadata).where(TelemetryMetadata.source_id == source_id)
     ).scalars().all()
     existing_by_name = {row.name: row for row in existing_rows}
+    existing_aliases = db.execute(
+        select(TelemetryChannelAlias).where(TelemetryChannelAlias.source_id == source_id)
+    ).scalars().all()
+    existing_aliases_by_name = {row.alias_name: row for row in existing_aliases}
     expected_names = {channel.name for channel in definition.channels}
+    expected_aliases = {alias for channel in definition.channels for alias in channel.aliases}
+    preserved_alias_names = expected_aliases - expected_names
+    removed_names: set[str] = set()
+
+    db.execute(
+        delete(TelemetryChannelAlias).where(
+            TelemetryChannelAlias.source_id == source_id,
+            TelemetryChannelAlias.alias_name.not_in(expected_aliases),
+        )
+    )
 
     if prune_missing:
         removed_names = {
             row.name
             for row in existing_rows
-            if row.channel_origin != CHANNEL_ORIGIN_DISCOVERED and row.name not in expected_names
+            if row.channel_origin != CHANNEL_ORIGIN_DISCOVERED
+            and row.name not in expected_names
+            and row.name not in preserved_alias_names
         }
         if removed_names:
             db.execute(
@@ -136,13 +457,45 @@ def _seed_metadata_for_source(
                 )
             )
         for row in existing_rows:
-            if row.channel_origin != CHANNEL_ORIGIN_DISCOVERED and row.name not in expected_names:
+            if (
+                row.channel_origin != CHANNEL_ORIGIN_DISCOVERED
+                and row.name not in expected_names
+                and row.name not in preserved_alias_names
+            ):
                 db.delete(row)
+        if removed_names:
+            existing_by_name = {
+                name: row for name, row in existing_by_name.items() if name not in removed_names
+            }
 
     for channel in definition.channels:
         meta = existing_by_name.get(channel.name)
         if meta is None:
+            renamed_alias = next(
+                (
+                    existing_by_name[alias_name]
+                    for alias_name in channel.aliases
+                    if alias_name in existing_by_name
+                    and existing_by_name[alias_name].channel_origin != CHANNEL_ORIGIN_DISCOVERED
+                    and alias_name in preserved_alias_names
+                ),
+                None,
+            )
+            if renamed_alias is not None:
+                old_name = renamed_alias.name
+                existing_by_name.pop(renamed_alias.name, None)
+                renamed_alias.name = channel.name
+                existing_by_name[channel.name] = renamed_alias
+                _retarget_watchlist_entries(
+                    db,
+                    source_id=source_id,
+                    old_name=old_name,
+                    new_name=channel.name,
+                )
+                meta = renamed_alias
+        if meta is None:
             meta = TelemetryMetadata(
+                id=uuid.uuid4(),
                 source_id=source_id,
                 name=channel.name,
                 channel_origin=CHANNEL_ORIGIN_CATALOG,
@@ -163,6 +516,32 @@ def _seed_metadata_for_source(
         meta.discovery_namespace = None
         meta.red_low = Decimal(str(channel.red_low)) if channel.red_low is not None else None
         meta.red_high = Decimal(str(channel.red_high)) if channel.red_high is not None else None
+        for alias_name in channel.aliases:
+            conflicting_meta = existing_by_name.get(alias_name)
+            if conflicting_meta is not None and conflicting_meta.name != channel.name:
+                if conflicting_meta.channel_origin == CHANNEL_ORIGIN_DISCOVERED:
+                    _merge_same_source_metadata(
+                        db,
+                        source_id=source_id,
+                        old_meta=conflicting_meta,
+                        new_meta=meta,
+                    )
+                    existing_by_name.pop(alias_name, None)
+                else:
+                    raise ValueError(
+                        f"channel alias {alias_name} conflicts with existing channel {conflicting_meta.name}"
+                    )
+            alias = existing_aliases_by_name.get(alias_name)
+            if alias is None:
+                alias = TelemetryChannelAlias(
+                    source_id=source_id,
+                    alias_name=alias_name,
+                    telemetry_id=meta.id,
+                )
+                db.add(alias)
+                existing_aliases_by_name[alias_name] = alias
+            else:
+                alias.telemetry_id = meta.id
 
     mapping = definition.position_mapping
     existing_mapping = db.execute(
@@ -255,6 +634,40 @@ def _merge_builtin_duplicate_source(
             FROM tmp_builtin_meta_map AS map
             WHERE old_meta.id = map.old_id
               AND map.target_exists = FALSE
+            """
+        ),
+        params,
+    )
+
+    db.execute(
+        text(
+            """
+            INSERT INTO telemetry_channel_aliases (
+              source_id,
+              alias_name,
+              telemetry_id,
+              created_at
+            )
+            SELECT
+              :new_source_id,
+              tca.alias_name,
+              map.new_id,
+              tca.created_at
+            FROM telemetry_channel_aliases AS tca
+            JOIN tmp_builtin_meta_map AS map
+              ON map.old_id = tca.telemetry_id
+            WHERE tca.source_id = :old_source_id
+            ON CONFLICT (source_id, alias_name) DO UPDATE
+            SET telemetry_id = EXCLUDED.telemetry_id
+            """
+        ),
+        params,
+    )
+    db.execute(
+        text(
+            """
+            DELETE FROM telemetry_channel_aliases
+            WHERE source_id = :old_source_id
             """
         ),
         params,

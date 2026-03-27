@@ -3,6 +3,7 @@
 from app.models.telemetry import (
     TelemetryAlert,
     TelemetryAlertNote,
+    TelemetryChannelAlias,
     TelemetryCurrent,
     TelemetryData,
     TelemetryMetadata,
@@ -12,6 +13,7 @@ from app.models.telemetry import (
 
 __all__ = [
     "TelemetryMetadata",
+    "TelemetryChannelAlias",
     "TelemetryData",
     "TelemetryStatistics",
     "WatchlistEntry",

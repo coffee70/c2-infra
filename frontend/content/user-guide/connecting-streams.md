@@ -40,6 +40,8 @@ The streamer posts to `POST /telemetry/realtime/ingest` with the built-in mock v
 
 If an external decoder or payload stream emits a field that is not in the seeded catalog, the backend now creates a source-scoped **discovered** channel instead of dropping the sample. When the producer sends structured decoder tags such as `decoder=APRS` and `field_name=Payload Temp`, the stored channel name is derived into a stable namespace like `decoder.aprs.payload_temp`.
 
+For catalog-backed telemetry, the definition file can now carry **channel aliases**. This lets external producers keep sending names such as `BAT_V`, `BATTERY_VOLT`, or `VBAT` while the platform resolves them to one canonical channel like `PWR_MAIN_BUS_VOLT`. Alias matching is source-scoped, and stored watchlists, position mappings, alerts, and history still use the canonical channel name after resolution.
+
 ## Data Flow
 
 ```

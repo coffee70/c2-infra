@@ -134,6 +134,53 @@ def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_upsert_mapping_resolves_aliases_to_canonical_names(monkeypatch) -> None:
+    db = MagicMock()
+    body = SimpleNamespace(
+        source_id="source-a",
+        frame_type="gps_lla",
+        lat_channel_name="LATITUDE",
+        lon_channel_name="LONGITUDE",
+        alt_channel_name="ALTITUDE",
+        x_channel_name=None,
+        y_channel_name=None,
+        z_channel_name=None,
+        active=True,
+    )
+    source = TelemetrySource(id="source-a", name="Source A", source_type="vehicle")
+
+    class _RowResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return source
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    db.execute.side_effect = [_RowResult(), _EmptyResult()]
+    monkeypatch.setattr(
+        position_service,
+        "resolve_channel_name",
+        lambda _db, source_id, channel_name: {
+            "LATITUDE": "GPS_LAT",
+            "LONGITUDE": "GPS_LON",
+            "ALTITUDE": "GPS_ALT",
+        }.get(channel_name),
+    )
+
+    mapping = position_service.upsert_mapping(db, body)
+
+    assert mapping.lat_channel_name == "GPS_LAT"
+    assert mapping.lon_channel_name == "GPS_LON"
+    assert mapping.alt_channel_name == "GPS_ALT"
+
+
 def test_register_active_run_does_not_roll_back_to_older_run() -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-23-07Z")

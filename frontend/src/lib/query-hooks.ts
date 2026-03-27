@@ -15,6 +15,7 @@ import { buildTelemetryApiBase } from "@/lib/telemetry-routes";
 
 export interface WatchlistEntry {
   name: string;
+  aliases?: string[];
   display_order: number;
   channel_origin?: string;
   discovery_namespace?: string | null;
@@ -22,6 +23,7 @@ export interface WatchlistEntry {
 
 export interface TelemetryListEntry {
   name: string;
+  aliases?: string[];
   channel_origin?: string;
   discovery_namespace?: string | null;
 }
@@ -37,6 +39,7 @@ export interface TelemetrySource {
 
 export interface SearchResult {
   name: string;
+  aliases?: string[];
   match_confidence: number;
   description?: string | null;
   subsystem_tag?: string | null;
@@ -82,6 +85,8 @@ export interface OpsEventSchema {
 }
 
 export interface ExplainResponse {
+  name?: string;
+  aliases?: string[];
   channel_origin?: string;
   discovery_namespace?: string | null;
   what_this_means: string;

@@ -10,7 +10,7 @@
     "notes": ["Used by scripts/mock_vehicle_streamer.py for CLI-driven source tests"]
   },
   "channels": [
-    {"name": "PWR_MAIN_BUS_VOLT", "units": "V", "description": "Main bus voltage", "subsystem": "power", "mean": 27.8, "std_dev": 0.3, "red_low": 26.8, "red_high": 29.2, "sample_rate_hz": 1.0},
+    {"name": "PWR_MAIN_BUS_VOLT", "aliases": ["BAT_V", "BATTERY_VOLT", "VBAT"], "units": "V", "description": "Main bus voltage", "subsystem": "power", "mean": 27.8, "std_dev": 0.3, "red_low": 26.8, "red_high": 29.2, "sample_rate_hz": 1.0},
     {"name": "PWR_SOLAR_ARRAY_CURR", "units": "A", "description": "Solar array current", "subsystem": "power", "mean": 6.4, "std_dev": 0.6, "red_low": 2.0, "red_high": 9.5},
     {"name": "EPS_BATTERY_SOC", "units": "%", "description": "Battery state of charge", "subsystem": "power", "mean": 78.0, "std_dev": 5.5, "red_low": 30.0, "red_high": 99.0},
     {"name": "THERM_PAYLOAD_BAY_TEMP", "units": "C", "description": "Payload bay temperature", "subsystem": "thermal", "mean": 14.0, "std_dev": 2.8, "red_low": -5.0, "red_high": 30.0},
@@ -50,4 +50,3 @@
     }
   }
 }
-

@@ -16,6 +16,11 @@ from app.models.telemetry import (
     TelemetryStatistics,
     WatchlistEntry,
 )
+from app.services.channel_alias_service import (
+    get_aliases_by_telemetry_ids,
+    resolve_channel_metadata,
+    resolve_channel_name,
+)
 from app.services.source_run_service import normalize_source_id, run_id_to_source_id
 from app.services.telemetry_service import _compute_state
 from app.utils.subsystem import infer_subsystem
@@ -36,6 +41,7 @@ def get_all_telemetry_channels_for_source(db: Session, source_id: str) -> list[d
     logical_source_id = run_id_to_source_id(source_id)
     stmt = (
         select(
+            TelemetryMetadata.id,
             TelemetryMetadata.name,
             TelemetryMetadata.channel_origin,
             TelemetryMetadata.discovery_namespace,
@@ -44,11 +50,13 @@ def get_all_telemetry_channels_for_source(db: Session, source_id: str) -> list[d
         .order_by(TelemetryMetadata.name)
     )
     rows = db.execute(stmt).fetchall()
+    aliases_by_id = get_aliases_by_telemetry_ids(db, source_id=source_id, telemetry_ids=[row[0] for row in rows])
     return [
         {
-            "name": row[0],
-            "channel_origin": row[1] or "catalog",
-            "discovery_namespace": row[2],
+            "name": row[1],
+            "aliases": aliases_by_id.get(row[0], []),
+            "channel_origin": row[2] or "catalog",
+            "discovery_namespace": row[3],
         }
         for row in rows
     ]
@@ -67,6 +75,7 @@ def get_watchlist(db: Session, source_id: str) -> list[dict]:
             WatchlistEntry.source_id,
             WatchlistEntry.telemetry_name,
             WatchlistEntry.display_order,
+            TelemetryMetadata.id,
             TelemetryMetadata.channel_origin,
             TelemetryMetadata.discovery_namespace,
         )
@@ -80,13 +89,19 @@ def get_watchlist(db: Session, source_id: str) -> list[dict]:
         .order_by(WatchlistEntry.display_order)
     )
     rows = db.execute(stmt).fetchall()
+    aliases_by_id = get_aliases_by_telemetry_ids(
+        db,
+        source_id=source_id,
+        telemetry_ids=[r[3] for r in rows if r[3] is not None],
+    )
     return [
         {
             "source_id": r[0],
             "name": r[1],
+            "aliases": aliases_by_id.get(r[3], []),
             "display_order": r[2],
-            "channel_origin": r[3] or "catalog",
-            "discovery_namespace": r[4],
+            "channel_origin": r[4] or "catalog",
+            "discovery_namespace": r[5],
         }
         for r in rows
     ]
@@ -96,19 +111,14 @@ def add_to_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
     """Add a channel to the watchlist."""
     logical_source_id = run_id_to_source_id(source_id)
     # Verify telemetry exists
-    meta = db.execute(
-        select(TelemetryMetadata).where(
-            TelemetryMetadata.source_id == logical_source_id,
-            TelemetryMetadata.name == telemetry_name,
-        )
-    ).scalar_one_or_none()
+    meta = resolve_channel_metadata(db, source_id=source_id, channel_name=telemetry_name)
     if not meta:
         raise ValueError(f"Telemetry not found: {telemetry_name}")
 
     existing = db.execute(
         select(WatchlistEntry).where(
             WatchlistEntry.source_id == logical_source_id,
-            WatchlistEntry.telemetry_name == telemetry_name,
+            WatchlistEntry.telemetry_name == meta.name,
         )
     ).scalar_one_or_none()
     if existing:
@@ -121,7 +131,7 @@ def add_to_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
 
     entry = WatchlistEntry(
         source_id=logical_source_id,
-        telemetry_name=telemetry_name,
+        telemetry_name=meta.name,
         display_order=next_order,
     )
     db.add(entry)
@@ -130,10 +140,11 @@ def add_to_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
 def remove_from_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
     """Remove a channel from the watchlist."""
     logical_source_id = run_id_to_source_id(source_id)
+    canonical_name = resolve_channel_name(db, source_id=source_id, channel_name=telemetry_name) or telemetry_name
     entry = db.execute(
         select(WatchlistEntry).where(
             WatchlistEntry.source_id == logical_source_id,
-            WatchlistEntry.telemetry_name == telemetry_name,
+            WatchlistEntry.telemetry_name == canonical_name,
         )
     ).scalar_one_or_none()
     if entry:
@@ -191,6 +202,10 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
         return []
 
     result = []
+    aliases_by_name = {
+        channel["name"]: channel["aliases"]
+        for channel in get_all_telemetry_channels_for_source(db, source_id)
+    }
     for entry in watchlist:
         name = entry["name"]
         meta = db.execute(
@@ -233,6 +248,7 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
 
         result.append({
             "name": meta.name,
+            "aliases": aliases_by_name.get(meta.name, []),
             "units": meta.units,
             "description": meta.description,
             "subsystem_tag": infer_subsystem(name, meta),

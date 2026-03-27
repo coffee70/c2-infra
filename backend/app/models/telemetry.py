@@ -55,6 +55,43 @@ class TelemetryMetadata(Base):
     )
 
 
+class TelemetryChannelAlias(Base):
+    """Source-scoped external names for one canonical telemetry channel."""
+
+    __tablename__ = "telemetry_channel_aliases"
+    __table_args__ = (
+        Index(
+            "ix_telemetry_channel_aliases_source_alias",
+            "source_id",
+            "alias_name",
+            unique=True,
+        ),
+        Index(
+            "ix_telemetry_channel_aliases_source_telemetry",
+            "source_id",
+            "telemetry_id",
+        ),
+    )
+
+    source_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    alias_name: Mapped[str] = mapped_column(Text, primary_key=True, nullable=False)
+    telemetry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("telemetry_metadata.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
 class TelemetryData(Base):
     """Time-series telemetry data (TimescaleDB hypertable).
     source_id scopes data per stream; it may be ephemeral (e.g. simulator run IDs

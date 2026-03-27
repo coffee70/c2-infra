@@ -17,6 +17,7 @@ from app.realtime.processor import (
     _build_channel_name_from_tags,
     _resolve_measurement_channel,
 )
+from app.routes.realtime import _assign_reception_time
 from app.services.telemetry_service import _compute_state
 
 
@@ -107,6 +108,31 @@ def test_build_channel_name_from_tags_uses_decoder_namespace() -> None:
 
     assert channel_name == "decoder.aprs.payload_temp"
     assert namespace == "decoder.aprs"
+
+
+def test_assign_reception_time_uses_ingest_time_when_missing(monkeypatch) -> None:
+    fixed_now = datetime(2026, 3, 27, 16, 30, tzinfo=timezone.utc)
+
+    class _FakeDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now
+
+    monkeypatch.setattr("app.routes.realtime.datetime", _FakeDatetime)
+
+    events = _assign_reception_time(
+        [
+            MeasurementEvent(
+                source_id="source-a",
+                channel_name="PWR_MAIN_BUS_VOLT",
+                generation_time="2026-03-20T12:00:00+00:00",
+                value=28.0,
+            )
+        ]
+    )
+
+    assert events[0].reception_time == fixed_now.isoformat()
+    assert events[0].reception_time != events[0].generation_time
 
 
 def test_build_channel_name_from_tags_normalizes_explicit_dynamic_name() -> None:
@@ -256,6 +282,55 @@ def test_process_measurement_skips_unknown_explicit_channel_without_dynamic_cont
     create_mock.assert_not_called()
     db.add.assert_not_called()
     assert updates == []
+
+
+def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkeypatch) -> None:
+    monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
+    monkeypatch.setattr(
+        "app.realtime.processor.resolve_channel_name",
+        lambda *_args, **_kwargs: "PWR_MAIN_BUS_VOLT",
+    )
+    processor = RealtimeProcessor()
+    db = MagicMock()
+    updates = []
+
+    class _ScalarResult:
+        def __init__(self, row):
+            self._row = row
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._row
+
+    meta = TelemetryMetadata(
+        id=uuid4(),
+        source_id="source-a",
+        name="PWR_MAIN_BUS_VOLT",
+        units="V",
+        description="Main bus voltage",
+        subsystem_tag="power",
+        channel_origin="catalog",
+    )
+    db.execute.return_value = _ScalarResult(meta)
+    db.get.return_value = None
+    monkeypatch.setattr(processor, "_broadcast_telemetry_update", updates.append)
+    monkeypatch.setattr(processor, "_maybe_submit_orbit_sample", lambda *args, **kwargs: None)
+
+    processor._process_measurement(
+        db,
+        MeasurementEvent(
+            source_id="source-a",
+            channel_name="VBAT",
+            generation_time="2026-03-26T12:00:00+00:00",
+            reception_time="2026-03-26T12:00:01+00:00",
+            value=28.1,
+        ),
+    )
+
+    assert len(updates) == 1
+    assert updates[0].name == "PWR_MAIN_BUS_VOLT"
 
 
 def test_process_measurement_uses_dynamic_tags_even_when_raw_channel_name_is_present(monkeypatch) -> None:

@@ -32,6 +32,7 @@ from app.models.telemetry import (
 from app.lib.audit import audit_log
 from app.realtime.bus import get_realtime_bus
 from app.realtime.feed_health import get_feed_health_tracker
+from app.services.channel_alias_service import resolve_channel_name
 from app.services.ops_events_service import write_event as write_ops_event
 from app.services.realtime_service import create_discovered_channel_metadata
 from app.services.source_run_service import (
@@ -251,6 +252,12 @@ class RealtimeProcessor:
         if channel_name is None:
             logger.warning("Skipping measurement without channel name or derivation tags")
             return
+        if not allow_dynamic_discovery:
+            channel_name = resolve_channel_name(
+                db,
+                source_id=logical_source_id,
+                channel_name=channel_name,
+            ) or channel_name
 
         meta = db.execute(
             select(TelemetryMetadata).where(
