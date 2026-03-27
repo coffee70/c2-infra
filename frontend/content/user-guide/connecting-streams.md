@@ -40,6 +40,8 @@ The streamer posts to `POST /telemetry/realtime/ingest` with the built-in mock v
 
 If an external decoder or payload stream emits a field that is not in the seeded catalog, the backend now creates a source-scoped **discovered** channel instead of dropping the sample. When the producer sends structured decoder tags such as `decoder=APRS` and `field_name=Payload Temp`, the stored channel name is derived into a stable namespace like `decoder.aprs.payload_temp`.
 
+Some external decoders only know when a packet was heard, not when it was generated onboard. Those streams may send `reception_time` without `generation_time`; the backend will synthesize `generation_time = reception_time` so the packet still flows through realtime ingest. For those packets, ordering and freshness are reception-based.
+
 ## Data Flow
 
 ```

@@ -252,7 +252,7 @@ class MeasurementEvent(BaseModel):
 
     source_id: str = "default"
     channel_name: Optional[str] = None
-    generation_time: str  # RFC3339
+    generation_time: Optional[str] = None  # RFC3339; may be synthesized from reception_time
     reception_time: Optional[str] = None  # RFC3339; server assigns if omitted
     value: float
     quality: str = "valid"  # valid | suspect | invalid
@@ -273,6 +273,9 @@ class MeasurementEvent(BaseModel):
         has_field_name = isinstance(field_name, str) and field_name.strip() != ""
         has_decoder = isinstance(decoder, str) and decoder.strip() != ""
         has_namespace = isinstance(namespace, str) and namespace.strip() != ""
+
+        if not self.generation_time and not self.reception_time:
+            raise ValueError("measurement event requires generation_time or reception_time")
 
         if channel_name or has_dynamic_name or (has_field_name and (has_decoder or has_namespace)):
             return self

@@ -132,12 +132,14 @@ Response:
 
 Ingest realtime measurement events (batch).
 
+`generation_time` is preferred, but packets that only know when they were received may omit it and send `reception_time` instead. In that case the backend synthesizes `generation_time = reception_time`.
+
 ```bash
 curl -X POST http://localhost:8000/telemetry/realtime/ingest \
   -H "Content-Type: application/json" \
   -d '{
     "events": [
-      {"source_id": "vehicle1", "channel_name": "PWR_BUS_A_VOLT", "generation_time": "2025-03-02T12:00:00Z", "value": 28.3}
+      {"source_id": "vehicle1", "channel_name": "PWR_BUS_A_VOLT", "reception_time": "2025-03-02T12:00:00Z", "value": 28.3}
     ]
   }'
 ```

@@ -17,6 +17,7 @@ from app.realtime.processor import (
     _build_channel_name_from_tags,
     _resolve_measurement_channel,
 )
+from app.routes.realtime import _normalize_event_times
 from app.services.telemetry_service import _compute_state
 
 
@@ -149,6 +150,41 @@ def test_resolve_measurement_channel_keeps_strict_explicit_name_without_dynamic_
     assert allow_dynamic is False
 
 
+def test_normalize_event_times_synthesizes_generation_from_reception() -> None:
+    normalized = _normalize_event_times(
+        [
+            MeasurementEvent(
+                source_id="source-a",
+                channel_name="PWR_MAIN_BUS_VOLT",
+                reception_time="2026-03-26T12:00:01+00:00",
+                value=1.0,
+            )
+        ]
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].generation_time == "2026-03-26T12:00:01+00:00"
+    assert normalized[0].reception_time == "2026-03-26T12:00:01+00:00"
+
+
+def test_normalize_event_times_preserves_server_arrival_when_reception_missing() -> None:
+    normalized = _normalize_event_times(
+        [
+            MeasurementEvent(
+                source_id="source-a",
+                channel_name="PWR_MAIN_BUS_VOLT",
+                generation_time="2026-03-26T12:00:01+00:00",
+                value=1.0,
+            )
+        ]
+    )
+
+    assert len(normalized) == 1
+    assert normalized[0].generation_time == "2026-03-26T12:00:01+00:00"
+    assert normalized[0].reception_time is not None
+    assert normalized[0].reception_time != normalized[0].generation_time
+
+
 def test_process_measurement_creates_discovered_channel_for_unknown_input(monkeypatch) -> None:
     monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
     processor = RealtimeProcessor()
@@ -195,17 +231,19 @@ def test_process_measurement_creates_discovered_channel_for_unknown_input(monkey
         lambda *args, **kwargs: orbit_submissions.append(kwargs or args),
     )
 
-    processor._process_measurement(
-        db,
-        MeasurementEvent(
-            source_id="source-a",
-            channel_name=None,
-            generation_time="2026-03-26T12:00:00+00:00",
-            reception_time="2026-03-26T12:00:01+00:00",
-            value=42.5,
-            tags={"decoder": "APRS", "field_name": "Payload Temp"},
-        ),
-    )
+    event = _normalize_event_times(
+        [
+            MeasurementEvent(
+                source_id="source-a",
+                channel_name=None,
+                reception_time="2026-03-26T12:00:01+00:00",
+                value=42.5,
+                tags={"decoder": "APRS", "field_name": "Payload Temp"},
+            )
+        ]
+    )[0]
+
+    processor._process_measurement(db, event)
 
     assert any(getattr(obj, "telemetry_id", None) == meta.id for obj in added)
     assert any(getattr(obj, "state", None) == "normal" for obj in added)

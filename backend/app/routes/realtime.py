@@ -34,14 +34,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _assign_reception_time(events: list[MeasurementEvent]) -> list[MeasurementEvent]:
-    """Assign reception_time to events that don't have it."""
+def _normalize_event_times(events: list[MeasurementEvent]) -> list[MeasurementEvent]:
+    """Ensure ingest events carry both generation and reception timestamps."""
     now = datetime.now(timezone.utc).isoformat()
     return [
         MeasurementEvent(
             source_id=e.source_id,
             channel_name=e.channel_name,
-            generation_time=e.generation_time,
+            generation_time=e.generation_time or e.reception_time or now,
             reception_time=e.reception_time or now,
             value=e.value,
             quality=e.quality,
@@ -64,6 +64,7 @@ async def ingest_realtime(
     raw_events = body.events
     source_ids = sorted({e.source_id or "default" for e in raw_events})
     filled_reception = sum(1 for e in raw_events if not e.reception_time)
+    synthesized_generation = sum(1 for e in raw_events if not e.generation_time and e.reception_time)
 
     audit_log(
         "ingest.request.start",
@@ -77,13 +78,14 @@ async def ingest_realtime(
     )
 
     assign_started = time.perf_counter()
-    events = _assign_reception_time(body.events)
+    events = _normalize_event_times(body.events)
     assign_duration_ms = round((time.perf_counter() - assign_started) * 1000, 3)
     audit_log(
-        "ingest.stage.assign_reception_time",
+        "ingest.stage.normalize_event_times",
         request_id=request_id,
         count=len(events),
         filled_missing_reception_time=filled_reception,
+        synthesized_generation_time=synthesized_generation,
         duration_ms=assign_duration_ms,
     )
 

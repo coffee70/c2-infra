@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Realtime ingest timestamp fallback** — `POST /telemetry/realtime/ingest` now accepts packets that provide only `reception_time`. When `generation_time` is absent, the backend synthesizes `generation_time = reception_time`, which allows APRS-style decoder traffic to flow through realtime ingest while keeping downstream timestamps populated.
+
 ### Added
 
 - **Dynamic telemetry channel discovery** — Realtime ingest now creates durable source-scoped `discovered` channels for unknown live fields instead of dropping them. Decoder-tagged payloads can derive stable names such as `decoder.aprs.payload_temp`, and those channels now appear in source-scoped lists, search, summaries, and watchlist configuration.
