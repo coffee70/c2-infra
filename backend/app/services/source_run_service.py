@@ -137,6 +137,8 @@ def register_stream(
         )
         db.add(stream)
     else:
+        if stream.vehicle_id != logical_vehicle_id:
+            raise ValueError("Run not found for source")
         stream.vehicle_id = logical_vehicle_id
         stream.status = "active"
         stream.last_seen_at = observed_at

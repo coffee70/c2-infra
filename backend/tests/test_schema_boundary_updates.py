@@ -26,6 +26,7 @@ from app.routes import position as position_routes
 from app.routes import telemetry as telemetry_routes
 from app.services import telemetry_service as telemetry_service_module
 from app.services.telemetry_service import TelemetryService
+from app.services.source_run_service import register_stream
 from app.services import realtime_service
 
 
@@ -139,11 +140,10 @@ def test_telemetry_routes_use_renamed_request_fields(monkeypatch) -> None:
     assert add_calls == [("vehicle-a", "VBAT")]
 
 
-def test_set_active_run_accepts_opaque_stream_ids(monkeypatch) -> None:
+def test_set_active_run_accepts_matching_run_id(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(telemetry_routes, "get_stream_vehicle_id", lambda _db, _stream_id: None)
     monkeypatch.setattr(
         telemetry_routes,
         "register_stream",
@@ -159,7 +159,7 @@ def test_set_active_run_accepts_opaque_stream_ids(monkeypatch) -> None:
     response = telemetry_routes.set_active_run(
         body=telemetry_routes.ActiveRunUpdate(
             vehicle_id="vehicle-a",
-            stream_id="2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e",
+            stream_id="vehicle-a-2026-03-28T12-00-00Z",
             state="active",
         ),
         db=MagicMock(),
@@ -168,15 +168,14 @@ def test_set_active_run_accepts_opaque_stream_ids(monkeypatch) -> None:
     assert response == {
         "status": "active",
         "vehicle_id": "vehicle-a",
-        "stream_id": "2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e",
+        "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
     }
     assert captured["vehicle_id"] == "vehicle-a"
-    assert captured["stream_id"] == "2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e"
+    assert captured["stream_id"] == "vehicle-a-2026-03-28T12-00-00Z"
 
 
-def test_set_active_run_rejects_mismatched_registered_stream(monkeypatch) -> None:
+def test_set_active_run_rejects_opaque_stream_ids(monkeypatch) -> None:
     monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(telemetry_routes, "get_stream_vehicle_id", lambda _db, _stream_id: "vehicle-b")
 
     with pytest.raises(telemetry_routes.HTTPException) as exc_info:
         telemetry_routes.set_active_run(
@@ -189,6 +188,26 @@ def test_set_active_run_rejects_mismatched_registered_stream(monkeypatch) -> Non
         )
 
     assert exc_info.value.status_code == 400
+
+
+def test_register_stream_rejects_vehicle_reassignment() -> None:
+    stream = SimpleNamespace(
+        id="vehicle-b-2026-03-28T12-00-00Z",
+        vehicle_id="vehicle-b",
+        status="idle",
+        last_seen_at=None,
+        packet_source=None,
+        receiver_id=None,
+    )
+    db = MagicMock()
+    db.get.return_value = stream
+
+    with pytest.raises(ValueError) as exc_info:
+        register_stream(db, vehicle_id="vehicle-a", stream_id=stream.id)
+
+    assert "Run not found for source" in str(exc_info.value)
+    assert stream.vehicle_id == "vehicle-b"
+    db.add.assert_not_called()
 
 
 def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:

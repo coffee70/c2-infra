@@ -60,7 +60,6 @@ from app.services.statistics_service import StatisticsService
 from app.services.telemetry_service import TelemetryService, _compute_state
 from app.services.source_run_service import (
     ensure_run_belongs_to_source,
-    get_stream_vehicle_id,
     normalize_source_id,
     register_stream,
     run_id_to_source_id,
@@ -826,8 +825,7 @@ def set_active_run(
     if body.state == "active":
         if not body.stream_id:
             raise HTTPException(status_code=400, detail="stream_id is required when state=active")
-        owning_vehicle_id = get_stream_vehicle_id(db, body.stream_id)
-        if owning_vehicle_id is not None and owning_vehicle_id != logical_source_id:
+        if run_id_to_source_id(body.stream_id) != logical_source_id:
             raise HTTPException(status_code=400, detail="stream_id does not belong to vehicle")
 
         register_stream(db, vehicle_id=logical_source_id, stream_id=body.stream_id)
