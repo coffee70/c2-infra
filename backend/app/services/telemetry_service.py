@@ -124,22 +124,23 @@ class TelemetryService:
 
     def insert_data(
         self,
-        source_id: str,
+        stream_id: str,
         telemetry_name: str,
         data: list[tuple[datetime, float]],
         *,
+        vehicle_id: str | None = None,
         packet_source: str | None = None,
         receiver_id: str | None = None,
     ) -> int:
         """Insert batch of time-series data. source_id scopes data when telemetry_data is source-aware."""
-        data_source_id = normalize_source_id(source_id)
-        meta = self.get_by_name(source_id, telemetry_name)
+        metadata_vehicle_id = vehicle_id or stream_id
+        meta = self.get_by_name(metadata_vehicle_id, telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")
 
         rows = [
             TelemetryData(
-                source_id=data_source_id,
+                source_id=stream_id,
                 telemetry_id=meta.id,
                 timestamp=ts,
                 value=Decimal(str(v)),

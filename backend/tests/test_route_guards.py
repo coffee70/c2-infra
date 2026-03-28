@@ -49,6 +49,27 @@ def test_resolve_scoped_run_id_accepts_registered_arbitrary_stream_id() -> None:
     assert ensure_run_belongs_to_source(db, source_id, stream_id) == stream_id
 
 
+def test_resolve_scoped_run_id_accepts_persisted_stream_without_registry() -> None:
+    source_id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
+    stream_id = f"{source_id}-2026-03-15T14-00-00Z"
+    db = MagicMock()
+    db.get.return_value = None
+
+    class _ScalarResult:
+        def __init__(self, row):
+            self._row = row
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._row
+
+    db.execute.return_value = _ScalarResult(source_id)
+
+    assert ensure_run_belongs_to_source(db, source_id, stream_id) == stream_id
+
+
 @pytest.mark.anyio
 async def test_simulator_start_preserves_runtime_validation_errors(monkeypatch) -> None:
     db = MagicMock()

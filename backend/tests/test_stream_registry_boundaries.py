@@ -68,8 +68,9 @@ def test_resolve_channel_metadata_keeps_vehicle_lookup_for_non_stream_ids() -> N
         last_seen_at=datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc),
     )
     db = MagicMock()
-    db.get.return_value = None
+    db.get.side_effect = lambda model, key: None
     db.execute.side_effect = [
+        _ScalarResult(None),
         _ScalarResult(meta),
     ]
 
@@ -78,3 +79,30 @@ def test_resolve_channel_metadata_keeps_vehicle_lookup_for_non_stream_ids() -> N
     assert resolved is meta
     statement = db.execute.call_args.args[0]
     assert vehicle_id in statement.compile().params.values()
+
+
+def test_resolve_channel_metadata_uses_persisted_stream_owner_without_registry() -> None:
+    vehicle_id = "source-a"
+    stream_id = "source-a-2026-03-28T12-00-00Z"
+    meta = TelemetryMetadata(
+        id=uuid4(),
+        vehicle_id=vehicle_id,
+        name="battery.voltage",
+        units="V",
+        description=None,
+        subsystem_tag="power",
+        channel_origin="catalog",
+        discovery_namespace=None,
+        discovered_at=datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc),
+        last_seen_at=datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc),
+    )
+    db = MagicMock()
+    db.get.return_value = None
+    db.execute.side_effect = [
+        _ScalarResult(vehicle_id),
+        _ScalarResult(meta),
+    ]
+
+    resolved = resolve_channel_metadata(db, vehicle_id=stream_id, channel_name="battery.voltage")
+
+    assert resolved is meta

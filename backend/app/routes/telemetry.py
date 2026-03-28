@@ -159,6 +159,7 @@ def ingest_data(
             body.stream_id,
             body.telemetry_name,
             data,
+            vehicle_id=body.vehicle_id,
             packet_source=body.packet_source,
             receiver_id=body.receiver_id,
         )

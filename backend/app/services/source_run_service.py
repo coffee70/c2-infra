@@ -11,7 +11,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.telemetry import TelemetryCurrent, TelemetrySource, TelemetryStream
+from app.models.telemetry import TelemetryCurrent, TelemetryData, TelemetryMetadata, TelemetrySource, TelemetryStream
 from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID, RHAEGALSAT_SOURCE_ID
 from telemetry_catalog.definitions import resolve_source_id_alias
 
@@ -78,7 +78,16 @@ def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
         return None
     row = db.get(TelemetryStream, stream_id)
     if row is None:
-        return None
+        return (
+            db.execute(
+                select(TelemetryMetadata.vehicle_id)
+                .join(TelemetryData, TelemetryData.telemetry_id == TelemetryMetadata.id)
+                .where(TelemetryData.source_id == stream_id)
+                .distinct()
+            )
+            .scalars()
+            .first()
+        )
     return row.vehicle_id
 
 

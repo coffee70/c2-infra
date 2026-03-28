@@ -57,15 +57,17 @@ def test_telemetry_routes_use_renamed_request_fields(monkeypatch) -> None:
 
         def insert_data(
             self,
-            source_id: str,
+            stream_id: str,
             telemetry_name: str,
             data,
             *,
+            vehicle_id: str | None = None,
             packet_source: str | None = None,
             receiver_id: str | None = None,
         ):
             captured["insert_data"] = {
-                "source_id": source_id,
+                "stream_id": stream_id,
+                "vehicle_id": vehicle_id,
                 "telemetry_name": telemetry_name,
                 "rows": len(data),
                 "packet_source": packet_source,
@@ -123,7 +125,8 @@ def test_telemetry_routes_use_renamed_request_fields(monkeypatch) -> None:
         "red_high": None,
     }
     assert captured["insert_data"] == {
-        "source_id": "vehicle-a-2026-03-28T12-00-00Z",
+        "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
+        "vehicle_id": "vehicle-a",
         "telemetry_name": "VBAT",
         "rows": 1,
         "packet_source": "ground-station-a",
