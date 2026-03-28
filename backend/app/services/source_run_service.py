@@ -250,9 +250,8 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
     current_row = (
         db.execute(
             select(TelemetryCurrent)
-            .where(
-                TelemetryCurrent.stream_id.like(f"{logical_vehicle_id}-%"),
-            )
+            .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryCurrent.telemetry_id)
+            .where(TelemetryMetadata.vehicle_id == logical_vehicle_id)
             .order_by(
                 TelemetryCurrent.reception_time.desc(),
                 TelemetryCurrent.generation_time.desc(),

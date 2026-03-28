@@ -157,13 +157,47 @@ def test_resolve_active_run_id_only_queries_active_stream_rows() -> None:
 
     assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
     assert any("telemetry_streams.status" in sql for sql in seen)
-    assert any("telemetry_current.source_id LIKE" in sql for sql in seen)
+    assert any("JOIN telemetry_metadata" in sql and "telemetry_metadata.source_id" in sql for sql in seen)
 
 
 def test_resolve_active_run_id_recovers_stream_from_current_rows() -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    current = SimpleNamespace(
+        stream_id=stream_id,
+        reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
+        generation_time=datetime(2026, 3, 13, 17, 12, 39, tzinfo=timezone.utc),
+        packet_source="ground-station-a",
+        receiver_id="rx-7",
+    )
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _CurrentResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return current
+
+    db.execute.side_effect = [_EmptyResult(), _CurrentResult()]
+    db.get.return_value = None
+
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
+    db.add.assert_called_once()
+    clear_active_run(DROGONSAT_SOURCE_ID)
+
+
+def test_resolve_active_run_id_recovers_opaque_stream_from_current_rows() -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream_id = "c3bb4cf5-21dd-4b84-bc91-1e3a3a944f78"
     current = SimpleNamespace(
         stream_id=stream_id,
         reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
