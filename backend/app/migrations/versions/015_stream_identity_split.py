@@ -88,7 +88,7 @@ def upgrade() -> None:
     telemetry_metadata = sa.table(
         "telemetry_metadata",
         sa.column("id", sa.Text()),
-        sa.column("vehicle_id", sa.Text()),
+        sa.column("source_id", sa.Text()),
     )
     telemetry_current = sa.table(
         "telemetry_current",
@@ -138,8 +138,11 @@ def upgrade() -> None:
     current_rows = bind.execute(
         sa.select(
             telemetry_current.c.source_id,
-            telemetry_metadata.c.vehicle_id,
-            sa.func.coalesce(telemetry_current.c.reception_time, telemetry_current.c.generation_time).label("observed_at"),
+            telemetry_metadata.c.source_id.label("vehicle_id"),
+            sa.func.coalesce(
+                telemetry_current.c.reception_time,
+                telemetry_current.c.generation_time,
+            ).label("observed_at"),
             telemetry_current.c.packet_source,
             telemetry_current.c.receiver_id,
         ).select_from(
@@ -149,7 +152,7 @@ def upgrade() -> None:
     data_rows = bind.execute(
         sa.select(
             telemetry_data.c.source_id,
-            telemetry_metadata.c.vehicle_id,
+            telemetry_metadata.c.source_id.label("vehicle_id"),
             telemetry_data.c.timestamp.label("observed_at"),
             telemetry_data.c.packet_source,
             telemetry_data.c.receiver_id,
