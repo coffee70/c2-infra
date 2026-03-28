@@ -20,7 +20,8 @@ from app.models.schemas import (
     SearchResult,
 )
 from app.services.source_run_service import (
-    ensure_stream_belongs_to_vehicle,
+    get_stream_vehicle_id,
+    normalize_vehicle_id,
     normalize_source_id,
     register_stream,
     run_id_to_source_id,
@@ -139,15 +140,18 @@ class TelemetryService:
     ) -> int:
         """Insert batch of time-series data. source_id scopes data when telemetry_data is source-aware."""
         metadata_vehicle_id = vehicle_id or run_id_to_source_id(stream_id)
-        ensure_stream_belongs_to_vehicle(self._db, metadata_vehicle_id, stream_id)
+        logical_vehicle_id = normalize_vehicle_id(metadata_vehicle_id)
+        existing_owner = get_stream_vehicle_id(self._db, stream_id)
+        if existing_owner is not None and normalize_vehicle_id(existing_owner) != logical_vehicle_id:
+            raise ValueError("Run not found for source")
         register_stream(
             self._db,
-            vehicle_id=metadata_vehicle_id,
+            vehicle_id=logical_vehicle_id,
             stream_id=stream_id,
             packet_source=packet_source,
             receiver_id=receiver_id,
         )
-        meta = self.get_by_name(metadata_vehicle_id, telemetry_name)
+        meta = self.get_by_name(logical_vehicle_id, telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")
 
