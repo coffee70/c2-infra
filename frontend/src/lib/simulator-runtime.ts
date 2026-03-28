@@ -18,7 +18,10 @@ export interface SimulatorRuntimeStatus {
     speed: number;
     drop_prob: number;
     jitter: number;
-    source_id: string;
+    vehicle_id: string;
+    stream_id: string;
+    packet_source?: string | null;
+    receiver_id?: string | null;
     base_url: string;
   } | null;
   sim_elapsed?: number;
@@ -44,7 +47,7 @@ function toRuntimeState(
     status?.connected === true &&
     status.state != null &&
     status.state !== "idle";
-  const activeRunId = isActive ? status?.config?.source_id ?? null : null;
+  const activeRunId = isActive ? status?.config?.stream_id ?? null : null;
   return {
     status,
     activeRunId,
@@ -56,7 +59,7 @@ export async function fetchSimulatorRuntimeStatus(
   sourceId: string
 ): Promise<SimulatorRuntimeStatus> {
   const response = await fetch(
-    `${API_URL}/simulator/status?source_id=${encodeURIComponent(sourceId)}`,
+    `${API_URL}/simulator/status?vehicle_id=${encodeURIComponent(sourceId)}`,
     { cache: "no-store" }
   );
   if (!response.ok) {

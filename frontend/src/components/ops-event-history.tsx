@@ -10,7 +10,8 @@ import { useOpsEventsQuery } from "@/lib/query-hooks";
 import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 
 interface OpsEventHistoryProps {
-  sourceId: string;
+  vehicleId: string;
+  streamId?: string | null;
 }
 
 const RANGE_OPTIONS = [
@@ -38,15 +39,18 @@ function formatTime(iso: string): string {
   });
 }
 
-export function OpsEventHistory({ sourceId }: OpsEventHistoryProps) {
+export function OpsEventHistory({ vehicleId, streamId }: OpsEventHistoryProps) {
   const [rangeMinutes, setRangeMinutes] = useState(15);
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
   const params: Record<string, string> = {
-    source_id: sourceId,
+    vehicle_id: vehicleId,
     since_minutes: String(rangeMinutes),
     limit: "100",
     offset: "0",
   };
+  if (streamId) {
+    params.stream_id = streamId;
+  }
   if (eventTypeFilter !== "all") {
     if (eventTypeFilter === "alerts") {
       params.event_types = "alert.opened,alert.cleared,alert.acked,alert.resolved";
@@ -146,7 +150,7 @@ export function OpsEventHistory({ sourceId }: OpsEventHistoryProps) {
                 <p className="mt-1 text-sm">{event.summary}</p>
                 {event.entity_id && (
                   <Link
-                    href={buildTelemetryDetailHref(sourceId, event.entity_id)}
+                    href={buildTelemetryDetailHref(vehicleId, event.entity_id)}
                     className="mt-1 inline-block text-xs text-primary hover:underline"
                   >
                     View {event.entity_id}

@@ -76,7 +76,7 @@ _llm_provider = None
 
 
 def _get_channel_meta(db: Session, source_id: str, name: str) -> TelemetryMetadata | None:
-    return resolve_channel_metadata(db, source_id=source_id, channel_name=name)
+    return resolve_channel_metadata(db, vehicle_id=source_id, channel_name=name)
 
 
 def _resolve_scoped_run_id(source_id: str, run_id: Optional[str] = None) -> str:
@@ -119,7 +119,7 @@ def create_schema(
     service = TelemetryService(db, embedding, llm)
     try:
         telemetry_id = service.create_schema(
-            source_id=body.source_id,
+            source_id=body.vehicle_id,
             name=body.name,
             units=body.units,
             description=body.description,
@@ -129,7 +129,12 @@ def create_schema(
         )
     except IntegrityError:
         raise HTTPException(status_code=409, detail="Telemetry name already exists")
-    audit_log("schema.create", source_id=body.source_id, name=body.name, telemetry_id=str(telemetry_id))
+    audit_log(
+        "schema.create",
+        source_id=body.vehicle_id,
+        name=body.name,
+        telemetry_id=str(telemetry_id),
+    )
     return TelemetrySchemaResponse(
         status="created",
         telemetry_id=telemetry_id,
@@ -150,14 +155,21 @@ def ingest_data(
         for pt in body.data:
             ts = datetime.fromisoformat(pt.timestamp.replace("Z", "+00:00"))
             data.append((ts, pt.value))
-        rows = service.insert_data(body.source_id, body.telemetry_name, data)
+        rows = service.insert_data(
+            body.stream_id,
+            body.telemetry_name,
+            data,
+            packet_source=body.packet_source,
+            receiver_id=body.receiver_id,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     audit_log(
         "ingest.batch",
         telemetry_name=body.telemetry_name,
         count=rows,
-        source_id=body.source_id,
+        source_id=body.stream_id,
+        vehicle_id=body.vehicle_id,
     )
     return TelemetryDataResponse(rows_inserted=rows)
 
@@ -275,7 +287,7 @@ def get_source_runs(
     # Preserve legacy default behavior if the source is truly unknown.
     if reg is None and logical_source_id == normalize_source_id("default"):
         return ChannelSourcesResponse(
-            sources=[ChannelSourceItem(source_id=logical_source_id, label=logical_source_id)]
+            sources=[ChannelSourceItem(stream_id=logical_source_id, label=logical_source_id)]
         )
 
     prefix = f"{logical_source_id}-"
@@ -297,7 +309,7 @@ def get_source_runs(
     if not run_ids:
         label = reg.name if reg else logical_source_id
         return ChannelSourcesResponse(
-            sources=[ChannelSourceItem(source_id=logical_source_id, label=label)]
+            sources=[ChannelSourceItem(stream_id=logical_source_id, label=label)]
         )
 
     registered = {
@@ -311,9 +323,9 @@ def get_source_runs(
             label = reg.name if reg else "Base stream"
         else:
             label = _format_source_label(rid, registered.get(rid))
-        items.append(ChannelSourceItem(source_id=rid, label=label))
+        items.append(ChannelSourceItem(stream_id=rid, label=label))
 
-    items.sort(key=lambda x: x.source_id, reverse=True)
+    items.sort(key=lambda x: x.stream_id, reverse=True)
     return ChannelSourcesResponse(sources=items)
 
 
@@ -327,7 +339,7 @@ def list_watchlist(
     return WatchlistResponse(
         entries=[
             {
-                "source_id": e["source_id"],
+                "vehicle_id": e["source_id"],
                 "name": e["name"],
                 "aliases": e.get("aliases", []),
                 "display_order": e["display_order"],
@@ -346,9 +358,13 @@ def add_watchlist(
 ):
     """Add a channel to the watchlist."""
     try:
-        add_to_watchlist(db, body.source_id, body.telemetry_name)
+        add_to_watchlist(db, body.vehicle_id, body.telemetry_name)
         db.flush()
-        audit_log("watchlist.add", source_id=body.source_id, telemetry_name=body.telemetry_name)
+        audit_log(
+            "watchlist.add",
+            source_id=body.vehicle_id,
+            telemetry_name=body.telemetry_name,
+        )
         return {"status": "added"}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -491,7 +507,11 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
 
     return ExplainResponse(
         name=meta.name,
-        aliases=get_aliases_by_telemetry_ids(db, source_id=source_id, telemetry_ids=[meta.id]).get(meta.id, []),
+        aliases=get_aliases_by_telemetry_ids(
+            db,
+            vehicle_id=source_id,
+            telemetry_ids=[meta.id],
+        ).get(meta.id, []),
         description=meta.description,
         units=meta.units,
         channel_origin=meta.channel_origin or "catalog",
@@ -652,9 +672,9 @@ def get_channel_runs(
             label = reg.name if reg else "Base stream"
         else:
             label = _format_source_label(rid, registered.get(rid))
-        items.append(ChannelSourceItem(source_id=rid, label=label))
+        items.append(ChannelSourceItem(stream_id=rid, label=label))
 
-    items.sort(key=lambda x: x.source_id, reverse=True)
+    items.sort(key=lambda x: x.stream_id, reverse=True)
     return ChannelSourcesResponse(sources=items)
 
 
@@ -789,35 +809,38 @@ def get_channel_runs_for_source(
 
 
 @router.post("/sources/active-run")
-def set_active_run(body: ActiveRunUpdate):
+def set_active_run(
+    body: ActiveRunUpdate,
+    db: Session = Depends(get_db),
+):
     """Set or clear the active run for any logical source.
 
     External adapters (e.g. SatNOGS/FUNcube-1) use this to mark AOS/LOS
     without needing simulator-specific /status polling.
     """
-    logical_source_id = run_id_to_source_id(body.source_id)
+    logical_source_id = run_id_to_source_id(body.vehicle_id)
 
     if body.state == "active":
-        if not body.run_id:
-            raise HTTPException(status_code=400, detail="run_id is required when state=active")
-        if run_id_to_source_id(body.run_id) != logical_source_id:
-            raise HTTPException(status_code=400, detail="run_id does not belong to source")
+        if not body.stream_id:
+            raise HTTPException(status_code=400, detail="stream_id is required when state=active")
+        if run_id_to_source_id(body.stream_id) != logical_source_id:
+            raise HTTPException(status_code=400, detail="stream_id does not belong to vehicle")
 
-        register_active_run(body.run_id)
+        register_active_run(body.stream_id)
         audit_log(
             "sources.active_run.set",
             source_id=logical_source_id,
-            run_id=body.run_id,
+            run_id=body.stream_id,
             state="active",
         )
         return {
             "status": "active",
-            "source_id": logical_source_id,
-            "run_id": body.run_id,
+            "vehicle_id": logical_source_id,
+            "stream_id": body.stream_id,
         }
 
     if body.state == "idle":
-        clear_active_run(logical_source_id)
+        clear_active_run(logical_source_id, db=db)
         audit_log(
             "sources.active_run.set",
             source_id=logical_source_id,
@@ -825,7 +848,7 @@ def set_active_run(body: ActiveRunUpdate):
         )
         return {
             "status": "idle",
-            "source_id": logical_source_id,
+            "vehicle_id": logical_source_id,
         }
 
     raise HTTPException(status_code=400, detail="state must be 'active' or 'idle'")

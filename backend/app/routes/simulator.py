@@ -45,11 +45,13 @@ class StartConfig(BaseModel):
     speed: float = Field(default=1.0, ge=0.1, description="Time speed factor")
     drop_prob: float = Field(default=0.0, ge=0, le=1, description="Link dropout probability")
     jitter: float = Field(default=0.1, ge=0, le=1, description="Inter-sample jitter")
-    source_id: str = Field(..., description="Source ID for ingest (must be simulator)")
+    vehicle_id: str = Field(..., description="Vehicle ID for ingest (must be simulator)")
     base_url: str | None = Field(default=None, description="Backend ingest URL")
     telemetry_definition_path: str | None = Field(
         default=None, description="Override catalog file for simulator runtime"
     )
+    packet_source: str | None = Field(default="simulator-link", description="Packet origin identifier")
+    receiver_id: str | None = Field(default=None, description="Receiving endpoint identifier")
 
 
 async def _proxy_get(base_url: str, path: str) -> dict[str, Any]:
@@ -99,21 +101,25 @@ def _resolve_with_audit(db: Session, source_id: str, action: str) -> str:
 
 @router.get("/status")
 async def simulator_status(
-    source_id: str = Query(..., description="Simulator source ID"),
+    vehicle_id: str | None = None,
+    source_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Get simulator state and config. Always returns 200; use 'connected' to detect reachability."""
-    resolved_source_id = resolve_source_id_alias(source_id) or source_id
+    vehicle_id = vehicle_id or source_id
+    if vehicle_id is None:
+        raise HTTPException(status_code=400, detail="vehicle_id is required")
+    resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
     try:
         base_url = _resolve_with_audit(db, resolved_source_id, "status")
         payload = await _proxy_get(base_url, "/status")
         state = payload.get("state")
         config = payload.get("config") or {}
-        active_run_id = config.get("source_id")
-        if state and state != "idle" and isinstance(active_run_id, str) and active_run_id:
-            register_active_run(active_run_id)
+        active_stream_id = config.get("stream_id")
+        if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
+            register_active_run(active_stream_id)
         elif state == "idle":
-            clear_active_run(resolved_source_id)
+            clear_active_run(resolved_source_id, db=db)
         if not isinstance(payload.get("supported_scenarios"), list):
             payload["supported_scenarios"] = []
         return {"connected": True, **payload}
@@ -134,7 +140,7 @@ async def simulator_start(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Start the simulator with given config."""
-    resolved_source_id = resolve_source_id_alias(config.source_id) or config.source_id
+    resolved_source_id = resolve_source_id_alias(config.vehicle_id) or config.vehicle_id
     src = _resolve_simulator_source(db, resolved_source_id)
     base_url = _resolve_with_audit(db, resolved_source_id, "start")
     audit_log(
@@ -143,18 +149,18 @@ async def simulator_start(
         scenario=config.scenario,
         duration=config.duration,
         speed=config.speed,
-        source_id=resolved_source_id,
+        vehicle_id=resolved_source_id,
     )
     try:
         body = config.model_dump(exclude_none=True)
-        body["source_id"] = resolved_source_id
+        body["vehicle_id"] = resolved_source_id
         if src.telemetry_definition_path:
             body["telemetry_definition_path"] = src.telemetry_definition_path
         result = await _proxy_post(base_url, "/start", body)
-        clear_active_run(resolved_source_id)
+        clear_active_run(resolved_source_id, db=db)
         reset_orbit_source(resolved_source_id)
-        if isinstance(result.get("source_id"), str):
-            register_active_run(result["source_id"])
+        if isinstance(result.get("stream_id"), str):
+            register_active_run(result["stream_id"])
         audit_log(
             "simulator.start.proxied",
             origin="frontend",
@@ -162,7 +168,7 @@ async def simulator_start(
             scenario=config.scenario,
             duration=config.duration,
             speed=config.speed,
-            source_id=resolved_source_id,
+            vehicle_id=resolved_source_id,
             base_url=config.base_url,
         )
         return result
@@ -189,11 +195,15 @@ async def simulator_start(
 
 @router.post("/pause")
 async def simulator_pause(
-    source_id: str = Query(..., description="Simulator source ID"),
+    vehicle_id: str | None = None,
+    source_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Pause the simulator."""
-    resolved_source_id = resolve_source_id_alias(source_id) or source_id
+    vehicle_id = vehicle_id or source_id
+    if vehicle_id is None:
+        raise HTTPException(status_code=400, detail="vehicle_id is required")
+    resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
     base_url = _resolve_with_audit(db, resolved_source_id, "pause")
     try:
         result = await _proxy_post(base_url, "/pause")
@@ -214,11 +224,15 @@ async def simulator_pause(
 
 @router.post("/resume")
 async def simulator_resume(
-    source_id: str = Query(..., description="Simulator source ID"),
+    vehicle_id: str | None = None,
+    source_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Resume the simulator."""
-    resolved_source_id = resolve_source_id_alias(source_id) or source_id
+    vehicle_id = vehicle_id or source_id
+    if vehicle_id is None:
+        raise HTTPException(status_code=400, detail="vehicle_id is required")
+    resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
     base_url = _resolve_with_audit(db, resolved_source_id, "resume")
     try:
         result = await _proxy_post(base_url, "/resume")
@@ -239,15 +253,19 @@ async def simulator_resume(
 
 @router.post("/stop")
 async def simulator_stop(
-    source_id: str = Query(..., description="Simulator source ID"),
+    vehicle_id: str | None = None,
+    source_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Stop the simulator."""
-    resolved_source_id = resolve_source_id_alias(source_id) or source_id
+    vehicle_id = vehicle_id or source_id
+    if vehicle_id is None:
+        raise HTTPException(status_code=400, detail="vehicle_id is required")
+    resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
     base_url = _resolve_with_audit(db, resolved_source_id, "stop")
     try:
         result = await _proxy_post(base_url, "/stop")
-        clear_active_run(resolved_source_id)
+        clear_active_run(resolved_source_id, db=db)
         reset_orbit_source(resolved_source_id)
         audit_log("simulator.stop", destination=resolved_source_id)
         return result

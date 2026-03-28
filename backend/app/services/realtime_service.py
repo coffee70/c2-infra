@@ -1072,7 +1072,8 @@ def get_realtime_snapshot_for_channels(
 
         result.append(
             RealtimeChannelUpdate(
-                source_id=data_source_id,
+                vehicle_id=logical_source_id,
+                stream_id=data_source_id,
                 name=meta.name,
                 units=meta.units,
                 description=meta.description,
@@ -1134,7 +1135,8 @@ def get_active_alerts(
         result.append(
             TelemetryAlertSchema(
                 id=str(alert.id),
-                source_id=alert.source_id,
+                vehicle_id=logical_source_id,
+                stream_id=alert.source_id,
                 channel_name=meta.name,
                 telemetry_id=str(meta.id),
                 subsystem=subsys,

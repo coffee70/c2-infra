@@ -83,7 +83,9 @@ async def test_realtime_bus_processes_measurements_in_parallel() -> None:
     for idx in range(4):
         bus.publish_measurement(
             MeasurementEvent(
-                source_id="test",
+                vehicle_id="test",
+
+                stream_id="test",
                 channel_name=f"CHAN_{idx}",
                 generation_time="2026-03-13T00:00:00+00:00",
                 reception_time="2026-03-13T00:00:00+00:00",
@@ -123,7 +125,9 @@ def test_normalize_event_times_uses_ingest_time_when_reception_missing(monkeypat
     events = _normalize_event_times(
         [
             MeasurementEvent(
-                source_id="source-a",
+                vehicle_id="source-a",
+
+                stream_id="source-a",
                 channel_name="PWR_MAIN_BUS_VOLT",
                 generation_time="2026-03-20T12:00:00+00:00",
                 value=28.0,
@@ -147,7 +151,9 @@ def test_build_channel_name_from_tags_normalizes_explicit_dynamic_name() -> None
 def test_resolve_measurement_channel_prefers_dynamic_tags_over_raw_channel_name() -> None:
     channel_name, namespace, allow_dynamic = _resolve_measurement_channel(
         MeasurementEvent(
-            source_id="source-a",
+            vehicle_id="source-a",
+
+            stream_id="source-a",
             channel_name="PayloadTemp",
             generation_time="2026-03-26T12:00:00+00:00",
             value=1.0,
@@ -163,7 +169,9 @@ def test_resolve_measurement_channel_prefers_dynamic_tags_over_raw_channel_name(
 def test_resolve_measurement_channel_keeps_strict_explicit_name_without_dynamic_context() -> None:
     channel_name, namespace, allow_dynamic = _resolve_measurement_channel(
         MeasurementEvent(
-            source_id="source-a",
+            vehicle_id="source-a",
+
+            stream_id="source-a",
             channel_name="PWR_MAIN_BUS_VOLT",
             generation_time="2026-03-26T12:00:00+00:00",
             value=1.0,
@@ -179,7 +187,9 @@ def test_normalize_event_times_synthesizes_generation_from_reception() -> None:
     normalized = _normalize_event_times(
         [
             MeasurementEvent(
-                source_id="source-a",
+                vehicle_id="source-a",
+
+                stream_id="source-a",
                 channel_name="PWR_MAIN_BUS_VOLT",
                 reception_time="2026-03-26T12:00:01+00:00",
                 value=1.0,
@@ -196,7 +206,9 @@ def test_normalize_event_times_preserves_server_arrival_when_reception_missing()
     normalized = _normalize_event_times(
         [
             MeasurementEvent(
-                source_id="source-a",
+                vehicle_id="source-a",
+
+                stream_id="source-a",
                 channel_name="PWR_MAIN_BUS_VOLT",
                 generation_time="2026-03-26T12:00:01+00:00",
                 value=1.0,
@@ -230,7 +242,7 @@ def test_process_measurement_creates_discovered_channel_for_unknown_input(monkey
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        source_id="source-a",
+        vehicle_id="source-a",
         name="decoder.aprs.payload_temp",
         units="",
         description=None,
@@ -259,7 +271,9 @@ def test_process_measurement_creates_discovered_channel_for_unknown_input(monkey
     event = _normalize_event_times(
         [
             MeasurementEvent(
-                source_id="source-a",
+                vehicle_id="source-a",
+
+                stream_id="source-a",
                 channel_name=None,
                 reception_time="2026-03-26T12:00:01+00:00",
                 value=42.5,
@@ -308,7 +322,9 @@ def test_process_measurement_skips_unknown_explicit_channel_without_dynamic_cont
     processor._process_measurement(
         db,
         MeasurementEvent(
-            source_id="source-a",
+            vehicle_id="source-a",
+
+            stream_id="source-a",
             channel_name="PAYLOAD_TEMP_TYPO",
             generation_time="2026-03-26T12:00:00+00:00",
             reception_time="2026-03-26T12:00:01+00:00",
@@ -343,7 +359,7 @@ def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkey
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        source_id="source-a",
+        vehicle_id="source-a",
         name="PWR_MAIN_BUS_VOLT",
         units="V",
         description="Main bus voltage",
@@ -358,7 +374,9 @@ def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkey
     processor._process_measurement(
         db,
         MeasurementEvent(
-            source_id="source-a",
+            vehicle_id="source-a",
+
+            stream_id="source-a",
             channel_name="VBAT",
             generation_time="2026-03-26T12:00:00+00:00",
             reception_time="2026-03-26T12:00:01+00:00",
@@ -389,7 +407,7 @@ def test_process_measurement_uses_dynamic_tags_even_when_raw_channel_name_is_pre
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        source_id="source-a",
+        vehicle_id="source-a",
         name="decoder.aprs.payload_temp",
         units="",
         description=None,
@@ -414,7 +432,9 @@ def test_process_measurement_uses_dynamic_tags_even_when_raw_channel_name_is_pre
     processor._process_measurement(
         db,
         MeasurementEvent(
-            source_id="source-a",
+            vehicle_id="source-a",
+
+            stream_id="source-a",
             channel_name="PayloadTemp",
             generation_time="2026-03-26T12:00:00+00:00",
             reception_time="2026-03-26T12:00:01+00:00",
@@ -450,7 +470,7 @@ def test_process_measurement_duplicate_first_dynamic_sample_keeps_discovered_met
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        source_id="source-a",
+        vehicle_id="source-a",
         name="decoder.aprs.payload_temp",
         units="",
         description=None,
@@ -482,7 +502,9 @@ def test_process_measurement_duplicate_first_dynamic_sample_keeps_discovered_met
     processor._process_measurement(
         db,
         MeasurementEvent(
-            source_id="source-a",
+            vehicle_id="source-a",
+
+            stream_id="source-a",
             channel_name=None,
             generation_time="2026-03-26T12:00:00+00:00",
             reception_time="2026-03-26T12:00:01+00:00",

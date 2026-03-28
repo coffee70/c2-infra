@@ -89,7 +89,7 @@ function toLiveState(
 type FeedState = "connected" | "degraded" | "disconnected";
 
 interface FeedStatusResponse {
-  source_id: string;
+  vehicle_id: string;
   connected: boolean;
   state?: FeedState;
   last_reception_time: number | string | null;
@@ -97,7 +97,7 @@ interface FeedStatusResponse {
 }
 
 export interface FeedStatus {
-  source_id: string;
+  vehicle_id: string;
   connected: boolean;
   state: FeedState;
   last_reception_time: string | null;
@@ -123,7 +123,7 @@ function normalizeFeedStatus(
       : status.last_reception_time;
 
   return {
-    source_id: status.source_id,
+    vehicle_id: status.vehicle_id,
     connected: status.connected,
     state: deriveFeedState(status),
     last_reception_time: lastReceptionTime,
@@ -151,8 +151,10 @@ const RealtimeTelemetryContext = createContext<RealtimeTelemetryContextValue | n
 export interface RealtimeTelemetryProviderProps {
   /** Channel names to subscribe to (watchlist). */
   channelNames: string[];
-  /** Source/run id for subscription. */
+  /** Stream/run id for realtime subscription. */
   sourceId: string;
+  /** Logical vehicle id for feed health lookups and status messages. */
+  vehicleId: string;
   /** Optional initial state per channel (from API/snapshot). */
   initialChannels?: InitialChannelInput[];
   children: ReactNode;
@@ -167,6 +169,7 @@ export interface RealtimeTelemetryProviderProps {
 export function RealtimeTelemetryProvider({
   channelNames,
   sourceId,
+  vehicleId,
   initialChannels = [],
   children,
 }: RealtimeTelemetryProviderProps) {
@@ -183,19 +186,21 @@ export function RealtimeTelemetryProvider({
     channelsByName: initialChannelState,
   }));
   const [feedStatusStore, setFeedStatusStore] = useState<{
-    sourceId: string;
+    vehicleId: string;
     feedStatus: FeedStatus | null;
   }>({
-    sourceId,
+    vehicleId,
     feedStatus: null,
   });
   const currentSourceIdRef = useRef(sourceId);
+  const currentVehicleIdRef = useRef(vehicleId);
   const initialChannelStateRef = useRef(initialChannelState);
 
   useEffect(() => {
     currentSourceIdRef.current = sourceId;
+    currentVehicleIdRef.current = vehicleId;
     initialChannelStateRef.current = initialChannelState;
-  }, [initialChannelState, sourceId]);
+  }, [initialChannelState, sourceId, vehicleId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -241,13 +246,14 @@ export function RealtimeTelemetryProvider({
       ? channelStore.channelsByName
       : initialChannelState;
   const feedStatus =
-    feedStatusStore.sourceId === sourceId ? feedStatusStore.feedStatus : null;
+    feedStatusStore.vehicleId === vehicleId ? feedStatusStore.feedStatus : null;
 
   const isLive = feedStatus?.state === "connected";
 
   const handleMessage = useCallback(
     (msg: RealtimeMessage) => {
       const activeSourceId = currentSourceIdRef.current;
+      const activeVehicleId = currentVehicleIdRef.current;
       if (msg.type === "snapshot_watchlist" && msg.channels) {
         setChannelStore((prev) => {
           const base =
@@ -284,9 +290,9 @@ export function RealtimeTelemetryProvider({
             },
           };
         });
-      } else if (msg.type === "feed_status" && msg.source_id === activeSourceId) {
+      } else if (msg.type === "feed_status" && msg.vehicle_id === activeVehicleId) {
         setFeedStatusStore({
-          sourceId: activeSourceId,
+          vehicleId: activeVehicleId,
           feedStatus: normalizeFeedStatus(msg),
         });
       }
@@ -310,14 +316,14 @@ export function RealtimeTelemetryProvider({
   useEffect(() => {
     let cancelled = false;
 
-    fetch(`${API_URL}/ops/feed-status?source_id=${encodeURIComponent(sourceId)}`, {
+    fetch(`${API_URL}/ops/feed-status?vehicle_id=${encodeURIComponent(vehicleId)}`, {
       cache: "no-store",
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((data: FeedStatusResponse | null) => {
         if (!cancelled && data) {
           setFeedStatusStore({
-            sourceId,
+            vehicleId,
             feedStatus: normalizeFeedStatus(data),
           });
         }
@@ -327,7 +333,7 @@ export function RealtimeTelemetryProvider({
     return () => {
       cancelled = true;
     };
-  }, [sourceId]);
+  }, [vehicleId]);
 
   const channelsArray = useMemo(() => {
     const order = channelNames.length ? channelNames : Object.keys(channelsByName);

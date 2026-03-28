@@ -243,6 +243,7 @@ export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
     <RealtimeTelemetryProvider
       channelNames={channelNames}
       sourceId={effectiveRunId}
+      vehicleId={initialSourceId}
       initialChannels={initialChannelsForProvider}
     >
       <RealtimeOverviewContent {...props} />
@@ -385,8 +386,8 @@ function RealtimeOverviewContent({
     } else if (msg.type === "orbit_status") {
       setOrbitStatusBySource((prev) => ({
         ...prev,
-        [msg.source_id]: {
-          source_id: msg.source_id,
+        [msg.vehicle_id]: {
+          source_id: msg.vehicle_id,
           status: msg.status,
           reason: msg.reason,
           orbit_type: msg.orbit_type ?? null,
@@ -609,7 +610,7 @@ function RealtimeOverviewContent({
 
             {activeTab === "event-history" && (
               <div role="tabpanel" aria-label="Event History" className="w-full">
-                <OpsEventHistory sourceId={sourceId} />
+                <OpsEventHistory vehicleId={sourceId} streamId={effectiveRunId} />
               </div>
             )}
           </div>

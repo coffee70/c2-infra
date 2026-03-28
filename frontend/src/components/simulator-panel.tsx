@@ -149,8 +149,8 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
         speed,
         drop_prob: dropProb,
         jitter,
-      }) as { source_id?: string; run_label?: string; status?: string };
-      const resolvedSourceId = data?.source_id;
+      }) as { stream_id?: string; run_label?: string; status?: string };
+      const resolvedSourceId = data?.stream_id;
       auditLog("simulator.start", {
         scenario: effectiveScenario,
         duration: runForever ? 0 : duration,

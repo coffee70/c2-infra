@@ -111,7 +111,7 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
     setError(null);
     try {
       const saved = await upsertPositionConfig({
-        source_id: currentSource.id,
+        vehicle_id: currentSource.id,
         frame_type: frameType,
         lat_channel_name: frameType === "gps_lla" ? latChannel || null : null,
         lon_channel_name: frameType === "gps_lla" ? lonChannel || null : null,

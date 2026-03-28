@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 
 class ChannelListItem(BaseModel):
@@ -20,7 +20,7 @@ class ChannelListItem(BaseModel):
 class TelemetrySchemaCreate(BaseModel):
     """Request body for POST /telemetry/schema."""
 
-    source_id: str = "default"
+    vehicle_id: str = "default"
     name: str
     units: str
     description: Optional[str] = None
@@ -49,7 +49,10 @@ class TelemetryDataIngest(BaseModel):
 
     telemetry_name: str
     data: list[DataPoint]
-    source_id: str = "default"  # backward compatible; used when telemetry_data is source-aware
+    vehicle_id: str = "default"
+    stream_id: str
+    packet_source: Optional[str] = None
+    receiver_id: Optional[str] = None
 
 
 class TelemetryDataResponse(BaseModel):
@@ -152,9 +155,9 @@ class RecentDataResponse(BaseModel):
 
 
 class ChannelSourceItem(BaseModel):
-    """Source that has data for a channel; label is display-friendly (e.g. 'Run started at 2026-03-11 19:03 UTC')."""
+    """Stream that has data for a channel; label is display-friendly."""
 
-    source_id: str
+    stream_id: str
     label: str
 
 
@@ -223,7 +226,7 @@ class AnomaliesResponse(BaseModel):
 class WatchlistEntrySchema(BaseModel):
     """Single watchlist entry."""
 
-    source_id: str
+    vehicle_id: str
     name: str
     aliases: list[str] = []
     display_order: int
@@ -240,7 +243,7 @@ class WatchlistResponse(BaseModel):
 class WatchlistAddRequest(BaseModel):
     """Request body for POST /telemetry/watchlist."""
 
-    source_id: str
+    vehicle_id: str
     telemetry_name: str
 
 
@@ -255,13 +258,16 @@ class TelemetryListResponse(BaseModel):
 class MeasurementEvent(BaseModel):
     """Canonical internal measurement event from realtime ingest."""
 
-    source_id: str = "default"
+    vehicle_id: str
+    stream_id: str
     channel_name: Optional[str] = None
     generation_time: Optional[str] = None  # RFC3339; may be synthesized from reception_time
     reception_time: Optional[str] = None  # RFC3339; server assigns if omitted
     value: float
     quality: str = "valid"  # valid | suspect | invalid
     sequence: Optional[int] = None
+    packet_source: Optional[str] = None
+    receiver_id: Optional[str] = None
     tags: Optional[dict[str, Any]] = None
 
     @model_validator(mode="after")
@@ -298,7 +304,10 @@ class MeasurementEventBatch(BaseModel):
 class RealtimeChannelUpdate(BaseModel):
     """Single channel update pushed to WebSocket clients."""
 
-    source_id: str = "default"
+    vehicle_id: str
+    stream_id: str
+    packet_source: Optional[str] = None
+    receiver_id: Optional[str] = None
     name: str
     units: Optional[str] = None
     description: Optional[str] = None
@@ -320,7 +329,8 @@ class TelemetryAlertSchema(BaseModel):
     """Alert as sent over WebSocket and stored."""
 
     id: str
-    source_id: str = "default"
+    vehicle_id: str
+    stream_id: str
     channel_name: str
     telemetry_id: str
     subsystem: str
@@ -434,7 +444,8 @@ class OpsEventSchema(BaseModel):
     """Single ops event for timeline API."""
 
     id: str
-    source_id: str
+    vehicle_id: str
+    stream_id: Optional[str] = None
     event_time: str
     event_type: str
     severity: str
@@ -456,7 +467,8 @@ class WsFeedStatus(BaseModel):
     """Feed health status (best-effort in dev/demo)."""
 
     type: str = "feed_status"
-    source_id: str
+    vehicle_id: str
+    stream_id: Optional[str] = None
     connected: bool
     state: str = "disconnected"  # connected | degraded | disconnected
     last_reception_time: Optional[str] = None
@@ -468,7 +480,7 @@ class WsOrbitStatus(BaseModel):
     """Orbit validation status update (real-time push)."""
 
     type: str = "orbit_status"
-    source_id: str
+    vehicle_id: str
     status: str
     reason: str = ""
     orbit_type: Optional[str] = None
@@ -506,7 +518,7 @@ class PositionChannelMappingSchema(BaseModel):
     model_config = {"from_attributes": True}
 
     id: str
-    source_id: str
+    vehicle_id: str
     frame_type: str  # gps_lla | ecef | eci
 
     @field_validator("id", mode="before")
@@ -525,11 +537,16 @@ class PositionChannelMappingSchema(BaseModel):
     z_channel_name: Optional[str] = None
     active: bool = True
 
+    @computed_field
+    @property
+    def source_id(self) -> str:
+        return self.vehicle_id
+
 
 class PositionChannelMappingUpsert(BaseModel):
     """Create or update a position mapping for a source."""
 
-    source_id: str
+    vehicle_id: str
     frame_type: str  # gps_lla | ecef | eci
     lat_channel_name: Optional[str] = None
     lon_channel_name: Optional[str] = None
@@ -543,9 +560,10 @@ class PositionChannelMappingUpsert(BaseModel):
 class PositionSample(BaseModel):
     """Canonical geodetic position sample for Earth view."""
 
-    source_id: str
-    source_name: str
-    source_type: str
+    vehicle_id: str
+    vehicle_name: str
+    vehicle_type: str
+    stream_id: Optional[str] = None
     lat_deg: Optional[float] = None
     lon_deg: Optional[float] = None
     alt_m: Optional[float] = None
@@ -554,7 +572,38 @@ class PositionSample(BaseModel):
     frame_type: str
     raw_channels: Optional[dict[str, Optional[float]]] = None
 
-class ActiveRunUpdate(BaseModel):
-    source_id: str
-    run_id: Optional[str] = None
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_vehicle_fields(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if data.get("source_id") and not data.get("vehicle_id"):
+            data["vehicle_id"] = data["source_id"]
+        if data.get("source_name") and not data.get("vehicle_name"):
+            data["vehicle_name"] = data["source_name"]
+        if data.get("source_type") and not data.get("vehicle_type"):
+            data["vehicle_type"] = data["source_type"]
+        return data
+
+    @computed_field
+    @property
+    def source_id(self) -> str:
+        return self.vehicle_id
+
+    @computed_field
+    @property
+    def source_name(self) -> str:
+        return self.vehicle_name
+
+    @computed_field
+    @property
+    def source_type(self) -> str:
+        return self.vehicle_type
+
+class ActiveStreamUpdate(BaseModel):
+    vehicle_id: str
+    stream_id: Optional[str] = None
     state: str  # "active" | "idle"
+
+
+ActiveRunUpdate = ActiveStreamUpdate

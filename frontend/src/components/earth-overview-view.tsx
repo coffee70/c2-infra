@@ -133,7 +133,8 @@ export function EarthOverviewView({
       const bySource: Record<string, PositionChannelMapping | null> = {};
       for (const s of sources) bySource[s.id] = null;
       for (const m of configs) {
-        if (m.source_id in bySource) bySource[m.source_id] = m;
+        const sourceKey = m.vehicle_id;
+        if (sourceKey && sourceKey in bySource) bySource[sourceKey] = m;
       }
       setMappingsBySource(bySource);
     } catch {
@@ -191,7 +192,7 @@ export function EarthOverviewView({
         runtime?.connected === true &&
         runtime.state != null &&
         runtime.state !== "idle"
-          ? runtime.config?.source_id ?? null
+          ? runtime.config?.stream_id ?? null
           : null;
       next[source.id] = activeRunId ?? source.id;
     }
@@ -253,9 +254,9 @@ export function EarthOverviewView({
 
   useEffect(() => {
     const client = new RealtimeWsClient();
-    const handler = (msg: { type: string; source_id?: string; status?: string; reason?: string; orbit_type?: string | null; perigee_km?: number | null; apogee_km?: number | null; eccentricity?: number | null; velocity_kms?: number | null; period_sec?: number | null }) => {
-      if (msg.type === "orbit_status" && msg.source_id != null) {
-        const logicalSourceId = logicalSourceIdByOrbitSourceId[msg.source_id];
+    const handler = (msg: { type: string; vehicle_id?: string; status?: string; reason?: string; orbit_type?: string | null; perigee_km?: number | null; apogee_km?: number | null; eccentricity?: number | null; velocity_kms?: number | null; period_sec?: number | null }) => {
+      if (msg.type === "orbit_status" && msg.vehicle_id != null) {
+        const logicalSourceId = logicalSourceIdByOrbitSourceId[msg.vehicle_id];
         if (!logicalSourceId) return;
         setOrbitStatusBySource((prev) => ({
           ...prev,
@@ -305,8 +306,10 @@ export function EarthOverviewView({
                 alt_m: typeof p.alt_m === "number" ? p.alt_m : 0,
                 timestamp: p.timestamp ?? undefined,
               };
-              const arr = [...(next[p.source_id] ?? []), entry];
-              next[p.source_id] = arr.slice(-MAX_POSITION_HISTORY_POINTS);
+              const sourceKey = p.vehicle_id;
+              if (!sourceKey) continue;
+              const arr = [...(next[sourceKey] ?? []), entry];
+              next[sourceKey] = arr.slice(-MAX_POSITION_HISTORY_POINTS);
             }
           }
           return next;
@@ -386,7 +389,7 @@ export function EarthOverviewView({
   const effectivePositions = useMemo(() => {
     if (selectedIds.length === 0) return [];
     const set = new Set(selectedIds);
-    return positions.filter((p) => set.has(p.source_id));
+    return positions.filter((p) => set.has(p.vehicle_id));
   }, [positions, selectedIds]);
 
   const effectivePositionHistory = useMemo(() => {
@@ -442,7 +445,7 @@ export function EarthOverviewView({
       const y = yChannel.trim() || null;
       const z = zChannel.trim() || null;
       const saved = await upsertPositionConfig({
-        source_id: src.id,
+        vehicle_id: src.id,
         frame_type: frameType,
         lat_channel_name: frameType === "gps_lla" ? lat : null,
         lon_channel_name: frameType === "gps_lla" ? lon : null,

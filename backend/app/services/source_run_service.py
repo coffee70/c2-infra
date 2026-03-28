@@ -1,34 +1,40 @@
-"""Resolve logical telemetry sources to their active run ids."""
+"""Resolve logical vehicles to their active telemetry streams."""
 
 from __future__ import annotations
 
-import re
 import time
 from datetime import datetime, timezone
 from typing import Optional
+import re
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.telemetry import TelemetrySource
+from app.models.telemetry import TelemetryCurrent, TelemetrySource, TelemetryStream
 from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID, RHAEGALSAT_SOURCE_ID
 from telemetry_catalog.definitions import resolve_source_id_alias
 
+ACTIVE_STREAM_CACHE_TTL_SEC = 30.0
+_active_stream_by_vehicle: dict[str, tuple[str, float]] = {}
 RUN_ID_RE = re.compile(r"^(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?)$")
-ACTIVE_RUN_CACHE_TTL_SEC = 30.0
-_active_run_by_source: dict[str, tuple[str, float]] = {}
+
+
+def normalize_vehicle_id(vehicle_id: str) -> str:
+    """Normalize an exact vehicle id alias to its stored id."""
+    return resolve_source_id_alias(vehicle_id) or vehicle_id
 
 
 def normalize_source_id(source_id: str) -> str:
-    """Normalize an exact source id alias to its stored id; leave run ids untouched."""
-    return resolve_source_id_alias(source_id) or source_id
+    """Backward-compatible wrapper for vehicle ids."""
+    return normalize_vehicle_id(source_id)
 
 
 def run_id_to_source_id(source_id: str) -> str:
-    """Collapse a run id back to its logical source id."""
+    """Backward-compatible wrapper for older logical-source callers."""
     match = RUN_ID_RE.match(source_id)
     if not match:
-        return resolve_source_id_alias(source_id) or source_id
+        return normalize_vehicle_id(source_id)
     prefix = match.group(1)
     if prefix.startswith("simulator-"):
         return resolve_source_id_alias("simulator") or "simulator"
@@ -41,14 +47,132 @@ def run_id_to_source_id(source_id: str) -> str:
     return resolve_source_id_alias(prefix) or prefix
 
 
-def ensure_run_belongs_to_source(source_id: str, run_id: str | None = None) -> str:
-    """Return a source or run id only if it belongs to the scoped logical source."""
-    logical_source_id = normalize_source_id(source_id)
-    if not run_id:
-        return logical_source_id
-    if run_id_to_source_id(run_id) != logical_source_id:
+def ensure_stream_belongs_to_vehicle(vehicle_id: str, stream_id: str | None = None) -> str:
+    """Return a vehicle or stream id only if it belongs to the scoped logical vehicle."""
+    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    if not stream_id:
+        return logical_vehicle_id
+    if run_id_to_source_id(stream_id) != logical_vehicle_id:
         raise ValueError("Run not found for source")
-    return run_id
+    return stream_id
+
+
+def ensure_run_belongs_to_source(source_id: str, run_id: str | None = None) -> str:
+    """Backward-compatible wrapper for older route guards."""
+    return ensure_stream_belongs_to_vehicle(source_id, run_id)
+
+
+def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
+    """Resolve a stream id to its owning vehicle, if known."""
+    if db is None:
+        for vehicle_id, (cached_stream_id, _seen_at) in _active_stream_by_vehicle.items():
+            if cached_stream_id == stream_id:
+                return vehicle_id
+        return None
+    row = db.get(TelemetryStream, stream_id)
+    if row is None:
+        return None
+    return row.vehicle_id
+
+
+def get_logical_source(db: Session, vehicle_id: str) -> Optional[TelemetrySource]:
+    """Return the logical vehicle row."""
+    return db.get(TelemetrySource, normalize_vehicle_id(vehicle_id))
+
+
+def register_stream(
+    db: Session,
+    *,
+    vehicle_id: str,
+    stream_id: str,
+    packet_source: str | None = None,
+    receiver_id: str | None = None,
+    seen_at: datetime | None = None,
+) -> TelemetryStream:
+    """Create or update a telemetry stream row and mark it active in cache."""
+    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+
+    observed_at = seen_at or datetime.now(timezone.utc)
+    stream = db.get(TelemetryStream, stream_id)
+    if stream is None:
+        stream = TelemetryStream(
+            id=stream_id,
+            vehicle_id=logical_vehicle_id,
+            packet_source=packet_source,
+            receiver_id=receiver_id,
+            status="active",
+            started_at=observed_at,
+            last_seen_at=observed_at,
+        )
+        db.add(stream)
+    else:
+        stream.vehicle_id = logical_vehicle_id
+        stream.status = "active"
+        stream.last_seen_at = observed_at
+        if packet_source is not None:
+            stream.packet_source = packet_source
+        if receiver_id is not None:
+            stream.receiver_id = receiver_id
+
+    _active_stream_by_vehicle[logical_vehicle_id] = (stream_id, time.time())
+    return stream
+
+
+def register_active_run(source_id: str, *, seen_at: float | None = None) -> None:
+    """Backward-compatible wrapper for older internal call sites."""
+    logical_vehicle_id = run_id_to_source_id(source_id)
+    if logical_vehicle_id == source_id:
+        return
+    existing = _active_stream_by_vehicle.get(logical_vehicle_id)
+    if existing is not None:
+        existing_stream_id, _ = existing
+        existing_started_at = _run_id_started_at(existing_stream_id)
+        new_started_at = _run_id_started_at(source_id)
+        if (
+            existing_started_at is not None
+            and new_started_at is not None
+            and new_started_at < existing_started_at
+        ):
+            return
+    _active_stream_by_vehicle[logical_vehicle_id] = (source_id, seen_at if seen_at is not None else time.time())
+
+
+def clear_active_run(source_id: str, *, db: Session | None = None) -> None:
+    """Backward-compatible wrapper clearing the active stream for a vehicle."""
+    clear_active_stream(run_id_to_source_id(source_id), db=db)
+
+
+def clear_active_stream(vehicle_id: str, *, db: Session | None = None) -> None:
+    """Forget the active stream for a vehicle and mark it idle when possible."""
+    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    _active_stream_by_vehicle.pop(logical_vehicle_id, None)
+    if db is None:
+        return
+    streams = (
+        db.execute(
+            select(TelemetryStream).where(
+                TelemetryStream.vehicle_id == logical_vehicle_id,
+                TelemetryStream.status == "active",
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for stream in streams:
+        stream.status = "idle"
+
+
+def get_cached_active_run_id(vehicle_id: str, *, max_age_sec: float = ACTIVE_STREAM_CACHE_TTL_SEC) -> Optional[str]:
+    """Backward-compatible wrapper returning the active stream id for a vehicle."""
+    logical_vehicle_id = run_id_to_source_id(vehicle_id)
+    cached = _active_stream_by_vehicle.get(logical_vehicle_id)
+    if cached is None:
+        return None
+    stream_id, seen_at = cached
+    if time.time() - seen_at > max_age_sec:
+        _active_stream_by_vehicle.pop(logical_vehicle_id, None)
+        return None
+    return stream_id
 
 
 def _run_id_started_at(source_id: str) -> Optional[datetime]:
@@ -61,94 +185,91 @@ def _run_id_started_at(source_id: str) -> Optional[datetime]:
     return datetime.strptime(ts, "%Y-%m-%dT%H-%M-%S").replace(tzinfo=timezone.utc)
 
 
-def get_logical_source(db: Session, source_id: str) -> Optional[TelemetrySource]:
-    """Return the logical source row for either a source id or a run id."""
-    resolved_source_id = resolve_source_id_alias(source_id) or source_id
-    direct = db.get(TelemetrySource, resolved_source_id)
-    if direct is not None:
-        return direct
-    return db.get(TelemetrySource, run_id_to_source_id(source_id))
-
-
-def register_active_run(source_id: str, *, seen_at: float | None = None) -> None:
-    """Remember the most recent run id observed for a logical source."""
-    logical_source_id = run_id_to_source_id(source_id)
-    if logical_source_id == source_id:
-        return
-    existing = _active_run_by_source.get(logical_source_id)
-    if existing is not None:
-        existing_run_id, _ = existing
-        existing_started_at = _run_id_started_at(existing_run_id)
-        new_started_at = _run_id_started_at(source_id)
-        if (
-            existing_started_at is not None
-            and new_started_at is not None
-            and new_started_at < existing_started_at
-        ):
-            return
-    _active_run_by_source[logical_source_id] = (
-        source_id,
-        seen_at if seen_at is not None else time.time(),
-    )
-
-
-def clear_active_run(source_id: str) -> None:
-    """Forget the active run for a logical source."""
-    _active_run_by_source.pop(run_id_to_source_id(source_id), None)
-
-
-def get_cached_active_run_id(source_id: str, *, max_age_sec: float = ACTIVE_RUN_CACHE_TTL_SEC) -> Optional[str]:
-    """Return the most recent run id seen for the logical source, if still fresh."""
-    logical_source_id = run_id_to_source_id(source_id)
-    cached = _active_run_by_source.get(logical_source_id)
-    if cached is None:
-        return None
-    run_id, seen_at = cached
-    if time.time() - seen_at > max_age_sec:
-        _active_run_by_source.pop(logical_source_id, None)
-        return None
-    return run_id
-
-
 def resolve_active_run_id(db: Session, source_id: str, *, timeout: float = 2.0) -> str:
-    """Resolve a logical source id to the active run id when available.
+    """Backward-compatible wrapper returning the active stream id for a vehicle."""
+    return resolve_active_stream_id(db, source_id, timeout=timeout)
 
-    Strategy:
-    1. Check the generic in-memory active-run cache for any source type.
-    2. If the source is a simulator, optionally refresh from its /status endpoint.
-    3. Otherwise, fall back to the logical source id.
-    """
-    logical_source_id = run_id_to_source_id(source_id)
 
-    cached_run_id = get_cached_active_run_id(logical_source_id)
-    if cached_run_id is not None:
-        return cached_run_id
+def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2.0) -> str:
+    """Resolve a logical vehicle id to the active telemetry stream id when available."""
+    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
 
-    src = get_logical_source(db, logical_source_id)
-    if src is None:
-        return logical_source_id
+    cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
+    if cached_stream_id is not None:
+        return cached_stream_id
 
-    if src.source_type != "simulator" or not src.base_url:
-        return logical_source_id
+    row = (
+        db.execute(
+            select(TelemetryStream)
+            .where(
+                TelemetryStream.vehicle_id == logical_vehicle_id,
+                TelemetryStream.status == "active",
+            )
+            .order_by(TelemetryStream.last_seen_at.desc())
+        )
+        .scalars()
+        .first()
+    )
+    if isinstance(row, TelemetryStream):
+        _active_stream_by_vehicle[logical_vehicle_id] = (row.id, time.time())
+        return row.id
+
+    current_row = (
+        db.execute(
+            select(TelemetryCurrent)
+            .where(
+                TelemetryCurrent.stream_id.like(f"{logical_vehicle_id}-%"),
+            )
+            .order_by(
+                TelemetryCurrent.reception_time.desc(),
+                TelemetryCurrent.generation_time.desc(),
+            )
+        )
+        .scalars()
+        .first()
+    )
+    current_stream_id = getattr(current_row, "stream_id", None)
+    if isinstance(current_stream_id, str) and current_stream_id:
+        register_stream(
+            db,
+            vehicle_id=logical_vehicle_id,
+            stream_id=current_stream_id,
+            packet_source=getattr(current_row, "packet_source", None),
+            receiver_id=getattr(current_row, "receiver_id", None),
+            seen_at=getattr(current_row, "reception_time", None),
+        )
+        return current_stream_id
+
+    src = get_logical_source(db, logical_vehicle_id)
+    if src is None or src.source_type != "simulator" or not src.base_url:
+        return logical_vehicle_id
 
     try:
         with httpx.Client(timeout=timeout) as client:
             res = client.get(f"{src.base_url.rstrip('/')}/status")
             if res.status_code >= 400:
-                return logical_source_id
+                return logical_vehicle_id
             payload = res.json()
     except Exception:
-        return logical_source_id
+        return logical_vehicle_id
 
     state = payload.get("state")
     config = payload.get("config") or {}
-    active_run_id = config.get("source_id")
+    active_stream_id = config.get("stream_id") or config.get("source_id")
+    packet_source = config.get("packet_source")
+    receiver_id = config.get("receiver_id")
 
-    if state and state != "idle" and isinstance(active_run_id, str) and active_run_id:
-        register_active_run(active_run_id)
-        return active_run_id
+    if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
+        register_stream(
+            db,
+            vehicle_id=logical_vehicle_id,
+            stream_id=active_stream_id,
+            packet_source=packet_source if isinstance(packet_source, str) else None,
+            receiver_id=receiver_id if isinstance(receiver_id, str) else None,
+        )
+        return active_stream_id
 
     if state == "idle":
-        clear_active_run(logical_source_id)
+        clear_active_stream(logical_vehicle_id, db=db)
 
-    return logical_source_id
+    return logical_vehicle_id

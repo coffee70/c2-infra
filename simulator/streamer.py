@@ -61,7 +61,10 @@ class TelemetryStreamer:
         speed: float = 1.0,
         drop_prob: float = 0.0,
         jitter: float = 0.1,
-        source_id: str = "",
+        vehicle_id: str = "",
+        stream_id: str = "",
+        packet_source: str | None = None,
+        receiver_id: str | None = None,
         telemetry_definition_path: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
@@ -103,7 +106,10 @@ class TelemetryStreamer:
         self.speed = speed
         self.drop_prob = drop_prob
         self.jitter = jitter
-        self.source_id = source_id
+        self.vehicle_id = vehicle_id
+        self.stream_id = stream_id
+        self.packet_source = packet_source
+        self.receiver_id = receiver_id
         self._state = StreamerState.IDLE
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -203,12 +209,15 @@ class TelemetryStreamer:
             seq += 1
             batch.append(
                 {
-                    "source_id": self.source_id,
+                    "vehicle_id": self.vehicle_id,
+                    "stream_id": self.stream_id,
                     "channel_name": name,
                     "generation_time": generation_time.isoformat(),
                     "value": value,
                     "quality": "valid",
                     "sequence": seq,
+                    "packet_source": self.packet_source,
+                    "receiver_id": self.receiver_id,
                 }
             )
         return seq
@@ -304,12 +313,15 @@ class TelemetryStreamer:
 
                 seq += 1
                 batch.append({
-                    "source_id": self.source_id,
+                    "vehicle_id": self.vehicle_id,
+                    "stream_id": self.stream_id,
                     "channel_name": name,
                     "generation_time": generation_time.isoformat(),
                     "value": value,
                     "quality": "valid",
                     "sequence": seq,
+                    "packet_source": self.packet_source,
+                    "receiver_id": self.receiver_id,
                 })
 
             if len(batch) >= batch_size:
@@ -325,7 +337,8 @@ class TelemetryStreamer:
                             "ingest.sent",
                             direction="simulator_to_backend",
                             count=len(batch),
-                            source_id=self.source_id,
+                            vehicle_id=self.vehicle_id,
+                            stream_id=self.stream_id,
                             status_code=r.status_code,
                         )
                     else:
@@ -333,7 +346,8 @@ class TelemetryStreamer:
                             "ingest.error",
                             level="warning",
                             count=len(batch),
-                            source_id=self.source_id,
+                            vehicle_id=self.vehicle_id,
+                            stream_id=self.stream_id,
                             status_code=r.status_code,
                         )
                     batch = []
@@ -342,7 +356,8 @@ class TelemetryStreamer:
                         "ingest.error",
                         level="warning",
                         count=len(batch),
-                        source_id=self.source_id,
+                        vehicle_id=self.vehicle_id,
+                        stream_id=self.stream_id,
                         error=str(e),
                     )
                     batch = []
@@ -362,7 +377,8 @@ class TelemetryStreamer:
                         "ingest.sent",
                         direction="simulator_to_backend",
                         count=len(batch),
-                        source_id=self.source_id,
+                        vehicle_id=self.vehicle_id,
+                        stream_id=self.stream_id,
                         status_code=r.status_code,
                     )
                 else:
@@ -370,7 +386,8 @@ class TelemetryStreamer:
                         "ingest.error",
                         level="warning",
                         count=len(batch),
-                        source_id=self.source_id,
+                        vehicle_id=self.vehicle_id,
+                        stream_id=self.stream_id,
                         status_code=r.status_code,
                     )
             except Exception as e:
@@ -378,7 +395,8 @@ class TelemetryStreamer:
                     "ingest.error",
                     level="warning",
                     count=len(batch),
-                    source_id=self.source_id,
+                    vehicle_id=self.vehicle_id,
+                    stream_id=self.stream_id,
                     error=str(e),
                 )
 

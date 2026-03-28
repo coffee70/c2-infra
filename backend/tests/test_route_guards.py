@@ -32,7 +32,7 @@ def test_resolve_scoped_run_id_rejects_mismatched_source_run() -> None:
 async def test_simulator_start_preserves_runtime_validation_errors(monkeypatch) -> None:
     db = MagicMock()
     config = MagicMock()
-    config.source_id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
+    config.vehicle_id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
     config.scenario = "dual_tank_imbalance"
     config.duration = 300
     config.speed = 1.0
@@ -82,7 +82,7 @@ async def test_simulator_status_uses_runtime_supported_scenarios(monkeypatch) ->
 
     monkeypatch.setattr("app.routes.simulator._proxy_get", fake_proxy_get)
 
-    payload = await simulator_status(source_id="27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6", db=db)
+    payload = await simulator_status(vehicle_id="27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6", db=db)
 
     assert payload == {
         "connected": True,
@@ -104,7 +104,7 @@ async def test_simulator_status_returns_disconnected_on_missing_source(monkeypat
         ),
     )
 
-    payload = await simulator_status(source_id="does-not-exist", db=db)
+    payload = await simulator_status(vehicle_id="does-not-exist", db=db)
 
     assert payload == {"connected": False, "supported_scenarios": []}
 
@@ -129,7 +129,7 @@ async def test_simulator_status_normalizes_legacy_source_alias(monkeypatch) -> N
     monkeypatch.setattr("app.routes.simulator._resolve_with_audit", fake_resolve)
     monkeypatch.setattr("app.routes.simulator._proxy_get", fake_proxy_get)
 
-    payload = await simulator_status(source_id="simulator", db=db)
+    payload = await simulator_status(vehicle_id="simulator", db=db)
 
     assert seen["source_id"] == "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
     assert payload["connected"] is True

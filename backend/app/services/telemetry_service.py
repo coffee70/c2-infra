@@ -116,7 +116,7 @@ class TelemetryService:
 
     def get_by_name(self, source_id: str, name: str) -> Optional[TelemetryMetadata]:
         """Fetch metadata by source and name."""
-        return resolve_channel_metadata(self._db, source_id=source_id, channel_name=name)
+        return resolve_channel_metadata(self._db, vehicle_id=source_id, channel_name=name)
 
     def get_by_id(self, telemetry_id: UUID) -> Optional[TelemetryMetadata]:
         """Fetch metadata by ID."""
@@ -127,6 +127,9 @@ class TelemetryService:
         source_id: str,
         telemetry_name: str,
         data: list[tuple[datetime, float]],
+        *,
+        packet_source: str | None = None,
+        receiver_id: str | None = None,
     ) -> int:
         """Insert batch of time-series data. source_id scopes data when telemetry_data is source-aware."""
         data_source_id = normalize_source_id(source_id)
@@ -140,6 +143,8 @@ class TelemetryService:
                 telemetry_id=meta.id,
                 timestamp=ts,
                 value=Decimal(str(v)),
+                packet_source=packet_source,
+                receiver_id=receiver_id,
             )
             for ts, v in data
         ]
