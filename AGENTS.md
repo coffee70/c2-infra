@@ -21,14 +21,6 @@
 - Favor small, incremental fixes over broad speculative changes.
 - Validate success and failure paths when changing behavior.
 
-## Agent Task Setup
-
-- When implementing a feature, create and use a dedicated git worktree with a dedicated branch before making code changes. Do not implement feature work directly in a shared worktree.
-- At task start, verify the current directory belongs to the intended worktree and verify the checked out branch matches the task being executed.
-- Keep each agent scoped to its own worktree and branch so multiple agents can operate concurrently without interfering with one another.
-- If the current worktree or branch does not match the assigned task, stop and correct that first before continuing.
-- Use clear branch names that reflect the task or feature being implemented.
-
 ### Validation Requirements
 
 - Run the tests that match the code you changed before finishing.
@@ -97,7 +89,7 @@
 - Locate the implementation, types or interfaces, tests, and configuration dependencies before editing.
 - Avoid modifying files that are unrelated to the task.
 - When the task is large enough to benefit from delegation, create subagents for independent parallelizable work instead of keeping all work in a single agent.
-- Before delegating, confirm each subagent has a clear scope, isolated ownership, and its own appropriate worktree and branch when it will make changes.
+- Before delegating, confirm each subagent has a clear scope and isolated ownership when it will make changes.
 - When writing a plan, explicitly mark which plan items can be handled by subagents and which items must remain on the main agent's critical path.
 - After making changes, run the relevant tests or commands to validate the change.
 
