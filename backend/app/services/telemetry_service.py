@@ -139,6 +139,7 @@ class TelemetryService:
     ) -> int:
         """Insert batch of time-series data. source_id scopes data when telemetry_data is source-aware."""
         metadata_vehicle_id = vehicle_id or run_id_to_source_id(stream_id)
+        ensure_stream_belongs_to_vehicle(self._db, metadata_vehicle_id, stream_id)
         register_stream(
             self._db,
             vehicle_id=metadata_vehicle_id,
@@ -146,7 +147,6 @@ class TelemetryService:
             packet_source=packet_source,
             receiver_id=receiver_id,
         )
-        ensure_stream_belongs_to_vehicle(self._db, metadata_vehicle_id, stream_id)
         meta = self.get_by_name(metadata_vehicle_id, telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")

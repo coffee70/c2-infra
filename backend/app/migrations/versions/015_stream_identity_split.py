@@ -25,6 +25,42 @@ def _split_ops_event_source_id(legacy_source_id: str) -> tuple[str, str | None]:
     return logical_vehicle_id, legacy_source_id
 
 
+def _collect_telemetry_stream_rows(current_rows, data_rows):
+    rows_by_stream = {}
+
+    def record_row(source_id, vehicle_id, observed_at, packet_source, receiver_id):
+        if observed_at is None:
+            return
+        existing = rows_by_stream.get(source_id)
+        if existing is None:
+            rows_by_stream[source_id] = {
+                "id": source_id,
+                "vehicle_id": vehicle_id,
+                "packet_source": packet_source,
+                "receiver_id": receiver_id,
+                "status": "active",
+                "started_at": observed_at,
+                "last_seen_at": observed_at,
+                "metadata": None,
+            }
+            return
+
+        if observed_at < existing["started_at"]:
+            existing["started_at"] = observed_at
+        if observed_at > existing["last_seen_at"]:
+            existing["last_seen_at"] = observed_at
+            existing["packet_source"] = packet_source
+            existing["receiver_id"] = receiver_id
+
+    for row in current_rows:
+        record_row(row.source_id, row.vehicle_id, row.observed_at, row.packet_source, row.receiver_id)
+
+    for row in data_rows:
+        record_row(row.source_id, row.vehicle_id, row.observed_at, row.packet_source, row.receiver_id)
+
+    return list(rows_by_stream.values())
+
+
 def upgrade() -> None:
     op.create_table(
         "telemetry_streams",
@@ -49,6 +85,39 @@ def upgrade() -> None:
     op.create_index("ix_ops_events_stream_id", "ops_events", ["stream_id"], unique=False)
 
     bind = op.get_bind()
+    telemetry_metadata = sa.table(
+        "telemetry_metadata",
+        sa.column("id", sa.Text()),
+        sa.column("vehicle_id", sa.Text()),
+    )
+    telemetry_current = sa.table(
+        "telemetry_current",
+        sa.column("source_id", sa.Text()),
+        sa.column("telemetry_id", sa.Text()),
+        sa.column("generation_time"),
+        sa.column("reception_time"),
+        sa.column("packet_source", sa.Text()),
+        sa.column("receiver_id", sa.Text()),
+    )
+    telemetry_data = sa.table(
+        "telemetry_data",
+        sa.column("source_id", sa.Text()),
+        sa.column("telemetry_id", sa.Text()),
+        sa.column("timestamp"),
+        sa.column("packet_source", sa.Text()),
+        sa.column("receiver_id", sa.Text()),
+    )
+    telemetry_streams = sa.table(
+        "telemetry_streams",
+        sa.column("id", sa.Text()),
+        sa.column("vehicle_id", sa.Text()),
+        sa.column("packet_source", sa.Text()),
+        sa.column("receiver_id", sa.Text()),
+        sa.column("status", sa.Text()),
+        sa.column("started_at"),
+        sa.column("last_seen_at"),
+        sa.column("metadata"),
+    )
     ops_events = sa.table(
         "ops_events",
         sa.column("id", sa.Text()),
@@ -65,6 +134,32 @@ def upgrade() -> None:
             .where(ops_events.c.id == row_id)
             .values(source_id=logical_vehicle_id, stream_id=stream_id)
         )
+
+    current_rows = bind.execute(
+        sa.select(
+            telemetry_current.c.source_id,
+            telemetry_metadata.c.vehicle_id,
+            sa.func.coalesce(telemetry_current.c.reception_time, telemetry_current.c.generation_time).label("observed_at"),
+            telemetry_current.c.packet_source,
+            telemetry_current.c.receiver_id,
+        ).select_from(
+            telemetry_current.join(telemetry_metadata, telemetry_metadata.c.id == telemetry_current.c.telemetry_id)
+        )
+    ).fetchall()
+    data_rows = bind.execute(
+        sa.select(
+            telemetry_data.c.source_id,
+            telemetry_metadata.c.vehicle_id,
+            telemetry_data.c.timestamp.label("observed_at"),
+            telemetry_data.c.packet_source,
+            telemetry_data.c.receiver_id,
+        ).select_from(
+            telemetry_data.join(telemetry_metadata, telemetry_metadata.c.id == telemetry_data.c.telemetry_id)
+        )
+    ).fetchall()
+    stream_rows = _collect_telemetry_stream_rows(current_rows, data_rows)
+    if stream_rows:
+        bind.execute(telemetry_streams.insert(), stream_rows)
 
 
 def downgrade() -> None:

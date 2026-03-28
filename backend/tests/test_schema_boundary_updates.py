@@ -141,10 +141,18 @@ def test_telemetry_routes_use_renamed_request_fields(monkeypatch) -> None:
     assert add_calls == [("vehicle-a", "VBAT")]
 
 
-def test_set_active_run_accepts_matching_run_id(monkeypatch) -> None:
+def test_set_active_run_accepts_registered_opaque_stream_ids(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        telemetry_routes,
+        "ensure_stream_belongs_to_vehicle",
+        lambda _db, vehicle_id, stream_id: captured.update(
+            ensure=f"{vehicle_id}:{stream_id}"
+        )
+        or stream_id,
+    )
     monkeypatch.setattr(
         telemetry_routes,
         "register_stream",
@@ -160,7 +168,7 @@ def test_set_active_run_accepts_matching_run_id(monkeypatch) -> None:
     response = telemetry_routes.set_active_run(
         body=telemetry_routes.ActiveRunUpdate(
             vehicle_id="vehicle-a",
-            stream_id="vehicle-a-2026-03-28T12-00-00Z",
+            stream_id="2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e",
             state="active",
         ),
         db=MagicMock(),
@@ -169,20 +177,26 @@ def test_set_active_run_accepts_matching_run_id(monkeypatch) -> None:
     assert response == {
         "status": "active",
         "vehicle_id": "vehicle-a",
-        "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
+        "stream_id": "2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e",
     }
+    assert captured["ensure"] == "vehicle-a:2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e"
     assert captured["vehicle_id"] == "vehicle-a"
-    assert captured["stream_id"] == "vehicle-a-2026-03-28T12-00-00Z"
+    assert captured["stream_id"] == "2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e"
 
 
-def test_set_active_run_rejects_opaque_stream_ids(monkeypatch) -> None:
+def test_set_active_run_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
     monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        telemetry_routes,
+        "ensure_stream_belongs_to_vehicle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("Run not found for source")),
+    )
 
     with pytest.raises(telemetry_routes.HTTPException) as exc_info:
         telemetry_routes.set_active_run(
             body=telemetry_routes.ActiveRunUpdate(
                 vehicle_id="vehicle-a",
-                stream_id="2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e",
+                stream_id="vehicle-b-2026-03-28T12-00-00Z",
                 state="active",
             ),
             db=MagicMock(),
@@ -211,19 +225,20 @@ def test_register_stream_rejects_vehicle_reassignment() -> None:
     db.add.assert_not_called()
 
 
-def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
+def test_insert_data_rejects_stream_vehicle_mismatch_before_registering(monkeypatch) -> None:
     service = TelemetryService(MagicMock(), object(), object())
-    captured: dict[str, str] = {}
+    calls: list[str] = []
 
     monkeypatch.setattr(
         telemetry_service_module,
         "register_stream",
-        lambda *_args, **_kwargs: None,
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: calls.append(
+            f"register:{vehicle_id}:{stream_id}"
+        ),
     )
 
     def fake_ensure(_db, vehicle_id, stream_id):
-        captured["vehicle_id"] = vehicle_id
-        captured["stream_id"] = stream_id
+        calls.append(f"ensure:{vehicle_id}:{stream_id}")
         raise ValueError("Run not found for source")
 
     monkeypatch.setattr(telemetry_service_module, "ensure_stream_belongs_to_vehicle", fake_ensure)
@@ -238,13 +253,10 @@ def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
         )
 
     assert "Run not found for source" in str(exc_info.value)
-    assert captured == {
-        "vehicle_id": "vehicle-a",
-        "stream_id": "vehicle-b-2026-03-28T12-00-00Z",
-    }
+    assert calls == ["ensure:vehicle-a:vehicle-b-2026-03-28T12-00-00Z"]
 
 
-def test_insert_data_registers_new_stream_before_ownership_check(monkeypatch) -> None:
+def test_insert_data_validates_ownership_before_registering_stream(monkeypatch) -> None:
     service = TelemetryService(MagicMock(), object(), object())
     calls: list[str] = []
 
@@ -271,8 +283,8 @@ def test_insert_data_registers_new_stream_before_ownership_check(monkeypatch) ->
 
     assert rows == 1
     assert calls == [
-        "register:vehicle-a:vehicle-a-2026-03-28T12-00-00Z",
         "ensure:vehicle-a:vehicle-a-2026-03-28T12-00-00Z",
+        "register:vehicle-a:vehicle-a-2026-03-28T12-00-00Z",
     ]
 
 
