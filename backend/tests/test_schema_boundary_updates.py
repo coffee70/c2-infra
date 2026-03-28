@@ -22,6 +22,7 @@ sys.modules.setdefault(
 
 from app.models.schemas import TelemetryDataIngest, TelemetrySchemaCreate, WatchlistAddRequest
 from app.routes import ops as ops_routes
+from app.routes import simulator as simulator_routes
 from app.routes import position as position_routes
 from app.routes import telemetry as telemetry_routes
 from app.services import telemetry_service as telemetry_service_module
@@ -214,6 +215,12 @@ def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
     service = TelemetryService(MagicMock(), object(), object())
     captured: dict[str, str] = {}
 
+    monkeypatch.setattr(
+        telemetry_service_module,
+        "register_stream",
+        lambda *_args, **_kwargs: None,
+    )
+
     def fake_ensure(_db, vehicle_id, stream_id):
         captured["vehicle_id"] = vehicle_id
         captured["stream_id"] = stream_id
@@ -237,6 +244,38 @@ def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
     }
 
 
+def test_insert_data_registers_new_stream_before_ownership_check(monkeypatch) -> None:
+    service = TelemetryService(MagicMock(), object(), object())
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        telemetry_service_module,
+        "register_stream",
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: calls.append(
+            f"register:{vehicle_id}:{stream_id}"
+        ),
+    )
+    monkeypatch.setattr(
+        telemetry_service_module,
+        "ensure_stream_belongs_to_vehicle",
+        lambda _db, vehicle_id, stream_id: calls.append(f"ensure:{vehicle_id}:{stream_id}"),
+    )
+    monkeypatch.setattr(service, "get_by_name", lambda _source_id, _name: SimpleNamespace(id=uuid4()))
+
+    rows = service.insert_data(
+        "vehicle-a-2026-03-28T12-00-00Z",
+        "VBAT",
+        [(datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc), 4.2)],
+        vehicle_id="vehicle-a",
+    )
+
+    assert rows == 1
+    assert calls == [
+        "register:vehicle-a:vehicle-a-2026-03-28T12-00-00Z",
+        "ensure:vehicle-a:vehicle-a-2026-03-28T12-00-00Z",
+    ]
+
+
 def test_run_listing_routes_emit_stream_ids() -> None:
     source_db = MagicMock()
     source_db.execute.side_effect = [
@@ -251,6 +290,42 @@ def test_run_listing_routes_emit_stream_ids() -> None:
         "vehicle-a-2026-03-28T12-00-00Z",
         "vehicle-a",
     ]
+
+
+@pytest.mark.anyio
+async def test_simulator_status_falls_back_to_config_source_id(monkeypatch) -> None:
+    seen: dict[str, str] = {}
+
+    def fake_resolve_with_audit(_db, source_id, _action):
+        seen["source_id"] = source_id
+        return "http://simulator:8010"
+
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_with_audit",
+        fake_resolve_with_audit,
+    )
+
+    async def fake_proxy_get(_base_url, _path):
+        return {
+            "state": "active",
+            "config": {"source_id": "vehicle-a-2026-03-28T12-00-00Z"},
+            "supported_scenarios": [],
+        }
+
+    monkeypatch.setattr(simulator_routes, "_proxy_get", fake_proxy_get)
+
+    registered: dict[str, str] = {}
+    monkeypatch.setattr(
+        simulator_routes,
+        "register_active_run",
+        lambda stream_id: registered.setdefault("stream_id", stream_id),
+    )
+
+    response = await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=MagicMock())
+
+    assert response["connected"] is True
+    assert registered["stream_id"] == "vehicle-a-2026-03-28T12-00-00Z"
 
 
 def test_channel_run_listing_route_emits_stream_ids(monkeypatch) -> None:

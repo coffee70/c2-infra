@@ -115,7 +115,7 @@ async def simulator_status(
         payload = await _proxy_get(base_url, "/status")
         state = payload.get("state")
         config = payload.get("config") or {}
-        active_stream_id = config.get("stream_id")
+        active_stream_id = config.get("stream_id") or config.get("source_id")
         if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
             register_active_run(active_stream_id)
         elif state == "idle":
