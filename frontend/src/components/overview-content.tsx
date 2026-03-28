@@ -292,7 +292,7 @@ export function OverviewContent() {
         if (isSimulatorSource) {
           try {
             const simRes = await fetchWithTimeoutAndFallback(
-              `/simulator/status?source_id=${encodeURIComponent(effectiveSource)}`
+              `/simulator/status?vehicle_id=${encodeURIComponent(effectiveSource)}`
             );
             simStatus = simRes.ok ? await simRes.json() : { connected: false };
             simSourceId = effectiveSource;
@@ -304,11 +304,11 @@ export function OverviewContent() {
 
         const runtimeRunId =
           simStatus?.connected && simStatus.state !== "idle"
-            ? simStatus.config?.source_id ?? null
+            ? simStatus.config?.stream_id ?? null
             : null;
         const effectiveRunId = isSimulatorSource
-          ? runtimeRunId ?? runsList[0]?.source_id ?? effectiveSource
-          : runsList[0]?.source_id ?? effectiveSource;
+          ? runtimeRunId ?? runsList[0]?.stream_id ?? effectiveSource
+          : runsList[0]?.stream_id ?? effectiveSource;
         const snapshot = await fetchOverviewSnapshot(effectiveRunId);
 
         if (cancelled) return;
@@ -321,7 +321,7 @@ export function OverviewContent() {
         setInitialSimulatorSourceId(simSourceId);
         setInitialSimulatorStatus(simStatus);
         setLatestSimulatorRunId(
-          isSimulatorSource ? runtimeRunId ?? runsList[0]?.source_id ?? null : null
+          isSimulatorSource ? runtimeRunId ?? runsList[0]?.stream_id ?? null : null
         );
         if (snapshot.hasPartialFailure) {
           setError("Some data failed to load");

@@ -32,7 +32,7 @@ async function fetchWithFallback(
 
 export interface PositionChannelMapping {
   id: string;
-  source_id: string;
+  vehicle_id: string;
   frame_type: string;
   lat_channel_name?: string | null;
   lon_channel_name?: string | null;
@@ -44,7 +44,7 @@ export interface PositionChannelMapping {
 }
 
 export interface PositionChannelMappingUpsert {
-  source_id: string;
+  vehicle_id: string;
   frame_type: string;
   lat_channel_name?: string | null;
   lon_channel_name?: string | null;
@@ -56,9 +56,10 @@ export interface PositionChannelMappingUpsert {
 }
 
 export interface PositionSample {
-  source_id: string;
-  source_name: string;
-  source_type: string;
+  vehicle_id: string;
+  vehicle_name: string;
+  vehicle_type: string;
+  stream_id?: string | null;
   lat_deg?: number | null;
   lon_deg?: number | null;
   alt_m?: number | null;
@@ -77,9 +78,9 @@ export interface PositionHistoryEntry {
 }
 
 export async function fetchPositionConfig(
-  sourceId?: string
+  vehicleId?: string
 ): Promise<PositionChannelMapping[]> {
-  const qs = sourceId ? `?source_id=${encodeURIComponent(sourceId)}` : "";
+  const qs = vehicleId ? `?vehicle_id=${encodeURIComponent(vehicleId)}` : "";
   const res = await fetchWithFallback(`/telemetry/position/config${qs}`);
   const data = await res.json();
   if (!Array.isArray(data)) return [];
@@ -87,12 +88,12 @@ export async function fetchPositionConfig(
 }
 
 export async function fetchLatestPositions(
-  sourceIds?: string[]
+  vehicleIds?: string[]
 ): Promise<PositionSample[]> {
   const params = new URLSearchParams();
-  if (sourceIds && sourceIds.length > 0) {
-    for (const id of sourceIds) {
-      params.append("source_ids", id);
+  if (vehicleIds && vehicleIds.length > 0) {
+    for (const id of vehicleIds) {
+      params.append("vehicle_ids", id);
     }
   }
   const qs = params.toString();
@@ -138,5 +139,3 @@ export async function deletePositionConfig(id: string): Promise<void> {
     throw new Error(text || "Failed to delete position mapping");
   }
 }
-
-

@@ -273,10 +273,11 @@ export function TelemetryHistoryTable({
   const fallbackToRecent = downloadMeta.fallbackToRecent ?? false;
 
   const runOptions = useMemo(() => {
-    const byId = new Map(runs.map((s) => [s.source_id, s]));
+    const getRunKey = (run: { stream_id?: string }) => run.stream_id ?? "";
+    const byId = new Map(runs.map((s) => [getRunKey(s), s]));
     if (selectedRunId && !byId.has(selectedRunId)) {
       byId.set(selectedRunId, {
-        source_id: selectedRunId,
+        stream_id: selectedRunId,
         label:
           /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/.test(selectedRunId)
             ? (() => {
@@ -290,10 +291,12 @@ export function TelemetryHistoryTable({
             : selectedRunId,
       });
     }
-    // Preserve newest-first order (by source_id desc) to match backend; label sort would put older dates first.
-    return Array.from(byId.values()).sort((a, b) =>
-      b.source_id.localeCompare(a.source_id, undefined, { sensitivity: "base" }),
-    );
+    // Preserve newest-first order (by stream_id desc) to match backend; label sort would put older dates first.
+    return Array.from(byId.values()).sort((a, b) => {
+      const left = getRunKey(a);
+      const right = getRunKey(b);
+      return right.localeCompare(left, undefined, { sensitivity: "base" });
+    });
   }, [runs, selectedRunId]);
 
   const handleCopyRow = async (point: HistoryPoint) => {
@@ -398,10 +401,10 @@ export function TelemetryHistoryTable({
               <SelectTrigger id="history-run" className="h-8 w-[200px] text-xs">
                 <SelectValue placeholder="Run" />
               </SelectTrigger>
-              <SelectContent>
-                {runOptions.map((s) => (
-                  <SelectItem key={s.source_id} value={s.source_id}>
-                    {s.label || s.source_id}
+                <SelectContent>
+                  {runOptions.map((s) => (
+                  <SelectItem key={s.stream_id ?? ""} value={s.stream_id ?? ""}>
+                    {s.label || s.stream_id}
                   </SelectItem>
                 ))}
               </SelectContent>

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Explicit vehicle and stream identity** — Realtime ingest and simulator runtime now distinguish logical `vehicle_id` from per-session `stream_id`, with first-class packet-path metadata for `packet_source` and `receiver_id`. The backend now tracks active telemetry streams explicitly instead of inferring them from overloaded `source_id-run` strings.
+- **Stream-aware run links** — Run listing endpoints now enumerate registered telemetry stream IDs directly, and the Ops event history detail links preserve the selected stream context when opening channel pages.
 - **Realtime ingest timestamp fallback** — `POST /telemetry/realtime/ingest` now accepts packets that provide only `reception_time`. When `generation_time` is absent, the backend synthesizes `generation_time = reception_time`, which allows APRS-style decoder traffic to flow through realtime ingest while keeping downstream timestamps populated.
 
 ### Added
@@ -85,6 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Run-scoped live feed health and vehicle-scoped position APIs** — Realtime feed badges now resolve feed status by logical `vehicle_id` even when telemetry subscriptions follow a run `stream_id`, and the position APIs now use `vehicle_id`/`vehicle_ids` consistently across the backend routes and frontend client.
+- **Run-scoped ops history and packet provenance persistence** — Stream-scoped event history now keeps vehicle-level `system.feed_status` transitions visible for the active vehicle, `/telemetry/data` now persists `packet_source` and `receiver_id`, and active stream resolution can recover from current run-scoped telemetry rows after a backend restart.
 - **Search and watchlist access for runtime-discovered channels** — Newly discovered live fields are now searchable from Overview and visible in watchlist/source pickers with a `Discovered` badge, so operators can inspect and pin dynamic payload telemetry without waiting for a catalog update.
 - **Cross-source watchlist adds** — Adding the same channel name to different sources now persists correctly. A leftover legacy unique index on `watchlist.telemetry_name` was blocking source-scoped watchlists and causing add-to-watchlist actions to appear successful before the database commit failed.
 - Switching from a valid channel detail page to a source that does not expose that channel no longer leads operators into invalid channel pages or 404s. The app now redirects to the selected source’s Overview with an unavailable notice.

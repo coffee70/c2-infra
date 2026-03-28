@@ -56,7 +56,7 @@ interface RecentPoint {
 async function fetchRunsForSource(
   name: string,
   sourceId: string,
-): Promise<{ source_id: string; label: string }[]> {
+): Promise<{ stream_id: string; label: string }[]> {
   try {
     const res = await fetch(
       `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/runs`,
@@ -113,7 +113,7 @@ export default async function TelemetryDetailPage({
   const sourceId = requestedRunId ? runIdToSourceId(requestedRunId) : requestedSourceId;
 
   const runs = await fetchRunsForSource(decodedName, sourceId);
-  const currentRunId = requestedRunId ?? runs[0]?.source_id ?? sourceId;
+  const currentRunId = requestedRunId ?? runs[0]?.stream_id ?? sourceId;
 
   const [explain, recentData] = await Promise.all([
     fetchSummary(decodedName, sourceId, currentRunId),

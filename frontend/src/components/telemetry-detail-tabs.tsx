@@ -112,6 +112,7 @@ export function TelemetryDetailTabs({
       key={currentRunId}
       channelNames={[decodedName]}
       sourceId={currentRunId}
+      vehicleId={sourceId}
       initialChannels={initialChannels}
     >
       <TelemetryDetailTabsContent
@@ -448,7 +449,8 @@ function TelemetryDetailTabsContent({
                 />
                 <ChannelRecentEvents
                   channelName={decodedName}
-                  sourceId={currentRunId}
+                  vehicleId={sourceId}
+                  streamId={currentRunId}
                   sinceMinutes={60}
                 />
                 </div>

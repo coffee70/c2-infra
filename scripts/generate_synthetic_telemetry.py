@@ -173,7 +173,12 @@ def main() -> None:
             try:
                 r = requests.post(
                     f"{base_url}/telemetry/data",
-                    json={"telemetry_name": name, "data": batch},
+                    json={
+                        "telemetry_name": name,
+                        "data": batch,
+                        "vehicle_id": DEFAULT_SOURCE_ID,
+                        "stream_id": DEFAULT_SOURCE_ID,
+                    },
                     timeout=60,
                 )
                 if r.status_code == 200:
@@ -194,7 +199,7 @@ def main() -> None:
                 f"{base_url}/telemetry/watchlist",
                 json={
                     "telemetry_name": ch_name,
-                    "source_id": DEFAULT_SOURCE_ID,
+                    "vehicle_id": DEFAULT_SOURCE_ID,
                 },
                 timeout=10,
             )

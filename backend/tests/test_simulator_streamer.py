@@ -34,7 +34,8 @@ def test_append_position_batch_emits_eci_channels(monkeypatch) -> None:
 
     streamer = streamer_module.TelemetryStreamer(
         base_url="http://example.test",
-        source_id="sim-src",
+        vehicle_id="sim-src",
+        stream_id="sim-src",
     )
     batch: list[dict[str, object]] = []
     generation_time = datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc)

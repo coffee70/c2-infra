@@ -27,6 +27,7 @@ from app.services.realtime_service import (
     get_realtime_snapshot_for_channels,
     get_watchlist_channel_names,
 )
+from app.services.source_run_service import run_id_to_source_id
 from app.lib.audit import audit_log
 
 logger = logging.getLogger(__name__)
@@ -39,13 +40,16 @@ def _normalize_event_times(events: list[MeasurementEvent]) -> list[MeasurementEv
     now = datetime.now(timezone.utc).isoformat()
     return [
         MeasurementEvent(
-            source_id=e.source_id,
+            vehicle_id=e.vehicle_id,
+            stream_id=e.stream_id,
             channel_name=e.channel_name,
             generation_time=e.generation_time or e.reception_time or now,
             reception_time=e.reception_time or now,
             value=e.value,
             quality=e.quality,
             sequence=e.sequence,
+            packet_source=e.packet_source,
+            receiver_id=e.receiver_id,
             tags=e.tags,
         )
         for e in events
@@ -62,7 +66,7 @@ async def ingest_realtime(
     request_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
     bus = get_realtime_bus()
     raw_events = body.events
-    source_ids = sorted({e.source_id or "default" for e in raw_events})
+    vehicle_ids = sorted({e.vehicle_id for e in raw_events})
     filled_reception = sum(1 for e in raw_events if not e.reception_time)
     synthesized_generation = sum(1 for e in raw_events if not e.generation_time and e.reception_time)
 
@@ -72,7 +76,7 @@ async def ingest_realtime(
         method=request.method,
         path=request.url.path,
         count=len(raw_events),
-        source_ids=source_ids,
+        vehicle_ids=vehicle_ids,
         queue_size_before=bus.measurement_queue_size(),
         queue_maxsize=bus.measurement_queue_maxsize(),
     )
@@ -116,7 +120,7 @@ async def ingest_realtime(
         request_id=request_id,
         count=accepted,
         dropped=dropped,
-        source_ids=source_ids,
+        vehicle_ids=vehicle_ids,
     )
     total_duration_ms = round((time.perf_counter() - started_at) * 1000, 3)
     audit_log(
@@ -172,27 +176,27 @@ async def websocket_realtime(websocket: WebSocket) -> None:
 
             elif msg_type == "subscribe_watchlist":
                 channels = msg.get("channels", [])
-                source_id = msg.get("source_id", "default")
+                stream_id = msg.get("stream_id", "default")
                 if not channels:
                     # Default to watchlist
                     session = session_factory()
                     try:
-                        channels = get_watchlist_channel_names(session, source_id)
+                        channels = get_watchlist_channel_names(session, stream_id)
                     finally:
                         session.close()
-                await hub.subscribe_watchlist(websocket, channels, source_id=source_id)
+                await hub.subscribe_watchlist(websocket, channels, source_id=stream_id)
 
                 # Send snapshot
                 session = session_factory()
                 try:
                     snapshot = get_realtime_snapshot_for_channels(
-                        session, channels, source_id=source_id
+                        session, channels, source_id=stream_id
                     )
                     # Fallback: if telemetry_current is empty, channels may be empty
                     # Use overview-style fallback from telemetry_data
                     if len(snapshot) < len(channels):
                         from app.services.overview_service import get_overview
-                        overview = get_overview(session, source_id=source_id)
+                        overview = get_overview(session, source_id=stream_id)
                         overview_by_name = {c["name"]: c for c in overview}
                         for name in channels:
                             if name not in [s.name for s in snapshot] and name in overview_by_name:
@@ -200,7 +204,8 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                                 from app.models.schemas import RecentDataPoint
                                 snapshot.append(
                                     RealtimeChannelUpdate(
-                                        source_id=source_id,
+                                        vehicle_id=run_id_to_source_id(stream_id),
+                                        stream_id=stream_id,
                                         name=o["name"],
                                         units=o.get("units"),
                                         description=o.get("description"),
@@ -226,13 +231,13 @@ async def websocket_realtime(websocket: WebSocket) -> None:
 
             elif msg_type == "subscribe_channel":
                 name = msg.get("name", "")
-                source_id = msg.get("source_id", "default")
+                stream_id = msg.get("stream_id", "default")
                 if name:
-                    await hub.subscribe_channel(websocket, name, source_id=source_id)
+                    await hub.subscribe_channel(websocket, name, source_id=stream_id)
                     session = session_factory()
                     try:
                         snapshot = get_realtime_snapshot_for_channels(
-                            session, [name], source_id=source_id
+                            session, [name], source_id=stream_id
                         )
                         if snapshot:
                             from app.models.schemas import WsTelemetryUpdate
@@ -243,13 +248,13 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         session.close()
 
             elif msg_type == "subscribe_alerts":
-                source_id = msg.get("source_id", "default")
-                await hub.subscribe_alerts(websocket, source_id=source_id)
+                stream_id = msg.get("stream_id", "default")
+                await hub.subscribe_alerts(websocket, source_id=stream_id)
                 session = session_factory()
                 try:
                     active = get_active_alerts(
                         session,
-                        source_id=source_id,
+                        source_id=stream_id,
                         subsystems=msg.get("subsystems"),
                         severities=msg.get("severities"),
                     )
@@ -273,7 +278,8 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         meta = session.get(TelemetryMetadata, alert.telemetry_id)
                         write_ops_event(
                             session,
-                            source_id=alert.source_id,
+                            vehicle_id=meta.vehicle_id if meta else run_id_to_source_id(alert.source_id),
+                            stream_id=alert.source_id,
                             event_time=alert.acked_at,
                             event_type="alert.acked",
                             severity="info",
@@ -293,7 +299,8 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         subsys = infer_subsystem(meta.name, meta) if meta else "other"
                         schema = TelemetryAlertSchema(
                             id=str(alert.id),
-                            source_id=alert.source_id,
+                            vehicle_id=meta.vehicle_id if meta else run_id_to_source_id(alert.source_id),
+                            stream_id=alert.source_id,
                             channel_name=meta.name if meta else "",
                             telemetry_id=str(alert.telemetry_id),
                             subsystem=subsys,
@@ -331,7 +338,8 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         meta = session.get(TelemetryMetadata, alert.telemetry_id)
                         write_ops_event(
                             session,
-                            source_id=alert.source_id,
+                            vehicle_id=meta.vehicle_id if meta else run_id_to_source_id(alert.source_id),
+                            stream_id=alert.source_id,
                             event_time=alert.resolved_at,
                             event_type="alert.resolved",
                             severity="info",
@@ -357,7 +365,8 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         subsys = infer_subsystem(meta.name, meta) if meta else "other"
                         schema = TelemetryAlertSchema(
                             id=str(alert.id),
-                            source_id=alert.source_id,
+                            vehicle_id=meta.vehicle_id if meta else run_id_to_source_id(alert.source_id),
+                            stream_id=alert.source_id,
                             channel_name=meta.name if meta else "",
                             telemetry_id=str(alert.telemetry_id),
                             subsystem=subsys,

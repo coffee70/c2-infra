@@ -16,8 +16,8 @@ app = FastAPI(title="Telemetry Simulator", version="1.0.0")
 
 _streamer: TelemetryStreamer | None = None
 
-# Default source_id sent by callers when they want a unique run; we replace it with a per-run ID.
-DEFAULT_SOURCE_ID = os.environ.get("SIMULATOR_SOURCE_ID") or "simulator"
+# Default vehicle_id sent by callers when they want a unique stream; we replace it with a per-run stream ID.
+DEFAULT_VEHICLE_ID = os.environ.get("SIMULATOR_SOURCE_ID") or "simulator"
 
 
 def _supported_scenarios_payload() -> list[dict[str, str]]:
@@ -31,10 +31,10 @@ def _supported_scenarios_payload() -> list[dict[str, str]]:
     ]
 
 
-def _generate_run_source_id(source_id: str | None) -> str:
-    """Generate a unique source_id for this simulation run (<source_id>-YYYY-MM-DDTHH-MM-SSZ)."""
+def _generate_stream_id(vehicle_id: str | None) -> str:
+    """Generate a unique stream_id for this simulation run (<vehicle_id>-YYYY-MM-DDTHH-MM-SSZ)."""
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
-    prefix = source_id or DEFAULT_SOURCE_ID or str(uuid.uuid4())
+    prefix = vehicle_id or DEFAULT_VEHICLE_ID or str(uuid.uuid4())
     return f"{prefix}-{ts}"
 
 
@@ -47,9 +47,11 @@ class StartConfig(BaseModel):
     speed: float = Field(default=1.0, ge=0.1, description="Time speed factor")
     drop_prob: float = Field(default=0.0, ge=0, le=1, description="Link dropout probability")
     jitter: float = Field(default=0.1, ge=0, le=1, description="Inter-sample jitter")
-    source_id: str = Field(default=DEFAULT_SOURCE_ID, description="Logical source ID for ingest; runtime emits <source_id>-<timestamp>")
+    vehicle_id: str = Field(default=DEFAULT_VEHICLE_ID, description="Logical vehicle ID for ingest")
     base_url: str | None = Field(default=None, description="Backend ingest URL (default: BACKEND_URL env)")
     telemetry_definition_path: str | None = Field(default=None, description="Catalog file to load for this run")
+    packet_source: str | None = Field(default="simulator-link", description="Packet origin identifier")
+    receiver_id: str | None = Field(default=None, description="Receiving endpoint identifier")
 
 
 def _get_streamer() -> TelemetryStreamer:
@@ -76,7 +78,10 @@ def get_status() -> dict[str, Any]:
             "speed": _streamer.speed,
             "drop_prob": _streamer.drop_prob,
             "jitter": _streamer.jitter,
-            "source_id": _streamer.source_id,
+            "vehicle_id": _streamer.vehicle_id,
+            "stream_id": _streamer.stream_id,
+            "packet_source": _streamer.packet_source,
+            "receiver_id": _streamer.receiver_id,
             "base_url": _streamer.base_url,
         },
         "sim_elapsed": round(_streamer.sim_elapsed, 1),
@@ -87,7 +92,7 @@ def get_status() -> dict[str, Any]:
 
 @app.post("/start")
 def start(config: StartConfig) -> dict[str, Any]:
-    """Start the simulator with given config. Returns resolved source_id (unique per run if not provided)."""
+    """Start the simulator with given config. Returns resolved stream_id."""
     if config.scenario not in SCENARIOS:
         raise HTTPException(status_code=400, detail=f"Unknown scenario: {config.scenario}")
     audit_log(
@@ -96,7 +101,7 @@ def start(config: StartConfig) -> dict[str, Any]:
         scenario=config.scenario,
         duration=config.duration,
         speed=config.speed,
-        source_id=config.source_id,
+        vehicle_id=config.vehicle_id,
     )
     global _streamer
     if _streamer is not None and _streamer.state != "idle":
@@ -105,7 +110,7 @@ def start(config: StartConfig) -> dict[str, Any]:
     if _streamer is not None:
         _streamer.stop()
         _streamer = None
-    resolved_source_id = _generate_run_source_id(config.source_id)
+    resolved_stream_id = _generate_stream_id(config.vehicle_id)
     _streamer = TelemetryStreamer(
         base_url=base_url,
         scenario=config.scenario,
@@ -113,7 +118,10 @@ def start(config: StartConfig) -> dict[str, Any]:
         speed=config.speed,
         drop_prob=config.drop_prob,
         jitter=config.jitter,
-        source_id=resolved_source_id,
+        vehicle_id=config.vehicle_id,
+        stream_id=resolved_stream_id,
+        packet_source=config.packet_source,
+        receiver_id=config.receiver_id,
         telemetry_definition_path=config.telemetry_definition_path,
     )
     if not _streamer.start():
@@ -125,14 +133,16 @@ def start(config: StartConfig) -> dict[str, Any]:
         scenario=config.scenario,
         duration=config.duration,
         speed=config.speed,
-        source_id=resolved_source_id,
+        vehicle_id=config.vehicle_id,
+        stream_id=resolved_stream_id,
         base_url=base_url,
     )
     return {
         "status": "started",
         "state": _streamer.state,
-        "source_id": resolved_source_id,
-        "run_label": f"{config.scenario} ({resolved_source_id.split('-')[-1]})",
+        "vehicle_id": config.vehicle_id,
+        "stream_id": resolved_stream_id,
+        "run_label": f"{config.scenario} ({resolved_stream_id.split('-')[-1]})",
     }
 
 

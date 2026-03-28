@@ -1,12 +1,12 @@
 # Multi-Source Operations
 
-**Workflow:** Multiple streams → switch context
+**Workflow:** Multiple telemetry streams -> switch context
 
-The platform supports multiple telemetry sources (vehicles and simulators). A **source** is one row in the source list (e.g. a vehicle or a simulator). Each source can have multiple **runs** (one execution/stream). A run belongs to exactly one source. Data is keyed by run: for vehicles the run is usually the source id; for simulators each start creates a new run (`{source_id}-{timestamp}`).
+The platform supports multiple telemetry vehicles and simulators. A **vehicle** is one row in the source list. Each vehicle can have multiple **streams** (one execution or ingest session). A stream belongs to exactly one vehicle. Catalog metadata, watchlists, and position mappings are keyed by vehicle; live telemetry data is keyed by stream.
 
 ## Source Selector
 
-In the **Context Banner** on the Overview and Telemetry Detail pages, you switch between **sources** only (vehicles and simulators). The dropdown lists only registered sources (no individual runs). Telemetry Detail URLs are source-first: `/sources/{source_id}/telemetry/{channel_name}`. The app resolves the source’s **current run** (e.g. newest) for Overview data, Summary, Live & Trends, and the default run in the History tab.
+In the **Context Banner** on the Overview and Telemetry Detail pages, you switch between logical vehicles only. The dropdown lists registered vehicles, not individual streams. Telemetry Detail URLs stay vehicle-first: `/sources/{vehicle_id}/telemetry/{channel_name}`. The app resolves the vehicle's **current stream** for Overview data, Summary, Live & Trends, and the default stream in the History tab.
 
 Because channel catalogs are now source-scoped, a channel detail page is only valid for sources that actually expose that channel. If you switch to a source that does not provide the current channel, the app redirects you back to that source’s Overview with a notice instead of leaving you on a 404 page.
 
@@ -50,9 +50,9 @@ The simulator appears in the Simulators list. The backend seeds its expected cha
 
 The backend seeds the source catalog from that definition so searches, watchlists, summaries, and alerts know which channels belong to that vehicle before live ingest starts.
 
-## Simulator runs (fresh slate per run)
+## Simulator streams (fresh slate per start)
 
-Each time you **start** a simulator from the Sources page, the platform creates a **new run** for that source (run id = source id + timestamp). You are taken to the **Overview** with that **source** selected; the Overview (and Telemetry Detail) then show data for that source’s **current run** (the newest run, including the one you just started). All data (History, Trends, copy/export) is scoped to runs of the selected source. On Telemetry Detail, the **Run** dropdown in the History tab lists only runs for that source so you can narrow the table to a specific run (e.g. "Run started at 2026-03-11 19:03 UTC"), but the page URL stays at the source level.
+Each time you **start** a simulator from the Sources page, the platform creates a **new stream** for that vehicle (`{vehicle_id}-{timestamp}`). You are taken to the **Overview** with that vehicle selected; the Overview and Telemetry Detail then show data for the vehicle's **current stream**. History, trends, and exports remain stream-scoped, while the page URL stays at the vehicle level.
 
 ## Built-in Local Sources
 

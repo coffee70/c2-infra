@@ -7,7 +7,8 @@ import { useOpsEventsQuery } from "@/lib/query-hooks";
 
 interface ChannelRecentEventsProps {
   channelName: string;
-  sourceId?: string;
+  vehicleId?: string;
+  streamId?: string;
   sinceMinutes?: number;
 }
 
@@ -29,15 +30,17 @@ function formatTime(iso: string): string {
 
 export function ChannelRecentEvents({
   channelName,
-  sourceId = "default",
+  vehicleId = "default",
+  streamId,
   sinceMinutes = 60,
 }: ChannelRecentEventsProps) {
   const params = {
-      source_id: sourceId,
-      since_minutes: String(sinceMinutes),
-      channel_name: channelName,
-      limit: "20",
-    };
+    vehicle_id: vehicleId,
+    since_minutes: String(sinceMinutes),
+    channel_name: channelName,
+    limit: "20",
+    ...(streamId ? { stream_id: streamId } : {}),
+  };
   const eventsQuery = useOpsEventsQuery(params);
   const loading = eventsQuery.isLoading;
   const events = eventsQuery.data?.events ?? [];

@@ -5,7 +5,7 @@ const API_URL = process.env.PLAYWRIGHT_API_URL || "http://127.0.0.1:8000";
 async function ensureSimulatorPositionMapping(request: APIRequestContext) {
   const response = await request.post(`${API_URL}/telemetry/position/config`, {
     data: {
-      source_id: "simulator",
+      vehicle_id: "simulator",
       frame_type: "gps_lla",
       lat_channel_name: "GPS_LAT",
       lon_channel_name: "GPS_LON",
@@ -19,7 +19,7 @@ async function ensureSimulatorPositionMapping(request: APIRequestContext) {
 
 async function ensureSimulatorRunning(request: APIRequestContext) {
   const statusResponse = await request.get(
-    `${API_URL}/simulator/status?source_id=simulator`
+    `${API_URL}/simulator/status?vehicle_id=simulator`
   );
   expect(statusResponse.ok()).toBeTruthy();
 
@@ -39,7 +39,7 @@ async function ensureSimulatorRunning(request: APIRequestContext) {
       speed: 1,
       drop_prob: 0,
       jitter: 0.1,
-      source_id: "simulator",
+      vehicle_id: "simulator",
     },
   });
 

@@ -52,7 +52,7 @@ export interface SearchResult {
 }
 
 export interface ChannelSource {
-  source_id: string;
+  stream_id: string;
   label: string;
 }
 
@@ -73,7 +73,8 @@ export interface TelemetryRecentResponse {
 
 export interface OpsEventSchema {
   id: string;
-  source_id: string;
+  vehicle_id: string;
+  stream_id?: string | null;
   event_time: string;
   event_type: string;
   severity: string;
@@ -183,7 +184,7 @@ export function useAddToWatchlistMutation(
       fetchJson("/telemetry/watchlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source_id: sourceId, telemetry_name: name }),
+        body: JSON.stringify({ vehicle_id: sourceId, telemetry_name: name }),
       }),
     onMutate: async (name) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.watchlist(sourceId) });
@@ -441,7 +442,7 @@ export function useOpsEventsQuery(params: Record<string, string>, enabled = true
 
 export async function fetchSimulatorRuntimeStatus(sourceId: string): Promise<SimulatorRuntimeStatus> {
   const data = await fetchJson<SimulatorRuntimeStatus>(
-    `/simulator/status?source_id=${encodeURIComponent(sourceId)}`,
+    `/simulator/status?vehicle_id=${encodeURIComponent(sourceId)}`,
     { cache: "no-store", useFallback: true }
   );
   return data ?? { connected: false };
@@ -504,7 +505,7 @@ export function useSimulatorStartMutation() {
       fetchJson("/simulator/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, source_id: sourceId }),
+        body: JSON.stringify({ ...payload, vehicle_id: sourceId }),
         useFallback: true,
       }),
     onSettled: async (_data, _error, variables) => {
@@ -520,7 +521,7 @@ function createSimulatorActionMutation(path: string, actionName: string) {
     return useMutation({
       mutationFn: async ({ sourceId }: SimulatorActionInput) =>
         fetchJson(
-          `${path}?source_id=${encodeURIComponent(sourceId)}`,
+          `${path}?vehicle_id=${encodeURIComponent(sourceId)}`,
           { method: "POST", useFallback: true }
         ),
       onSuccess: (_data, variables) => {

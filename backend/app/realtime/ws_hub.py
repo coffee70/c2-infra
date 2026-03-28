@@ -131,7 +131,7 @@ class RealtimeWsHub:
             except (TypeError, OSError):
                 ts_str = str(ts)
         msg = WsFeedStatus(
-            source_id=status["source_id"],
+            vehicle_id=status["source_id"],
             connected=status.get("connected", False),
             state=status.get("state", "disconnected"),
             last_reception_time=ts_str,
@@ -161,21 +161,21 @@ class RealtimeWsHub:
             self._loop,
         )
 
-    def schedule_orbit_status(self, source_id: str, payload: dict) -> None:
+    def schedule_orbit_status(self, vehicle_id: str, payload: dict) -> None:
         """Schedule orbit status broadcast from sync context."""
         if self._loop is None:
             return
         asyncio.run_coroutine_threadsafe(
-            self.broadcast_orbit_status(source_id, payload),
+            self.broadcast_orbit_status(vehicle_id, payload),
             self._loop,
         )
 
-    async def broadcast_orbit_status(self, source_id: str, payload: dict) -> None:
+    async def broadcast_orbit_status(self, vehicle_id: str, payload: dict) -> None:
         """Broadcast orbit status to all connected clients."""
         if not self._connections:
             return
         msg = WsOrbitStatus(
-            source_id=source_id,
+            vehicle_id=vehicle_id,
             status=payload.get("status", ""),
             reason=payload.get("reason", ""),
             orbit_type=payload.get("orbit_type"),
@@ -199,7 +199,7 @@ class RealtimeWsHub:
         """Broadcast to clients subscribed to this channel and source."""
         targets = self._get_subscribed_connections(
             channel_name=update.name,
-            source_id=update.source_id,
+            source_id=update.stream_id,
         )
         if not targets:
             return
@@ -230,7 +230,7 @@ class RealtimeWsHub:
             alert_obj = alert
         targets = self._get_subscribed_connections(
             for_alerts=True,
-            alert_source_id=alert_obj.source_id,
+            alert_source_id=alert_obj.stream_id,
         )
         if not targets:
             return

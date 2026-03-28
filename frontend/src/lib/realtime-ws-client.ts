@@ -17,7 +17,8 @@ function getWsUrl(): string {
 }
 
 export interface RealtimeChannelUpdate {
-  source_id?: string;
+  vehicle_id: string;
+  stream_id: string;
   name: string;
   units?: string | null;
   description?: string | null;
@@ -34,6 +35,8 @@ export interface RealtimeChannelUpdate {
 
 export interface TelemetryAlert {
   id: string;
+  vehicle_id: string;
+  stream_id: string;
   channel_name: string;
   telemetry_id: string;
   subsystem: string;
@@ -59,7 +62,7 @@ export interface TelemetryAlert {
 
 export interface OrbitStatusMessage {
   type: "orbit_status";
-  source_id: string;
+  vehicle_id: string;
   status: string;
   reason: string;
   orbit_type?: string | null;
@@ -72,7 +75,7 @@ export interface OrbitStatusMessage {
 
 export interface FeedStatusMessage {
   type: "feed_status";
-  source_id: string;
+  vehicle_id: string;
   connected: boolean;
   state?: "connected" | "degraded" | "disconnected";
   last_reception_time: string | null;
@@ -121,12 +124,12 @@ export class RealtimeWsClient {
         this.send({
           type: "subscribe_watchlist",
           channels: this.subscriptions.watchlist,
-          source_id: this.subscriptions.sourceId,
+          stream_id: this.subscriptions.sourceId,
         });
         if (this.subscriptions.alerts) {
           this.send({
             type: "subscribe_alerts",
-            source_id: this.subscriptions.sourceId,
+            stream_id: this.subscriptions.sourceId,
           });
         }
       };
@@ -192,14 +195,14 @@ export class RealtimeWsClient {
     this.send({
       type: "subscribe_watchlist",
       channels,
-      source_id: sourceId,
+      stream_id: sourceId,
     });
   }
 
   subscribeAlerts(sourceId: string = "default"): void {
     this.subscriptions.alerts = true;
     this.subscriptions.sourceId = sourceId;
-    this.send({ type: "subscribe_alerts", source_id: sourceId });
+    this.send({ type: "subscribe_alerts", stream_id: sourceId });
   }
 
   ackAlert(alertId: string): void {

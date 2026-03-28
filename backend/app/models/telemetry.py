@@ -7,7 +7,7 @@ from typing import Optional
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from app.database import Base
 
@@ -30,7 +30,8 @@ class TelemetryMetadata(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    source_id: Mapped[str] = mapped_column(
+    vehicle_id: Mapped[str] = mapped_column(
+        "source_id",
         Text,
         ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
         index=True,
@@ -53,6 +54,7 @@ class TelemetryMetadata(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+    source_id = synonym("vehicle_id")
 
 
 class TelemetryChannelAlias(Base):
@@ -73,7 +75,8 @@ class TelemetryChannelAlias(Base):
         ),
     )
 
-    source_id: Mapped[str] = mapped_column(
+    vehicle_id: Mapped[str] = mapped_column(
+        "source_id",
         Text,
         ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
         primary_key=True,
@@ -90,17 +93,17 @@ class TelemetryChannelAlias(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+    source_id = synonym("vehicle_id")
 
 
 class TelemetryData(Base):
     """Time-series telemetry data (TimescaleDB hypertable).
-    source_id scopes data per stream; it may be ephemeral (e.g. simulator run IDs
-    like simulator-nominal-2026-03-11T19) and is not required to exist in telemetry_sources.
+    stream_id scopes data per telemetry stream.
     """
 
     __tablename__ = "telemetry_data"
 
-    source_id: Mapped[str] = mapped_column(Text, primary_key=True, default="default")
+    stream_id: Mapped[str] = mapped_column("source_id", Text, primary_key=True)
     telemetry_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("telemetry_metadata.id", ondelete="CASCADE"),
@@ -111,6 +114,8 @@ class TelemetryData(Base):
         primary_key=True,
     )
     value: Mapped[float] = mapped_column(Numeric(20, 10), nullable=False)
+    packet_source: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    receiver_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index(
@@ -120,6 +125,7 @@ class TelemetryData(Base):
             "timestamp",
         ),
     )
+    source_id = synonym("stream_id")
 
 
 class TelemetryStatistics(Base):
@@ -127,7 +133,7 @@ class TelemetryStatistics(Base):
 
     __tablename__ = "telemetry_statistics"
 
-    source_id: Mapped[str] = mapped_column(Text, primary_key=True, default="default")
+    stream_id: Mapped[str] = mapped_column("source_id", Text, primary_key=True)
     telemetry_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("telemetry_metadata.id", ondelete="CASCADE"),
@@ -145,6 +151,7 @@ class TelemetryStatistics(Base):
         DateTime(timezone=True),
         nullable=False,
     )
+    source_id = synonym("stream_id")
 
 
 class WatchlistEntry(Base):
@@ -157,7 +164,8 @@ class WatchlistEntry(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    source_id: Mapped[str] = mapped_column(
+    vehicle_id: Mapped[str] = mapped_column(
+        "source_id",
         Text,
         ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
         index=True,
@@ -170,6 +178,7 @@ class WatchlistEntry(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
     )
+    source_id = synonym("vehicle_id")
 
 
 class TelemetrySource(Base):
@@ -195,7 +204,7 @@ class TelemetryCurrent(Base):
 
     __tablename__ = "telemetry_current"
 
-    source_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    stream_id: Mapped[str] = mapped_column("source_id", Text, primary_key=True)
     telemetry_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("telemetry_metadata.id", ondelete="CASCADE"),
@@ -215,6 +224,9 @@ class TelemetryCurrent(Base):
     z_score: Mapped[Optional[float]] = mapped_column(Numeric(20, 10), nullable=True)
     quality: Mapped[str] = mapped_column(Text, nullable=False, default="valid")
     sequence: Mapped[Optional[int]] = mapped_column(nullable=True)
+    packet_source: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    receiver_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_id = synonym("stream_id")
 
 
 class TelemetryAlert(Base):
@@ -227,7 +239,7 @@ class TelemetryAlert(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    source_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    stream_id: Mapped[str] = mapped_column("source_id", Text, nullable=False, index=True)
     telemetry_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("telemetry_metadata.id", ondelete="CASCADE"),
@@ -257,6 +269,7 @@ class TelemetryAlert(Base):
     resolved_by: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     resolution_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     resolution_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_id = synonym("stream_id")
 
 
 class OpsEvent(Base):
@@ -269,7 +282,8 @@ class OpsEvent(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    source_id: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    vehicle_id: Mapped[str] = mapped_column("source_id", Text, nullable=False, index=True)
+    stream_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
     event_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -293,6 +307,7 @@ class OpsEvent(Base):
         Index("ix_ops_events_source_time", "source_id", "event_time"),
         Index("ix_ops_events_type_time", "event_type", "event_time"),
     )
+    source_id = synonym("vehicle_id")
 
 
 class TelemetryAlertNote(Base):
@@ -331,7 +346,8 @@ class PositionChannelMapping(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    source_id: Mapped[str] = mapped_column(
+    vehicle_id: Mapped[str] = mapped_column(
+        "source_id",
         Text,
         ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
         nullable=False,
@@ -370,3 +386,32 @@ class PositionChannelMapping(Base):
             "active",
         ),
     )
+    source_id = synonym("vehicle_id")
+
+
+class TelemetryStream(Base):
+    """Runtime telemetry stream identity for one vehicle/session."""
+
+    __tablename__ = "telemetry_streams"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    vehicle_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    packet_source: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    receiver_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    metadata_json: Mapped[Optional[dict]] = mapped_column("metadata", JSONB(), nullable=True)

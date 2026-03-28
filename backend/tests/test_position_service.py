@@ -71,6 +71,7 @@ def test_run_id_to_source_id_collapses_simulator_run() -> None:
 
 
 def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     db.get.side_effect = lambda model, source_id: (
         TelemetrySource(
@@ -90,7 +91,7 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
                 {
                     "state": "running",
                     "config": {
-                        "source_id": f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
+                        "stream_id": f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
                     },
                 }
             )
@@ -105,6 +106,7 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
 
 
 def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     db.get.side_effect = lambda model, source_id: (
         TelemetrySource(
@@ -134,10 +136,122 @@ def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_resolve_active_run_id_only_queries_active_stream_rows() -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    seen: list[str] = []
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    def fake_execute(statement):
+        seen.append(str(statement))
+        return _EmptyResult()
+
+    db.execute.side_effect = fake_execute
+    db.get.return_value = None
+
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
+    assert any("telemetry_streams.status" in sql for sql in seen)
+    assert any("JOIN telemetry_metadata" in sql and "telemetry_metadata.source_id" in sql for sql in seen)
+
+
+def test_resolve_active_run_id_recovers_stream_from_current_rows() -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    current = SimpleNamespace(
+        stream_id=stream_id,
+        reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
+        generation_time=datetime(2026, 3, 13, 17, 12, 39, tzinfo=timezone.utc),
+        packet_source="ground-station-a",
+        receiver_id="rx-7",
+    )
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _CurrentResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return current
+
+    db.execute.side_effect = [_EmptyResult(), _CurrentResult()]
+    db.get.return_value = None
+
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
+    db.add.assert_called_once()
+    clear_active_run(DROGONSAT_SOURCE_ID)
+
+
+def test_resolve_active_run_id_recovers_opaque_stream_from_current_rows() -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream_id = "c3bb4cf5-21dd-4b84-bc91-1e3a3a944f78"
+    current = SimpleNamespace(
+        stream_id=stream_id,
+        reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
+        generation_time=datetime(2026, 3, 13, 17, 12, 39, tzinfo=timezone.utc),
+        packet_source="ground-station-a",
+        receiver_id="rx-7",
+    )
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _CurrentResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return current
+
+    db.execute.side_effect = [_EmptyResult(), _CurrentResult()]
+    db.get.return_value = None
+
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
+    db.add.assert_called_once()
+    clear_active_run(DROGONSAT_SOURCE_ID)
+
+
+def test_clear_active_run_marks_persisted_active_streams_idle() -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream = SimpleNamespace(status="active")
+
+    class _ActiveResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [stream]
+
+    db.execute.return_value = _ActiveResult()
+
+    register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z")
+    clear_active_run(DROGONSAT_SOURCE_ID, db=db)
+
+    assert stream.status == "idle"
+
+
 def test_upsert_mapping_resolves_aliases_to_canonical_names(monkeypatch) -> None:
     db = MagicMock()
     body = SimpleNamespace(
-        source_id="source-a",
+        vehicle_id="source-a",
         frame_type="gps_lla",
         lat_channel_name="LATITUDE",
         lon_channel_name="LONGITUDE",
@@ -167,7 +281,7 @@ def test_upsert_mapping_resolves_aliases_to_canonical_names(monkeypatch) -> None
     monkeypatch.setattr(
         position_service,
         "resolve_channel_name",
-        lambda _db, source_id, channel_name: {
+        lambda _db, vehicle_id, channel_name: {
             "LATITUDE": "GPS_LAT",
             "LONGITUDE": "GPS_LON",
             "ALTITUDE": "GPS_ALT",
@@ -296,7 +410,7 @@ def test_get_latest_positions_resolves_active_run_for_mapped_source(
 
     monkeypatch.setattr(position_service, "_build_sample_for_mapping", fake_build_sample)
 
-    samples = position_service.get_latest_positions(db, source_ids=[DROGONSAT_SOURCE_ID])
+    samples = position_service.get_latest_positions(db, vehicle_ids=[DROGONSAT_SOURCE_ID])
 
     assert len(samples) == 1
     assert samples[0].source_id == DROGONSAT_SOURCE_ID

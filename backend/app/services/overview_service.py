@@ -50,7 +50,11 @@ def get_all_telemetry_channels_for_source(db: Session, source_id: str) -> list[d
         .order_by(TelemetryMetadata.name)
     )
     rows = db.execute(stmt).fetchall()
-    aliases_by_id = get_aliases_by_telemetry_ids(db, source_id=source_id, telemetry_ids=[row[0] for row in rows])
+    aliases_by_id = get_aliases_by_telemetry_ids(
+        db,
+        vehicle_id=source_id,
+        telemetry_ids=[row[0] for row in rows],
+    )
     return [
         {
             "name": row[1],
@@ -91,7 +95,7 @@ def get_watchlist(db: Session, source_id: str) -> list[dict]:
     rows = db.execute(stmt).fetchall()
     aliases_by_id = get_aliases_by_telemetry_ids(
         db,
-        source_id=source_id,
+        vehicle_id=source_id,
         telemetry_ids=[r[3] for r in rows if r[3] is not None],
     )
     return [
@@ -111,7 +115,7 @@ def add_to_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
     """Add a channel to the watchlist."""
     logical_source_id = run_id_to_source_id(source_id)
     # Verify telemetry exists
-    meta = resolve_channel_metadata(db, source_id=source_id, channel_name=telemetry_name)
+    meta = resolve_channel_metadata(db, vehicle_id=source_id, channel_name=telemetry_name)
     if not meta:
         raise ValueError(f"Telemetry not found: {telemetry_name}")
 
@@ -140,7 +144,10 @@ def add_to_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
 def remove_from_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
     """Remove a channel from the watchlist."""
     logical_source_id = run_id_to_source_id(source_id)
-    canonical_name = resolve_channel_name(db, source_id=source_id, channel_name=telemetry_name) or telemetry_name
+    canonical_name = (
+        resolve_channel_name(db, vehicle_id=source_id, channel_name=telemetry_name)
+        or telemetry_name
+    )
     entry = db.execute(
         select(WatchlistEntry).where(
             WatchlistEntry.source_id == logical_source_id,

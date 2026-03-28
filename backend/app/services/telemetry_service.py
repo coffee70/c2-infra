@@ -19,7 +19,13 @@ from app.models.schemas import (
     ExplainResponse,
     SearchResult,
 )
-from app.services.source_run_service import normalize_source_id, run_id_to_source_id
+from app.services.source_run_service import (
+    get_stream_vehicle_id,
+    normalize_vehicle_id,
+    normalize_source_id,
+    register_stream,
+    run_id_to_source_id,
+)
 from app.services.channel_alias_service import (
     get_aliases_by_telemetry_ids,
     resolve_channel_metadata,
@@ -116,7 +122,7 @@ class TelemetryService:
 
     def get_by_name(self, source_id: str, name: str) -> Optional[TelemetryMetadata]:
         """Fetch metadata by source and name."""
-        return resolve_channel_metadata(self._db, source_id=source_id, channel_name=name)
+        return resolve_channel_metadata(self._db, vehicle_id=source_id, channel_name=name)
 
     def get_by_id(self, telemetry_id: UUID) -> Optional[TelemetryMetadata]:
         """Fetch metadata by ID."""
@@ -124,22 +130,39 @@ class TelemetryService:
 
     def insert_data(
         self,
-        source_id: str,
+        stream_id: str,
         telemetry_name: str,
         data: list[tuple[datetime, float]],
+        *,
+        vehicle_id: str | None = None,
+        packet_source: str | None = None,
+        receiver_id: str | None = None,
     ) -> int:
         """Insert batch of time-series data. source_id scopes data when telemetry_data is source-aware."""
-        data_source_id = normalize_source_id(source_id)
-        meta = self.get_by_name(source_id, telemetry_name)
+        metadata_vehicle_id = vehicle_id or run_id_to_source_id(stream_id)
+        logical_vehicle_id = normalize_vehicle_id(metadata_vehicle_id)
+        existing_owner = get_stream_vehicle_id(self._db, stream_id)
+        if existing_owner is not None and normalize_vehicle_id(existing_owner) != logical_vehicle_id:
+            raise ValueError("Run not found for source")
+        register_stream(
+            self._db,
+            vehicle_id=logical_vehicle_id,
+            stream_id=stream_id,
+            packet_source=packet_source,
+            receiver_id=receiver_id,
+        )
+        meta = self.get_by_name(logical_vehicle_id, telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")
 
         rows = [
             TelemetryData(
-                source_id=data_source_id,
+                source_id=stream_id,
                 telemetry_id=meta.id,
                 timestamp=ts,
                 value=Decimal(str(v)),
+                packet_source=packet_source,
+                receiver_id=receiver_id,
             )
             for ts, v in data
         ]
@@ -186,7 +209,7 @@ class TelemetryService:
         result_by_name: dict[str, SearchResult] = {}
         aliases_by_id: dict[UUID, list[str]] = get_aliases_by_telemetry_ids(
             self._db,
-            source_id=source_id,
+            vehicle_id=source_id,
             telemetry_ids=candidate_ids,
         )
 
@@ -339,7 +362,7 @@ class TelemetryService:
         aliases_by_id.update(
             get_aliases_by_telemetry_ids(
                 self._db,
-                source_id=source_id,
+                vehicle_id=source_id,
                 telemetry_ids=candidate_ids,
             )
         )
@@ -531,7 +554,7 @@ class TelemetryService:
         canonical_name = meta.name
         aliases = get_aliases_by_telemetry_ids(
             self._db,
-            source_id=source_id,
+            vehicle_id=source_id,
             telemetry_ids=[meta.id],
         ).get(meta.id, [])
 
