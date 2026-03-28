@@ -19,7 +19,7 @@ from app.models.schemas import (
     ExplainResponse,
     SearchResult,
 )
-from app.services.source_run_service import normalize_source_id, run_id_to_source_id
+from app.services.source_run_service import ensure_stream_belongs_to_vehicle, normalize_source_id, run_id_to_source_id
 from app.services.channel_alias_service import (
     get_aliases_by_telemetry_ids,
     resolve_channel_metadata,
@@ -133,7 +133,8 @@ class TelemetryService:
         receiver_id: str | None = None,
     ) -> int:
         """Insert batch of time-series data. source_id scopes data when telemetry_data is source-aware."""
-        metadata_vehicle_id = vehicle_id or stream_id
+        metadata_vehicle_id = vehicle_id or run_id_to_source_id(stream_id)
+        ensure_stream_belongs_to_vehicle(self._db, metadata_vehicle_id, stream_id)
         meta = self.get_by_name(metadata_vehicle_id, telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")
