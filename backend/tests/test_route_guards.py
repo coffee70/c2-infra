@@ -9,7 +9,11 @@ from fastapi import HTTPException
 
 from app.models.telemetry import TelemetryStream
 from app.routes.simulator import simulator_start, simulator_status
-from app.services.source_run_service import ensure_run_belongs_to_source
+from app.services.source_run_service import (
+    clear_active_run,
+    ensure_run_belongs_to_source,
+    register_active_run,
+)
 
 
 def test_resolve_scoped_run_id_accepts_matching_source_run() -> None:
@@ -68,6 +72,29 @@ def test_resolve_scoped_run_id_accepts_persisted_stream_without_registry() -> No
     db.execute.return_value = _ScalarResult(source_id)
 
     assert ensure_run_belongs_to_source(db, source_id, stream_id) == stream_id
+
+
+def test_resolve_scoped_run_id_accepts_registered_stream_before_persistence() -> None:
+    source_id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
+    stream_id = f"{source_id}-2026-03-15T14-00-00Z"
+    db = MagicMock()
+    db.get.return_value = None
+
+    class _ScalarResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    db.execute.return_value = _ScalarResult()
+
+    clear_active_run(source_id)
+    register_active_run(stream_id)
+    try:
+        assert ensure_run_belongs_to_source(db, source_id, stream_id) == stream_id
+    finally:
+        clear_active_run(source_id)
 
 
 @pytest.mark.anyio

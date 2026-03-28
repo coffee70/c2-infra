@@ -58,7 +58,7 @@ def get_aliases_by_telemetry_ids(
     if not ids:
         return {}
 
-    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    logical_vehicle_id = get_stream_vehicle_id(db, vehicle_id) or normalize_vehicle_id(vehicle_id)
     rows = db.execute(
         select(TelemetryChannelAlias.telemetry_id, TelemetryChannelAlias.alias_name)
         .where(TelemetryChannelAlias.vehicle_id == logical_vehicle_id)

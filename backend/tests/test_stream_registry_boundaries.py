@@ -7,7 +7,10 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 from app.models.telemetry import TelemetryMetadata, TelemetryStream
-from app.services.channel_alias_service import resolve_channel_metadata
+from app.services.channel_alias_service import (
+    get_aliases_by_telemetry_ids,
+    resolve_channel_metadata,
+)
 
 
 class _ScalarResult:
@@ -106,3 +109,26 @@ def test_resolve_channel_metadata_uses_persisted_stream_owner_without_registry()
     resolved = resolve_channel_metadata(db, vehicle_id=stream_id, channel_name="battery.voltage")
 
     assert resolved is meta
+
+
+def test_get_aliases_by_telemetry_ids_uses_registered_stream_owner() -> None:
+    vehicle_id = "source-a"
+    stream_id = "stream-uuid-1"
+    telemetry_id = uuid4()
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: (
+        TelemetryStream(id=stream_id, vehicle_id=vehicle_id, status="active")
+        if model is TelemetryStream and key == stream_id
+        else None
+    )
+    db.execute.return_value.fetchall.return_value = [(telemetry_id, "VBAT")]
+
+    aliases = get_aliases_by_telemetry_ids(
+        db,
+        vehicle_id=stream_id,
+        telemetry_ids=[telemetry_id],
+    )
+
+    assert aliases == {telemetry_id: ["VBAT"]}
+    statement = db.execute.call_args.args[0]
+    assert vehicle_id in statement.compile().params.values()

@@ -71,24 +71,39 @@ def ensure_run_belongs_to_source(db: Session, source_id: str, run_id: str | None
 
 def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
     """Resolve a stream id to its owning vehicle, if known."""
+    cached_vehicle_id = _get_cached_stream_vehicle_id(stream_id)
     if db is None:
-        for vehicle_id, (cached_stream_id, _seen_at) in _active_stream_by_vehicle.items():
-            if cached_stream_id == stream_id:
-                return vehicle_id
-        return None
+        return cached_vehicle_id
     row = db.get(TelemetryStream, stream_id)
-    if row is None:
-        return (
-            db.execute(
-                select(TelemetryMetadata.vehicle_id)
-                .join(TelemetryData, TelemetryData.telemetry_id == TelemetryMetadata.id)
-                .where(TelemetryData.source_id == stream_id)
-                .distinct()
-            )
-            .scalars()
-            .first()
+    if row is not None:
+        return row.vehicle_id
+    if cached_vehicle_id is not None:
+        return cached_vehicle_id
+    return (
+        db.execute(
+            select(TelemetryMetadata.vehicle_id)
+            .join(TelemetryData, TelemetryData.telemetry_id == TelemetryMetadata.id)
+            .where(TelemetryData.source_id == stream_id)
+            .distinct()
         )
-    return row.vehicle_id
+        .scalars()
+        .first()
+    )
+
+
+def _get_cached_stream_vehicle_id(
+    stream_id: str,
+    *,
+    max_age_sec: float = ACTIVE_STREAM_CACHE_TTL_SEC,
+) -> Optional[str]:
+    now = time.time()
+    for vehicle_id, (cached_stream_id, seen_at) in list(_active_stream_by_vehicle.items()):
+        if now - seen_at > max_age_sec:
+            _active_stream_by_vehicle.pop(vehicle_id, None)
+            continue
+        if cached_stream_id == stream_id:
+            return vehicle_id
+    return None
 
 
 def get_logical_source(db: Session, vehicle_id: str) -> Optional[TelemetrySource]:

@@ -192,7 +192,7 @@ class TelemetryService:
         result_by_name: dict[str, SearchResult] = {}
         aliases_by_id: dict[UUID, list[str]] = get_aliases_by_telemetry_ids(
             self._db,
-            source_id=source_id,
+            vehicle_id=source_id,
             telemetry_ids=candidate_ids,
         )
 
@@ -345,7 +345,7 @@ class TelemetryService:
         aliases_by_id.update(
             get_aliases_by_telemetry_ids(
                 self._db,
-                source_id=source_id,
+                vehicle_id=source_id,
                 telemetry_ids=candidate_ids,
             )
         )
@@ -537,7 +537,7 @@ class TelemetryService:
         canonical_name = meta.name
         aliases = get_aliases_by_telemetry_ids(
             self._db,
-            source_id=source_id,
+            vehicle_id=source_id,
             telemetry_ids=[meta.id],
         ).get(meta.id, [])
 
