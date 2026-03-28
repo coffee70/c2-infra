@@ -20,7 +20,7 @@ def resolve_channel_metadata(
     channel_name: str,
 ) -> TelemetryMetadata | None:
     """Resolve an exact canonical name or configured alias for one vehicle."""
-    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    logical_vehicle_id = get_stream_vehicle_id(db, vehicle_id) or normalize_vehicle_id(vehicle_id)
     meta = db.execute(
         select(TelemetryMetadata).where(
             TelemetryMetadata.vehicle_id == logical_vehicle_id,

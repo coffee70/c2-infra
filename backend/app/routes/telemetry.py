@@ -79,10 +79,10 @@ def _get_channel_meta(db: Session, source_id: str, name: str) -> TelemetryMetada
     return resolve_channel_metadata(db, vehicle_id=source_id, channel_name=name)
 
 
-def _resolve_scoped_run_id(source_id: str, run_id: Optional[str] = None) -> str:
+def _resolve_scoped_run_id(db: Session, source_id: str, run_id: Optional[str] = None) -> str:
     """Return a source or run id only if it belongs to the scoped source."""
     try:
-        return ensure_run_belongs_to_source(source_id, run_id)
+        return ensure_run_belongs_to_source(db, source_id, run_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Run not found for source")
 
@@ -563,7 +563,7 @@ def get_summary_for_source(
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    scoped_run_id = _resolve_scoped_run_id(source_id, run_id)
+    scoped_run_id = _resolve_scoped_run_id(db, source_id, run_id)
     return get_summary(name=name, source_id=scoped_run_id, db=db)
 
 
@@ -596,7 +596,7 @@ def explain_for_source(
     llm: object = Depends(get_llm_provider),
 ):
     name = unquote(name)
-    scoped_run_id = _resolve_scoped_run_id(source_id, run_id)
+    scoped_run_id = _resolve_scoped_run_id(db, source_id, run_id)
     return explain(
         name=name,
         skip_llm=skip_llm,
@@ -787,7 +787,7 @@ def get_recent_for_source(
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    scoped_run_id = _resolve_scoped_run_id(source_id, run_id)
+    scoped_run_id = _resolve_scoped_run_id(db, source_id, run_id)
     return get_recent(
         name=name,
         limit=limit,

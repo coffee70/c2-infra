@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
+from app.models.telemetry import TelemetryStream
 from app.routes.simulator import simulator_start, simulator_status
 from app.services.source_run_service import ensure_run_belongs_to_source
 
@@ -14,18 +15,38 @@ from app.services.source_run_service import ensure_run_belongs_to_source
 def test_resolve_scoped_run_id_accepts_matching_source_run() -> None:
     source_id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
     run_id = f"{source_id}-2026-03-15T14-00-00Z"
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: (
+        TelemetryStream(id=run_id, vehicle_id=source_id, status="active")
+        if model is TelemetryStream and key == run_id
+        else None
+    )
 
-    assert ensure_run_belongs_to_source(source_id, run_id) == run_id
+    assert ensure_run_belongs_to_source(db, source_id, run_id) == run_id
 
 
 def test_resolve_scoped_run_id_rejects_mismatched_source_run() -> None:
     source_id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
     other_run_id = "63b0c0ab-8173-44ff-918f-2616ebb449b8-2026-03-15T14-00-00Z"
+    db = MagicMock()
 
     with pytest.raises(ValueError) as exc_info:
-        ensure_run_belongs_to_source(source_id, other_run_id)
+        ensure_run_belongs_to_source(db, source_id, other_run_id)
 
     assert "Run not found for source" in str(exc_info.value)
+
+
+def test_resolve_scoped_run_id_accepts_registered_arbitrary_stream_id() -> None:
+    source_id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
+    stream_id = "a6107734-80af-4f61-8c69-d53ab64dd13a"
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: (
+        TelemetryStream(id=stream_id, vehicle_id=source_id, status="active")
+        if model is TelemetryStream and key == stream_id
+        else None
+    )
+
+    assert ensure_run_belongs_to_source(db, source_id, stream_id) == stream_id
 
 
 @pytest.mark.anyio

@@ -47,19 +47,26 @@ def run_id_to_source_id(source_id: str) -> str:
     return resolve_source_id_alias(prefix) or prefix
 
 
-def ensure_stream_belongs_to_vehicle(vehicle_id: str, stream_id: str | None = None) -> str:
+def ensure_stream_belongs_to_vehicle(
+    db: Session,
+    vehicle_id: str,
+    stream_id: str | None = None,
+) -> str:
     """Return a vehicle or stream id only if it belongs to the scoped logical vehicle."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
     if not stream_id:
         return logical_vehicle_id
-    if run_id_to_source_id(stream_id) != logical_vehicle_id:
+    if normalize_vehicle_id(stream_id) == logical_vehicle_id:
+        return stream_id
+    owning_vehicle_id = get_stream_vehicle_id(db, stream_id)
+    if owning_vehicle_id != logical_vehicle_id:
         raise ValueError("Run not found for source")
     return stream_id
 
 
-def ensure_run_belongs_to_source(source_id: str, run_id: str | None = None) -> str:
+def ensure_run_belongs_to_source(db: Session, source_id: str, run_id: str | None = None) -> str:
     """Backward-compatible wrapper for older route guards."""
-    return ensure_stream_belongs_to_vehicle(source_id, run_id)
+    return ensure_stream_belongs_to_vehicle(db, source_id, run_id)
 
 
 def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
