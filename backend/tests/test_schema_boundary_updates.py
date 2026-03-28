@@ -278,17 +278,18 @@ def test_insert_data_registers_new_stream_before_ownership_check(monkeypatch) ->
 
 def test_run_listing_routes_emit_stream_ids() -> None:
     source_db = MagicMock()
-    source_db.execute.side_effect = [
-        _ScalarResult(SimpleNamespace(id="vehicle-a", name="Vehicle A")),
-        _FetchAllResult([("vehicle-a-2026-03-28T12-00-00Z",), ("vehicle-a",)]),
-        _FetchAllResult([("vehicle-a", "Vehicle A")]),
-    ]
+    source_db.execute.return_value = _FetchAllResult(
+        [
+            ("a6107734-80af-4f61-8c69-d53ab64dd13a", datetime(2026, 3, 28, 12, 5, tzinfo=timezone.utc)),
+            ("7bc0f5c6-2f47-4e88-9f1e-0ce5d73d0b2b", datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)),
+        ]
+    )
 
     response = telemetry_routes.get_source_runs("vehicle-a", db=source_db)
 
     assert [item.stream_id for item in response.sources] == [
-        "vehicle-a-2026-03-28T12-00-00Z",
-        "vehicle-a",
+        "a6107734-80af-4f61-8c69-d53ab64dd13a",
+        "7bc0f5c6-2f47-4e88-9f1e-0ce5d73d0b2b",
     ]
 
 
@@ -336,16 +337,14 @@ def test_channel_run_listing_route_emits_stream_ids(monkeypatch) -> None:
     )
 
     db = MagicMock()
-    db.execute.side_effect = [
-        _ScalarResult(SimpleNamespace(id="vehicle-a", name="Vehicle A")),
-        _FetchAllResult([("vehicle-a-2026-03-28T12-00-00Z",)]),
-        _FetchAllResult([("vehicle-a", "Vehicle A")]),
-    ]
+    db.execute.return_value = _FetchAllResult(
+        [("a6107734-80af-4f61-8c69-d53ab64dd13a", datetime(2026, 3, 28, 12, 5, tzinfo=timezone.utc))]
+    )
 
     response = telemetry_routes.get_channel_runs("VBAT", "vehicle-a", db=db)
 
     assert [item.stream_id for item in response.sources] == [
-        "vehicle-a-2026-03-28T12-00-00Z"
+        "a6107734-80af-4f61-8c69-d53ab64dd13a"
     ]
 
 

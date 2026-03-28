@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Explicit vehicle and stream identity** — Realtime ingest and simulator runtime now distinguish logical `vehicle_id` from per-session `stream_id`, with first-class packet-path metadata for `packet_source` and `receiver_id`. The backend now tracks active telemetry streams explicitly instead of inferring them from overloaded `source_id-run` strings.
+- **Stream-aware run links** — Run listing endpoints now enumerate registered telemetry stream IDs directly, and the Ops event history detail links preserve the selected stream context when opening channel pages.
 - **Realtime ingest timestamp fallback** — `POST /telemetry/realtime/ingest` now accepts packets that provide only `reception_time`. When `generation_time` is absent, the backend synthesizes `generation_time = reception_time`, which allows APRS-style decoder traffic to flow through realtime ingest while keeping downstream timestamps populated.
 
 ### Added

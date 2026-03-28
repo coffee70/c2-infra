@@ -12,7 +12,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.telemetry import TelemetryData, TelemetryMetadata, TelemetrySource, TelemetryStatistics
+from app.models.telemetry import (
+    TelemetryData,
+    TelemetryMetadata,
+    TelemetrySource,
+    TelemetryStatistics,
+    TelemetryStream,
+)
 from app.models.schemas import (
     ActiveRunUpdate,
     AnomaliesResponse,
@@ -275,60 +281,24 @@ def get_source_runs(
     source_id: str,
     db: Session = Depends(get_db),
 ):
-    """List run ids for a source (any channel). Newest first.
-
-    Works for simulators, vehicles, and any future source type.
-    If only base-source data exists, the logical source id is returned as a single item.
-    """
+    """List run ids for a source (any channel). Newest first."""
     logical_source_id = normalize_source_id(source_id)
 
-    reg = db.execute(
-        select(TelemetrySource).where(TelemetrySource.id == logical_source_id)
-    ).scalars().first()
-
-    # Preserve legacy default behavior if the source is truly unknown.
-    if reg is None and logical_source_id == normalize_source_id("default"):
-        return ChannelSourcesResponse(
-            sources=[ChannelSourceItem(stream_id=logical_source_id, label=logical_source_id)]
-        )
-
-    prefix = f"{logical_source_id}-"
     stmt = (
-        select(TelemetryData.source_id)
+        select(TelemetryStream.id, TelemetryStream.last_seen_at)
         .where(
-            or_(
-                TelemetryData.source_id == logical_source_id,
-                TelemetryData.source_id.like(f"{prefix}%"),
-            )
+            TelemetryStream.vehicle_id == logical_source_id,
         )
-        .distinct()
+        .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
     )
 
     rows = db.execute(stmt).fetchall()
-    run_ids = [r[0] for r in rows]
-
-    # If no telemetry exists yet, still return the logical source so the UI has something stable.
-    if not run_ids:
-        label = reg.name if reg else logical_source_id
-        return ChannelSourcesResponse(
-            sources=[ChannelSourceItem(stream_id=logical_source_id, label=label)]
-        )
-
-    registered = {
-        r[0]: r[1]
-        for r in db.execute(select(TelemetrySource.id, TelemetrySource.name)).fetchall()
-    }
-
-    items = []
-    for rid in run_ids:
-        if rid == logical_source_id:
-            label = reg.name if reg else "Base stream"
-        else:
-            label = _format_source_label(rid, registered.get(rid))
-        items.append(ChannelSourceItem(stream_id=rid, label=label))
-
-    items.sort(key=lambda x: x.stream_id, reverse=True)
-    return ChannelSourcesResponse(sources=items)
+    return ChannelSourcesResponse(
+        sources=[
+            ChannelSourceItem(stream_id=row[0], label=_format_source_label(row[0]))
+            for row in rows
+        ]
+    )
 
 
 @router.get("/watchlist", response_model=WatchlistResponse)
@@ -640,44 +610,24 @@ def get_channel_runs(
         raise HTTPException(status_code=404, detail="Telemetry not found")
 
     logical_source_id = normalize_source_id(source_id)
-    reg = db.execute(
-        select(TelemetrySource).where(TelemetrySource.id == logical_source_id)
-    ).scalars().first()
-
-    prefix = f"{logical_source_id}-"
     stmt = (
-        select(TelemetryData.source_id)
+        select(TelemetryStream.id, TelemetryStream.last_seen_at)
+        .join(TelemetryData, TelemetryData.source_id == TelemetryStream.id)
         .where(
+            TelemetryStream.vehicle_id == logical_source_id,
             TelemetryData.telemetry_id == meta.id,
-            or_(
-                TelemetryData.source_id == logical_source_id,
-                TelemetryData.source_id.like(f"{prefix}%"),
-            ),
         )
         .distinct()
+        .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
     )
 
     rows = db.execute(stmt).fetchall()
-    run_ids = [r[0] for r in rows]
-
-    if not run_ids:
-        return ChannelSourcesResponse(sources=[])
-
-    registered = {
-        r[0]: r[1]
-        for r in db.execute(select(TelemetrySource.id, TelemetrySource.name)).fetchall()
-    }
-
-    items = []
-    for rid in run_ids:
-        if rid == logical_source_id:
-            label = reg.name if reg else "Base stream"
-        else:
-            label = _format_source_label(rid, registered.get(rid))
-        items.append(ChannelSourceItem(stream_id=rid, label=label))
-
-    items.sort(key=lambda x: x.stream_id, reverse=True)
-    return ChannelSourcesResponse(sources=items)
+    return ChannelSourcesResponse(
+        sources=[
+            ChannelSourceItem(stream_id=row[0], label=_format_source_label(row[0]))
+            for row in rows
+        ]
+    )
 
 
 def _get_recent_values_db_only(
