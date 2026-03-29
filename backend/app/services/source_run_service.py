@@ -9,6 +9,7 @@ import re
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.telemetry import TelemetryCurrent, TelemetryData, TelemetryMetadata, TelemetrySource, TelemetryStream
@@ -126,26 +127,31 @@ def register_stream(
     observed_at = seen_at or datetime.now(timezone.utc)
     stream = db.get(TelemetryStream, stream_id)
     if stream is None:
-        stream = TelemetryStream(
-            id=stream_id,
-            vehicle_id=logical_vehicle_id,
-            packet_source=packet_source,
-            receiver_id=receiver_id,
-            status="active",
-            started_at=observed_at,
-            last_seen_at=observed_at,
+        db.execute(
+            pg_insert(TelemetryStream)
+            .values(
+                id=stream_id,
+                vehicle_id=logical_vehicle_id,
+                packet_source=packet_source,
+                receiver_id=receiver_id,
+                status="active",
+                started_at=observed_at,
+                last_seen_at=observed_at,
+            )
+            .on_conflict_do_nothing(index_elements=[TelemetryStream.id])
         )
-        db.add(stream)
-    else:
-        if stream.vehicle_id != logical_vehicle_id:
-            raise ValueError("Run not found for source")
-        stream.vehicle_id = logical_vehicle_id
-        stream.status = "active"
-        stream.last_seen_at = observed_at
-        if packet_source is not None:
-            stream.packet_source = packet_source
-        if receiver_id is not None:
-            stream.receiver_id = receiver_id
+        stream = db.get(TelemetryStream, stream_id)
+    if stream is None:
+        raise RuntimeError("Telemetry stream registration failed")
+    if stream.vehicle_id != logical_vehicle_id:
+        raise ValueError("Run not found for source")
+    stream.vehicle_id = logical_vehicle_id
+    stream.status = "active"
+    stream.last_seen_at = observed_at
+    if packet_source is not None:
+        stream.packet_source = packet_source
+    if receiver_id is not None:
+        stream.receiver_id = receiver_id
 
     _active_stream_by_vehicle[logical_vehicle_id] = (stream_id, time.time())
     return stream
@@ -246,6 +252,18 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
     if isinstance(row, TelemetryStream):
         _active_stream_by_vehicle[logical_vehicle_id] = (row.id, time.time())
         return row.id
+
+    latest_row = (
+        db.execute(
+            select(TelemetryStream)
+            .where(TelemetryStream.vehicle_id == logical_vehicle_id)
+            .order_by(TelemetryStream.last_seen_at.desc())
+        )
+        .scalars()
+        .first()
+    )
+    if latest_row is not None and getattr(latest_row, "status", None) == "idle":
+        return logical_vehicle_id
 
     src = get_logical_source(db, logical_vehicle_id)
     if src is not None and src.source_type == "simulator" and src.base_url:

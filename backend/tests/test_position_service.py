@@ -73,16 +73,38 @@ def test_run_id_to_source_id_collapses_simulator_run() -> None:
 def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
-    db.get.side_effect = lambda model, source_id: (
-        TelemetrySource(
-            id=DROGONSAT_SOURCE_ID,
-            name="DrogonSat",
-            source_type="simulator",
-            base_url="http://simulator:8001",
-        )
-        if source_id == DROGONSAT_SOURCE_ID
-        else None
+    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="idle",
+        packet_source=None,
+        receiver_id=None,
+        last_seen_at=None,
     )
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="simulator",
+        base_url="http://simulator:8001",
+    )
+
+    def fake_get(model, key):
+        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
+            return source
+        if key == stream_id:
+            return stream
+        return None
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    db.get.side_effect = fake_get
+    db.execute.side_effect = [_EmptyResult(), _EmptyResult()]
 
     monkeypatch.setattr(
         "app.services.source_run_service.httpx.Client",
@@ -100,7 +122,7 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
 
     assert (
         resolve_active_run_id(db, DROGONSAT_SOURCE_ID)
-        == f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+        == stream_id
     )
     clear_active_run(DROGONSAT_SOURCE_ID)
 
@@ -129,7 +151,7 @@ def test_resolve_active_run_id_prefers_simulator_status_over_stale_current_rows(
         def first(self):
             return None
 
-    db.execute.side_effect = [_EmptyResult(), AssertionError("current row fallback should not run")]
+    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), AssertionError("current row fallback should not run")]
 
     cleared: list[str] = []
 
@@ -215,6 +237,14 @@ def test_resolve_active_run_id_recovers_stream_from_current_rows() -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="idle",
+        packet_source=None,
+        receiver_id=None,
+        last_seen_at=None,
+    )
     current = SimpleNamespace(
         stream_id=stream_id,
         reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
@@ -237,11 +267,14 @@ def test_resolve_active_run_id_recovers_stream_from_current_rows() -> None:
         def first(self):
             return current
 
-    db.execute.side_effect = [_EmptyResult(), _CurrentResult()]
-    db.get.return_value = None
+    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _CurrentResult(), _EmptyResult()]
+    db.get.side_effect = [None, None, stream]
 
     assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
-    db.add.assert_called_once()
+    assert stream.status == "active"
+    assert stream.last_seen_at == current.reception_time
+    assert stream.packet_source == "ground-station-a"
+    db.add.assert_not_called()
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
@@ -249,6 +282,14 @@ def test_resolve_active_run_id_recovers_opaque_stream_from_current_rows() -> Non
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     stream_id = "c3bb4cf5-21dd-4b84-bc91-1e3a3a944f78"
+    stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="idle",
+        packet_source=None,
+        receiver_id=None,
+        last_seen_at=None,
+    )
     current = SimpleNamespace(
         stream_id=stream_id,
         reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
@@ -271,12 +312,42 @@ def test_resolve_active_run_id_recovers_opaque_stream_from_current_rows() -> Non
         def first(self):
             return current
 
-    db.execute.side_effect = [_EmptyResult(), _CurrentResult()]
-    db.get.return_value = None
+    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _CurrentResult(), _EmptyResult()]
+    db.get.side_effect = [None, None, stream]
 
     assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
-    db.add.assert_called_once()
+    assert stream.status == "active"
+    assert stream.last_seen_at == current.reception_time
+    assert stream.packet_source == "ground-station-a"
+    db.add.assert_not_called()
     clear_active_run(DROGONSAT_SOURCE_ID)
+
+
+def test_resolve_active_run_id_respects_explicit_idle_stream_state() -> None:
+    source_id = "vehicle-a"
+    clear_active_run(source_id)
+    db = MagicMock()
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _IdleResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return SimpleNamespace(status="idle")
+
+    db.execute.side_effect = [_EmptyResult(), _IdleResult(), AssertionError("current row fallback should not run")]
+    db.get.return_value = None
+
+    assert resolve_active_run_id(db, source_id) == source_id
+    db.add.assert_not_called()
+    clear_active_run(source_id)
 
 
 def test_clear_active_run_marks_persisted_active_streams_idle() -> None:

@@ -264,6 +264,47 @@ def test_register_stream_rejects_vehicle_reassignment() -> None:
     db.add.assert_not_called()
 
 
+def test_register_stream_uses_idempotent_missing_row_path() -> None:
+    stream_id = "vehicle-a-2026-03-28T12-00-00Z"
+    observed_at = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id="vehicle-a",
+        status="idle",
+        last_seen_at=None,
+        packet_source=None,
+        receiver_id=None,
+    )
+    db = MagicMock()
+    db.get.side_effect = [None, stream]
+
+    captured: dict[str, object] = {}
+
+    def fake_execute(statement):
+        captured["statement"] = statement
+        return None
+
+    db.execute.side_effect = fake_execute
+
+    registered = register_stream(
+        db,
+        vehicle_id="vehicle-a",
+        stream_id=stream_id,
+        packet_source="ground-station-a",
+        receiver_id="rx-7",
+        seen_at=observed_at,
+    )
+
+    assert captured["statement"] is not None
+    db.add.assert_not_called()
+    assert registered is stream
+    assert stream.vehicle_id == "vehicle-a"
+    assert stream.status == "active"
+    assert stream.last_seen_at == observed_at
+    assert stream.packet_source == "ground-station-a"
+    assert stream.receiver_id == "rx-7"
+
+
 def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
     service = TelemetryService(MagicMock(), object(), object())
     calls: list[str] = []
