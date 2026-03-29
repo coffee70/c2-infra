@@ -22,6 +22,7 @@ sys.modules.setdefault(
 
 from app.models.schemas import TelemetryDataIngest, TelemetrySchemaCreate, WatchlistAddRequest
 from app.routes import ops as ops_routes
+from app.routes import realtime as realtime_routes
 from app.routes import simulator as simulator_routes
 from app.routes import position as position_routes
 from app.routes import telemetry as telemetry_routes
@@ -208,6 +209,39 @@ def test_set_active_run_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
 
     assert exc_info.value.status_code == 400
     assert calls == []
+
+
+def test_realtime_stream_vehicle_resolution_prefers_registry(monkeypatch) -> None:
+    opaque_stream_id = "c3bb4cf5-21dd-4b84-bc91-1e3a3a944f78"
+    legacy_stream_id = "vehicle-a-2026-03-28T12-00-00Z"
+
+    monkeypatch.setattr(
+        realtime_routes,
+        "get_stream_vehicle_id",
+        lambda _db, _stream_id: "vehicle-a",
+    )
+    monkeypatch.setattr(
+        realtime_routes,
+        "run_id_to_source_id",
+        lambda stream_id: f"legacy:{stream_id}",
+    )
+
+    assert (
+        realtime_routes._resolve_stream_vehicle_id(MagicMock(), opaque_stream_id)
+        == "vehicle-a"
+    )
+
+    monkeypatch.setattr(
+        realtime_routes,
+        "get_stream_vehicle_id",
+        lambda _db, _stream_id: None,
+    )
+
+    expected_legacy_vehicle_id = f"legacy:{legacy_stream_id}"
+    assert (
+        realtime_routes._resolve_stream_vehicle_id(MagicMock(), legacy_stream_id)
+        == expected_legacy_vehicle_id
+    )
 
 
 def test_register_stream_rejects_vehicle_reassignment() -> None:

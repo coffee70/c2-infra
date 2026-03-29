@@ -27,7 +27,7 @@ from app.services.realtime_service import (
     get_realtime_snapshot_for_channels,
     get_watchlist_channel_names,
 )
-from app.services.source_run_service import run_id_to_source_id
+from app.services.source_run_service import get_stream_vehicle_id, run_id_to_source_id
 from app.lib.audit import audit_log
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,11 @@ def _normalize_event_times(events: list[MeasurementEvent]) -> list[MeasurementEv
         )
         for e in events
     ]
+
+
+def _resolve_stream_vehicle_id(db: Session, stream_id: str) -> str:
+    """Resolve a stream id to its owning vehicle, falling back to legacy ids."""
+    return get_stream_vehicle_id(db, stream_id) or run_id_to_source_id(stream_id)
 
 
 @router.post("/ingest")
@@ -204,7 +209,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                                 from app.models.schemas import RecentDataPoint
                                 snapshot.append(
                                     RealtimeChannelUpdate(
-                                        vehicle_id=run_id_to_source_id(stream_id),
+                                        vehicle_id=_resolve_stream_vehicle_id(session, stream_id),
                                         stream_id=stream_id,
                                         name=o["name"],
                                         units=o.get("units"),
@@ -278,7 +283,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         meta = session.get(TelemetryMetadata, alert.telemetry_id)
                         write_ops_event(
                             session,
-                            vehicle_id=meta.vehicle_id if meta else run_id_to_source_id(alert.source_id),
+                            vehicle_id=meta.vehicle_id if meta else _resolve_stream_vehicle_id(session, alert.source_id),
                             stream_id=alert.source_id,
                             event_time=alert.acked_at,
                             event_type="alert.acked",
@@ -299,7 +304,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         subsys = infer_subsystem(meta.name, meta) if meta else "other"
                         schema = TelemetryAlertSchema(
                             id=str(alert.id),
-                            vehicle_id=meta.vehicle_id if meta else run_id_to_source_id(alert.source_id),
+                            vehicle_id=meta.vehicle_id if meta else _resolve_stream_vehicle_id(session, alert.source_id),
                             stream_id=alert.source_id,
                             channel_name=meta.name if meta else "",
                             telemetry_id=str(alert.telemetry_id),
@@ -338,7 +343,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         meta = session.get(TelemetryMetadata, alert.telemetry_id)
                         write_ops_event(
                             session,
-                            vehicle_id=meta.vehicle_id if meta else run_id_to_source_id(alert.source_id),
+                            vehicle_id=meta.vehicle_id if meta else _resolve_stream_vehicle_id(session, alert.source_id),
                             stream_id=alert.source_id,
                             event_time=alert.resolved_at,
                             event_type="alert.resolved",
@@ -365,7 +370,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         subsys = infer_subsystem(meta.name, meta) if meta else "other"
                         schema = TelemetryAlertSchema(
                             id=str(alert.id),
-                            vehicle_id=meta.vehicle_id if meta else run_id_to_source_id(alert.source_id),
+                            vehicle_id=meta.vehicle_id if meta else _resolve_stream_vehicle_id(session, alert.source_id),
                             stream_id=alert.source_id,
                             channel_name=meta.name if meta else "",
                             telemetry_id=str(alert.telemetry_id),

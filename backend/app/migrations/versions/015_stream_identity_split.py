@@ -5,21 +5,34 @@ Revises: 014
 Create Date: 2026-03-27
 """
 
+import re
 from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
-
-from app.services.source_run_service import run_id_to_source_id
 
 revision: str = "015"
 down_revision: Union[str, None] = "014"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+RUN_ID_RE = re.compile(r"^(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?)$")
+
+
+def _legacy_run_id_to_source_id(legacy_source_id: str) -> str:
+    match = RUN_ID_RE.match(legacy_source_id)
+    if not match:
+        return legacy_source_id
+    prefix = match.group(1)
+    if prefix.startswith("simulator-"):
+        return "simulator"
+    if prefix.startswith("simulator2-"):
+        return "simulator2"
+    return prefix
+
 
 def _split_ops_event_source_id(legacy_source_id: str) -> tuple[str, str | None]:
-    logical_vehicle_id = run_id_to_source_id(legacy_source_id)
+    logical_vehicle_id = _legacy_run_id_to_source_id(legacy_source_id)
     if logical_vehicle_id == legacy_source_id:
         return legacy_source_id, None
     return logical_vehicle_id, legacy_source_id
