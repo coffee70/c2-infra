@@ -253,18 +253,6 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
         _active_stream_by_vehicle[logical_vehicle_id] = (row.id, time.time())
         return row.id
 
-    latest_row = (
-        db.execute(
-            select(TelemetryStream)
-            .where(TelemetryStream.vehicle_id == logical_vehicle_id)
-            .order_by(TelemetryStream.last_seen_at.desc())
-        )
-        .scalars()
-        .first()
-    )
-    if latest_row is not None and getattr(latest_row, "status", None) == "idle":
-        return logical_vehicle_id
-
     src = get_logical_source(db, logical_vehicle_id)
     if src is not None and src.source_type == "simulator" and src.base_url:
         try:
@@ -295,6 +283,18 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
             return active_stream_id
 
         clear_active_stream(logical_vehicle_id, db=db)
+        return logical_vehicle_id
+
+    latest_row = (
+        db.execute(
+            select(TelemetryStream)
+            .where(TelemetryStream.vehicle_id == logical_vehicle_id)
+            .order_by(TelemetryStream.last_seen_at.desc())
+        )
+        .scalars()
+        .first()
+    )
+    if latest_row is not None and getattr(latest_row, "status", None) == "idle":
         return logical_vehicle_id
 
     current_row = (
