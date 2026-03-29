@@ -74,4 +74,6 @@ def test_collect_telemetry_stream_rows_merges_current_and_history() -> None:
     assert rows_by_id["stream-a"]["last_seen_at"] == datetime(2026, 3, 28, 12, 7, tzinfo=timezone.utc)
     assert rows_by_id["stream-a"]["packet_source"] == "packet-b"
     assert rows_by_id["stream-a"]["receiver_id"] == "rx-b"
+    assert rows_by_id["stream-a"]["status"] == "idle"
     assert rows_by_id["stream-b"]["vehicle_id"] == "vehicle-b"
+    assert rows_by_id["stream-b"]["status"] == "idle"

@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Telemetry detail routing** — Channel detail pages now keep the vehicle in the path and carry the selected run in `?run=...`, so opaque stream IDs no longer break navigation or summary lookups.
 - **Realtime ingest timestamp fallback** — `POST /telemetry/realtime/ingest` now accepts packets that provide only `reception_time`. When `generation_time` is absent, the backend synthesizes `generation_time = reception_time`, which allows APRS-style decoder traffic to flow through realtime ingest while keeping downstream timestamps populated.
 
+### Fixed
+
+- **Stream resolution freshness** — `resolve_active_stream_id()` now prefers live simulator `/status` data before trusting persisted active stream rows, and ignores stale active rows when runtime state is unavailable.
+- **Historical stream backfill** — migration `015` now seeds discovered telemetry streams as `idle` so old runs do not become current immediately after upgrade.
+
 ### Added
 
 - **Source-scoped channel aliases** — Telemetry definition files can now declare alias names for catalog channels. Ingest, watchlist changes, position mapping, channel detail APIs, and channel search accept either the canonical name or a configured alias, then normalize back to the canonical channel identity for storage and URLs.
@@ -42,12 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Add-source wizard: add vehicles or simulators with a telemetry definition path; simulators also include a Base URL (server-reachable URL)
   - Edit sources: update name, Base URL, and telemetry definition path from the Sources page
   - Overview source selector grouped by **Vehicles** and **Simulators**
-  - Per-simulator backend proxy: all simulator routes require `source_id` and resolve URL from DB
+  - Per-simulator backend proxy: simulator routes resolve URL from DB using the selected vehicle context
   - Two simulator containers (`simulator`, `simulator2`) in docker-compose for testing multi-sim
 - Simulator dual status: connection (reachable vs disconnected) and runtime state (idle/running/paused)
   - Sources page (Manage panel): connection pill, Status card shows state and elapsed time; faster status polling (~2 s) and client-side elapsed tick
   - Overview: when selected source is a simulator, Context Banner shows simulator connection pill and runtime state (Running, Paused, Idle)
-- Unified simulator status endpoint (`GET /simulator/status?source_id=...`): always returns 200 with `connected` and optional `state`/`config`/`sim_elapsed`; no 503 when simulator is unreachable
+- Unified simulator status endpoint (`GET /simulator/status?vehicle_id=...`): always returns 200 with `connected` and optional `state`/`config`/`sim_elapsed`; runtime `config.stream_id` is the active stream identity; no 503 when simulator is unreachable
 - Stronger audit logs for simulator start flow to trace requests end-to-end:
   - `simulator.start.received` (backend): backend received start request from frontend
   - `simulator.start.proxied` (backend): backend successfully forwarded to simulator

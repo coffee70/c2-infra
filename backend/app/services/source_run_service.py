@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import re
 
@@ -237,22 +237,6 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
     if cached_stream_id is not None:
         return cached_stream_id
 
-    row = (
-        db.execute(
-            select(TelemetryStream)
-            .where(
-                TelemetryStream.vehicle_id == logical_vehicle_id,
-                TelemetryStream.status == "active",
-            )
-            .order_by(TelemetryStream.last_seen_at.desc())
-        )
-        .scalars()
-        .first()
-    )
-    if isinstance(row, TelemetryStream):
-        _active_stream_by_vehicle[logical_vehicle_id] = (row.id, time.time())
-        return row.id
-
     src = get_logical_source(db, logical_vehicle_id)
     if src is not None and src.source_type == "simulator" and src.base_url:
         payload = None
@@ -267,7 +251,7 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
         if payload is not None:
             state = payload.get("state")
             config = payload.get("config") or {}
-            active_stream_id = config.get("stream_id") or config.get("source_id")
+            active_stream_id = config.get("stream_id")
             packet_source = config.get("packet_source")
             receiver_id = config.get("receiver_id")
 
@@ -283,6 +267,24 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
 
             clear_active_stream(logical_vehicle_id, db=db)
             return logical_vehicle_id
+
+    freshness_cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
+    row = (
+        db.execute(
+            select(TelemetryStream)
+            .where(
+                TelemetryStream.vehicle_id == logical_vehicle_id,
+                TelemetryStream.status == "active",
+                TelemetryStream.last_seen_at >= freshness_cutoff,
+            )
+            .order_by(TelemetryStream.last_seen_at.desc())
+        )
+        .scalars()
+        .first()
+    )
+    if isinstance(row, TelemetryStream):
+        _active_stream_by_vehicle[logical_vehicle_id] = (row.id, time.time())
+        return row.id
 
     latest_row = (
         db.execute(

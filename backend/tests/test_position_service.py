@@ -127,6 +127,68 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_resolve_active_run_id_prefers_simulator_status_over_stale_active_row(
+    monkeypatch,
+) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    runtime_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="simulator",
+        base_url="http://simulator:8001",
+    )
+
+    def fake_get(model, key):
+        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
+            return source
+        return None
+
+    def fake_register_stream(
+        _db,
+        *,
+        vehicle_id: str,
+        stream_id: str,
+        packet_source=None,
+        receiver_id=None,
+        seen_at=None,
+    ):
+        return SimpleNamespace(
+            id=stream_id,
+            vehicle_id=vehicle_id,
+            status="active",
+            packet_source=packet_source,
+            receiver_id=receiver_id,
+            last_seen_at=seen_at,
+        )
+
+    db.get.side_effect = fake_get
+    db.execute.side_effect = AssertionError(
+        "persisted active rows should not be queried before simulator status"
+    )
+
+    monkeypatch.setattr(
+        "app.services.source_run_service.httpx.Client",
+        lambda timeout=2.0: _FakeHttpxClient(
+            _FakeHttpxResponse(
+                {
+                    "state": "running",
+                    "config": {
+                        "stream_id": runtime_stream_id,
+                        "packet_source": "packet-new",
+                        "receiver_id": "rx-new",
+                    },
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr("app.services.source_run_service.register_stream", fake_register_stream)
+
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == runtime_stream_id
+    clear_active_run(DROGONSAT_SOURCE_ID)
+
+
 def test_resolve_active_run_id_prefers_simulator_status_over_stale_current_rows(
     monkeypatch,
 ) -> None:
@@ -258,6 +320,14 @@ def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatc
         receiver_id=None,
         last_seen_at=None,
     )
+    stale_stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="active",
+        packet_source="packet-old",
+        receiver_id="rx-old",
+        last_seen_at=datetime(2000, 1, 1, tzinfo=timezone.utc),
+    )
     source = TelemetrySource(
         id=DROGONSAT_SOURCE_ID,
         name="DrogonSat",
@@ -279,12 +349,15 @@ def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatc
             return stream
         return None
 
-    class _EmptyResult:
+    class _Result:
+        def __init__(self, row):
+            self._row = row
+
         def scalars(self):
             return self
 
         def first(self):
-            return None
+            return self._row
 
     class _CurrentResult:
         def scalars(self):
@@ -294,7 +367,18 @@ def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatc
             return current
 
     db.get.side_effect = fake_get
-    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _CurrentResult()]
+
+    def fake_execute(statement):
+        sql = str(statement)
+        if "telemetry_streams.status" in sql and "last_seen_at >=" in sql:
+            return _Result(None)
+        if "telemetry_streams.status" in sql:
+            return _Result(stale_stream)
+        if "JOIN telemetry_metadata" in sql:
+            return _CurrentResult()
+        return _Result(None)
+
+    db.execute.side_effect = fake_execute
 
     cleared: list[str] = []
 

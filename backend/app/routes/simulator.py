@@ -102,11 +102,9 @@ def _resolve_with_audit(db: Session, source_id: str, action: str) -> str:
 @router.get("/status")
 async def simulator_status(
     vehicle_id: str | None = None,
-    source_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Get simulator state and config. Always returns 200; use 'connected' to detect reachability."""
-    vehicle_id = vehicle_id or source_id
     if vehicle_id is None:
         raise HTTPException(status_code=400, detail="vehicle_id is required")
     resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
@@ -115,7 +113,7 @@ async def simulator_status(
         payload = await _proxy_get(base_url, "/status")
         state = payload.get("state")
         config = payload.get("config") or {}
-        active_stream_id = config.get("stream_id") or config.get("source_id")
+        active_stream_id = config.get("stream_id")
         if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
             register_active_run(active_stream_id)
         elif state == "idle":

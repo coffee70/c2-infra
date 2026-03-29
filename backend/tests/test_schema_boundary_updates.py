@@ -382,7 +382,7 @@ def test_run_listing_routes_emit_stream_ids() -> None:
 
 
 @pytest.mark.anyio
-async def test_simulator_status_falls_back_to_config_source_id(monkeypatch) -> None:
+async def test_simulator_status_registers_stream_id_from_config(monkeypatch) -> None:
     seen: dict[str, str] = {}
 
     def fake_resolve_with_audit(_db, source_id, _action):
@@ -398,7 +398,7 @@ async def test_simulator_status_falls_back_to_config_source_id(monkeypatch) -> N
     async def fake_proxy_get(_base_url, _path):
         return {
             "state": "active",
-            "config": {"source_id": "vehicle-a-2026-03-28T12-00-00Z"},
+            "config": {"stream_id": "vehicle-a-2026-03-28T12-00-00Z"},
             "supported_scenarios": [],
         }
 

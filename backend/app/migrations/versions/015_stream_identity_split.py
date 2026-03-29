@@ -51,7 +51,7 @@ def _collect_telemetry_stream_rows(current_rows, data_rows):
                 "vehicle_id": vehicle_id,
                 "packet_source": packet_source,
                 "receiver_id": receiver_id,
-                "status": "active",
+                "status": "idle",
                 "started_at": observed_at,
                 "last_seen_at": observed_at,
                 "metadata": None,
