@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 from app.models.telemetry import TelemetryMetadata, TelemetryStream
+from app.services.source_run_service import get_stream_vehicle_id
 from app.services.channel_alias_service import (
     get_aliases_by_telemetry_ids,
     resolve_channel_metadata,
@@ -56,7 +57,7 @@ def test_resolve_channel_metadata_uses_registered_stream_owner() -> None:
     assert vehicle_id in statement.compile().params.values()
 
 
-def test_resolve_channel_metadata_keeps_vehicle_lookup_for_non_stream_ids() -> None:
+def test_resolve_channel_metadata_keeps_vehicle_lookup_for_non_stream_ids(monkeypatch) -> None:
     vehicle_id = "source-a"
     meta = TelemetryMetadata(
         id=uuid4(),
@@ -70,10 +71,10 @@ def test_resolve_channel_metadata_keeps_vehicle_lookup_for_non_stream_ids() -> N
         discovered_at=datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc),
         last_seen_at=datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc),
     )
+    monkeypatch.setattr("app.services.channel_alias_service.get_stream_vehicle_id", lambda _db, _vehicle_id: None)
     db = MagicMock()
     db.get.side_effect = lambda model, key: None
     db.execute.side_effect = [
-        _ScalarResult(None),
         _ScalarResult(meta),
     ]
 
@@ -109,6 +110,21 @@ def test_resolve_channel_metadata_uses_persisted_stream_owner_without_registry()
     resolved = resolve_channel_metadata(db, vehicle_id=stream_id, channel_name="battery.voltage")
 
     assert resolved is meta
+
+
+def test_get_stream_vehicle_id_uses_current_rows_after_restart() -> None:
+    vehicle_id = "source-a"
+    stream_id = "stream-uuid-1"
+    db = MagicMock()
+    db.get.return_value = None
+    db.execute.return_value = _ScalarResult(vehicle_id)
+
+    resolved = get_stream_vehicle_id(db, stream_id)
+
+    assert resolved == vehicle_id
+    statement = db.execute.call_args.args[0]
+    assert "telemetry_current" in str(statement.compile())
+    assert stream_id in statement.compile().params.values()
 
 
 def test_get_aliases_by_telemetry_ids_uses_registered_stream_owner() -> None:

@@ -244,6 +244,109 @@ def test_realtime_stream_vehicle_resolution_prefers_registry(monkeypatch) -> Non
     )
 
 
+def test_realtime_helpers_use_registry_for_opaque_stream_ids(monkeypatch) -> None:
+    vehicle_id = "vehicle-a"
+    opaque_stream_id = "c3bb4cf5-21dd-4b84-bc91-1e3a3a944f78"
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(realtime_service, "get_stream_vehicle_id", lambda _db, _stream_id: vehicle_id)
+    monkeypatch.setattr(
+        realtime_service,
+        "run_id_to_source_id",
+        lambda stream_id: f"legacy:{stream_id}",
+    )
+
+    snapshot_db = MagicMock()
+    snapshot_db.execute.side_effect = [
+        _FetchAllResult(
+            [
+                (
+                    SimpleNamespace(
+                        id=uuid4(),
+                        name="VBAT",
+                        units="V",
+                        description="Battery voltage",
+                        vehicle_id=vehicle_id,
+                        subsystem_tag="power",
+                        channel_origin="catalog",
+                        discovery_namespace=None,
+                    ),
+                    SimpleNamespace(
+                        value=4.2,
+                        generation_time=now,
+                        reception_time=now,
+                        state="normal",
+                        state_reason=None,
+                        z_score=None,
+                        quality="valid",
+                    ),
+                )
+            ]
+        ),
+        _FetchAllResult([(now, 4.2)]),
+    ]
+
+    snapshot = realtime_service.get_realtime_snapshot_for_channels(
+        snapshot_db,
+        ["VBAT"],
+        source_id=opaque_stream_id,
+    )
+
+    assert snapshot[0].vehicle_id == vehicle_id
+    assert snapshot[0].stream_id == opaque_stream_id
+    snapshot_params = snapshot_db.execute.call_args_list[0].args[0].compile().params.values()
+    assert vehicle_id in snapshot_params
+    assert f"legacy:{opaque_stream_id}" not in snapshot_params
+
+    watchlist_db = MagicMock()
+    watchlist_db.execute.return_value = _FetchAllResult([("VBAT",)])
+
+    channels = realtime_service.get_watchlist_channel_names(watchlist_db, opaque_stream_id)
+
+    assert channels == ["VBAT"]
+    watchlist_params = watchlist_db.execute.call_args.args[0].compile().params.values()
+    assert vehicle_id in watchlist_params
+    assert f"legacy:{opaque_stream_id}" not in watchlist_params
+
+    alerts_db = MagicMock()
+    alerts_db.execute.return_value = _FetchAllResult(
+        [
+            (
+                SimpleNamespace(
+                    id=uuid4(),
+                    source_id=opaque_stream_id,
+                    severity="warning",
+                    reason="out_of_limits",
+                    status="new",
+                    opened_at=now,
+                    opened_reception_at=now,
+                    last_update_at=now,
+                    current_value_at_open=4.2,
+                    acked_at=None,
+                    acked_by=None,
+                ),
+                SimpleNamespace(
+                    id=uuid4(),
+                    name="VBAT",
+                    units="V",
+                    vehicle_id=vehicle_id,
+                    subsystem_tag="power",
+                    red_low=None,
+                    red_high=4.8,
+                ),
+            )
+        ]
+    )
+
+    alerts = realtime_service.get_active_alerts(alerts_db, source_id=opaque_stream_id)
+
+    assert alerts[0].vehicle_id == vehicle_id
+    assert alerts[0].stream_id == opaque_stream_id
+    alert_params = alerts_db.execute.call_args.args[0].compile().params.values()
+    assert vehicle_id in alert_params
+    assert f"legacy:{opaque_stream_id}" not in alert_params
+
+
 def test_register_stream_rejects_vehicle_reassignment() -> None:
     stream = SimpleNamespace(
         id="vehicle-b-2026-03-28T12-00-00Z",
@@ -439,7 +542,15 @@ def test_channel_run_listing_route_emits_stream_ids(monkeypatch) -> None:
 def test_realtime_and_ops_responses_emit_vehicle_and_stream_ids(monkeypatch) -> None:
     now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
 
+    monkeypatch.setattr(realtime_service, "get_stream_vehicle_id", lambda _db, _stream_id: "vehicle-a")
+    monkeypatch.setattr(
+        realtime_service,
+        "run_id_to_source_id",
+        lambda stream_id: f"legacy:{stream_id}",
+    )
+
     snapshot_db = MagicMock()
+    snapshot_db.get.return_value = None
     snapshot_db.execute.side_effect = [
         _FetchAllResult(
             [

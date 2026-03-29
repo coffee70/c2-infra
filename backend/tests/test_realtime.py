@@ -224,6 +224,7 @@ def test_normalize_event_times_preserves_server_arrival_when_reception_missing()
 
 def test_process_measurement_creates_discovered_channel_for_unknown_input(monkeypatch) -> None:
     monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
+    monkeypatch.setattr("app.realtime.processor.register_stream", lambda *args, **kwargs: None)
     processor = RealtimeProcessor()
     db = MagicMock()
     added: list[object] = []
@@ -343,6 +344,7 @@ def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkey
         "app.realtime.processor.resolve_channel_name",
         lambda *_args, **_kwargs: "PWR_MAIN_BUS_VOLT",
     )
+    monkeypatch.setattr("app.realtime.processor.register_stream", lambda *args, **kwargs: None)
     processor = RealtimeProcessor()
     db = MagicMock()
     updates = []
@@ -390,6 +392,7 @@ def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkey
 
 def test_process_measurement_uses_dynamic_tags_even_when_raw_channel_name_is_present(monkeypatch) -> None:
     monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
+    monkeypatch.setattr("app.realtime.processor.register_stream", lambda *args, **kwargs: None)
     processor = RealtimeProcessor()
     db = MagicMock()
     added: list[object] = []
@@ -452,6 +455,7 @@ def test_process_measurement_uses_dynamic_tags_even_when_raw_channel_name_is_pre
 
 def test_process_measurement_duplicate_first_dynamic_sample_keeps_discovered_metadata(monkeypatch) -> None:
     monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
+    monkeypatch.setattr("app.realtime.processor.register_stream", lambda *args, **kwargs: None)
     processor = RealtimeProcessor()
     db = MagicMock()
     added: list[object] = []

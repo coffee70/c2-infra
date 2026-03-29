@@ -77,10 +77,25 @@ def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
         return cached_vehicle_id
     row = db.get(TelemetryStream, stream_id)
     if row is not None:
+        _active_stream_by_vehicle[row.vehicle_id] = (stream_id, time.time())
         return row.vehicle_id
     if cached_vehicle_id is not None:
         return cached_vehicle_id
-    return (
+    vehicle_id = (
+        db.execute(
+            select(TelemetryMetadata.vehicle_id)
+            .join(TelemetryCurrent, TelemetryCurrent.telemetry_id == TelemetryMetadata.id)
+            .where(TelemetryCurrent.source_id == stream_id)
+            .distinct()
+        )
+        .scalars()
+        .first()
+    )
+    if vehicle_id is not None:
+        _active_stream_by_vehicle[vehicle_id] = (stream_id, time.time())
+        return vehicle_id
+
+    vehicle_id = (
         db.execute(
             select(TelemetryMetadata.vehicle_id)
             .join(TelemetryData, TelemetryData.telemetry_id == TelemetryMetadata.id)
@@ -90,6 +105,9 @@ def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
         .scalars()
         .first()
     )
+    if vehicle_id is not None:
+        _active_stream_by_vehicle[vehicle_id] = (stream_id, time.time())
+    return vehicle_id
 
 
 def _get_cached_stream_vehicle_id(
