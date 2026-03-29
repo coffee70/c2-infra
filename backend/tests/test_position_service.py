@@ -246,6 +246,74 @@ def test_resolve_active_run_id_recovers_simulator_stream_even_when_latest_row_is
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatch) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="idle",
+        packet_source=None,
+        receiver_id=None,
+        last_seen_at=None,
+    )
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="simulator",
+        base_url="http://simulator:8001",
+    )
+    current = SimpleNamespace(
+        stream_id=stream_id,
+        reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
+        generation_time=datetime(2026, 3, 13, 17, 12, 39, tzinfo=timezone.utc),
+        packet_source="ground-station-a",
+        receiver_id="rx-7",
+    )
+
+    def fake_get(model, key):
+        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
+            return source
+        if key == stream_id:
+            return stream
+        return None
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _CurrentResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return current
+
+    db.get.side_effect = fake_get
+    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _CurrentResult()]
+
+    cleared: list[str] = []
+
+    def fake_clear_active_stream(vehicle_id: str, *, db=None):
+        cleared.append(vehicle_id)
+
+    monkeypatch.setattr(
+        "app.services.source_run_service.httpx.Client",
+        lambda timeout=2.0: (_ for _ in ()).throw(TimeoutError("simulator status timeout")),
+    )
+    monkeypatch.setattr("app.services.source_run_service.clear_active_stream", fake_clear_active_stream)
+
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
+    assert cleared == []
+    assert stream.status == "active"
+    assert stream.last_seen_at == current.reception_time
+    clear_active_run(DROGONSAT_SOURCE_ID)
+
+
 def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
