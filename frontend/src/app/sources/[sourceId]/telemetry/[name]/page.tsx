@@ -1,6 +1,5 @@
 import { notFound, redirect } from "next/navigation";
 import { TelemetryDetailTabs } from "@/components/telemetry-detail-tabs";
-import { canonicalizeRunId, runIdToSourceId } from "@/lib/source-ids";
 
 const API_URL =
   process.env.API_SERVER_URL ||
@@ -108,9 +107,12 @@ export default async function TelemetryDetailPage({
   const resolvedSearchParams = await searchParams;
   const requestedSourceId = decodeURIComponent(rawSourceId);
   const decodedName = decodeURIComponent(name);
-  const isHistoricalRunId = /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?$/.test(requestedSourceId);
-  const requestedRunId = isHistoricalRunId ? canonicalizeRunId(requestedSourceId) : null;
-  const sourceId = requestedRunId ? runIdToSourceId(requestedRunId) : requestedSourceId;
+  const requestedRunParam = resolvedSearchParams.run ?? resolvedSearchParams.run_id;
+  const requestedRunId =
+    typeof requestedRunParam === "string" && requestedRunParam
+      ? requestedRunParam
+      : null;
+  const sourceId = requestedSourceId;
 
   const runs = await fetchRunsForSource(decodedName, sourceId);
   const currentRunId = requestedRunId ?? runs[0]?.stream_id ?? sourceId;

@@ -39,6 +39,8 @@ The page is organized into **vertical tabs** so you can quickly switch between d
 
 **Source and run:** The **Context Banner** is the only place to change the **source** (vehicle or simulator). The whole page is for that source. Summary, Live & Trends, and the default run in History use the source’s **current run** (e.g. newest). In the History tab, the **Run** dropdown lists only runs for that source so you can narrow the table to a chosen run (e.g. to export one orbit). If the target source does not provide the current channel, the app sends you back to that source’s Overview with a clear unavailable message.
 
+When you open a channel from an event or alert, the selected run is carried separately in the URL so the page stays scoped to the source while still loading the chosen run.
+
 ## 3. LLM Explanation
 
 The platform provides an AI-generated explanation that:

@@ -151,8 +151,9 @@ export function OpsEventHistory({ vehicleId, streamId }: OpsEventHistoryProps) {
                 {event.entity_id && (
                   <Link
                     href={buildTelemetryDetailHref(
-                      event.stream_id ?? streamId ?? vehicleId,
+                      vehicleId,
                       event.entity_id,
+                      event.stream_id ?? streamId ?? undefined,
                     )}
                     className="mt-1 inline-block text-xs text-primary hover:underline"
                   >

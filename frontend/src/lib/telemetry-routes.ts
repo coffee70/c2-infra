@@ -1,7 +1,12 @@
 "use client";
 
-export function buildTelemetryDetailHref(sourceId: string, channelName: string): string {
-  return `/sources/${encodeURIComponent(sourceId)}/telemetry/${encodeURIComponent(channelName)}`;
+export function buildTelemetryDetailHref(
+  sourceId: string,
+  channelName: string,
+  runId?: string,
+): string {
+  const href = `/sources/${encodeURIComponent(sourceId)}/telemetry/${encodeURIComponent(channelName)}`;
+  return runId ? `${href}?run=${encodeURIComponent(runId)}` : href;
 }
 
 export function buildTelemetryApiBase(sourceId: string, channelName: string): string {
