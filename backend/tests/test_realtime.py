@@ -9,17 +9,18 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
 from app.models.schemas import MeasurementEvent
-from app.models.telemetry import TelemetryMetadata
+from app.models.telemetry import TelemetryMetadata, TelemetrySource
 from app.realtime.bus import InProcessEventBus
 from app.realtime.processor import (
     RealtimeProcessor,
     _build_channel_name_from_tags,
     _resolve_measurement_channel,
 )
-from app.routes.realtime import _normalize_event_times
+from app.routes.realtime import _normalize_event_times, _validate_stream_batch_identities
 from app.services.telemetry_service import _compute_state
 
 
@@ -222,6 +223,36 @@ def test_normalize_event_times_preserves_server_arrival_when_reception_missing()
     assert normalized[0].generation_time == "2026-03-26T12:00:01+00:00"
     assert normalized[0].reception_time is not None
     assert normalized[0].reception_time != normalized[0].generation_time
+
+
+def test_validate_stream_batch_identities_rejects_reserved_vehicle_id() -> None:
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: (
+        TelemetrySource(
+            id="vehicle-a",
+            name="Vehicle A",
+            source_type="vehicle",
+            telemetry_definition_path="defs/vehicle-a.yaml",
+        )
+        if model is TelemetrySource and key == "vehicle-a"
+        else None
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_stream_batch_identities(
+            db,
+            [
+                MeasurementEvent(
+                    vehicle_id="vehicle-a",
+                    stream_id="vehicle-a",
+                    channel_name="PWR_MAIN_BUS_VOLT",
+                    generation_time="2026-03-26T12:00:00+00:00",
+                    value=1.0,
+                )
+            ],
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 def test_process_measurement_creates_discovered_channel_for_unknown_input(monkeypatch) -> None:

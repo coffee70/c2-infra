@@ -72,9 +72,9 @@ def ensure_stream_belongs_to_vehicle(
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
     if not stream_id:
         return logical_vehicle_id
-    if normalize_vehicle_id(stream_id) == logical_vehicle_id:
-        return stream_id
     owning_vehicle_id = get_stream_vehicle_id(db, stream_id)
+    if owning_vehicle_id is None and normalize_vehicle_id(stream_id) == logical_vehicle_id:
+        return logical_vehicle_id
     if owning_vehicle_id != logical_vehicle_id:
         raise ValueError("Run not found for source")
     return stream_id
@@ -87,10 +87,6 @@ def ensure_run_belongs_to_source(db: Session, source_id: str, run_id: str | None
 
 def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
     """Resolve a stream id to its owning vehicle, if known."""
-    logical_vehicle_id = normalize_vehicle_id(stream_id)
-    if db is not None and logical_vehicle_id == stream_id and db.get(TelemetrySource, logical_vehicle_id) is not None:
-        return None
-
     cached_vehicle_id = _get_cached_stream_vehicle_id(stream_id)
     if db is None:
         return cached_vehicle_id
@@ -237,7 +233,7 @@ def register_stream(
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
     reserved_vehicle_id = normalize_vehicle_id(stream_id)
     existing_vehicle = db.get(TelemetrySource, reserved_vehicle_id)
-    if existing_vehicle is not None and existing_vehicle.id != logical_vehicle_id:
+    if existing_vehicle is not None:
         raise StreamIdConflictError("stream_id conflicts with an existing vehicle id")
 
     observed_at = seen_at or started_at or datetime.now(timezone.utc)

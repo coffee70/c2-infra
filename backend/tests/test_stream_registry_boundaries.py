@@ -62,9 +62,8 @@ def test_resolve_channel_metadata_uses_registered_stream_owner() -> None:
     assert vehicle_id in statement.compile().params.values()
 
 
-def test_resolve_channel_metadata_prefers_exact_source_lookup_over_colliding_stream_row() -> None:
+def test_resolve_channel_metadata_prefers_exact_source_lookup_for_vehicle_ids() -> None:
     vehicle_id = "source-a"
-    colliding_vehicle_id = "source-b"
     meta = TelemetryMetadata(
         id=uuid4(),
         vehicle_id=vehicle_id,
@@ -86,20 +85,23 @@ def test_resolve_channel_metadata_prefers_exact_source_lookup_over_colliding_str
             telemetry_definition_path="defs/source-a.yaml",
         )
         if model is TelemetrySource and key == vehicle_id
-        else TelemetryStream(id=vehicle_id, vehicle_id=colliding_vehicle_id, status="active")
-        if model is TelemetryStream and key == vehicle_id
         else None
     )
+    from app.services import channel_alias_service as alias_service
+    alias_service_get_stream_vehicle_id = alias_service.get_stream_vehicle_id
+    alias_service.get_stream_vehicle_id = lambda _db, _vehicle_id: None
     db.execute.side_effect = [
         _ScalarResult(meta),
     ]
 
-    resolved = resolve_channel_metadata(db, vehicle_id=vehicle_id, channel_name="battery.voltage")
+    try:
+        resolved = resolve_channel_metadata(db, vehicle_id=vehicle_id, channel_name="battery.voltage")
 
-    assert resolved is meta
-    statement = db.execute.call_args.args[0]
-    assert vehicle_id in statement.compile().params.values()
-    assert colliding_vehicle_id not in statement.compile().params.values()
+        assert resolved is meta
+        statement = db.execute.call_args.args[0]
+        assert vehicle_id in statement.compile().params.values()
+    finally:
+        alias_service.get_stream_vehicle_id = alias_service_get_stream_vehicle_id
 
 
 def test_resolve_channel_metadata_keeps_vehicle_lookup_for_non_stream_ids(monkeypatch) -> None:

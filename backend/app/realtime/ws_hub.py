@@ -66,20 +66,24 @@ class RealtimeWsHub:
         channel_name: str | None = None,
         for_alerts: bool = False,
         source_id: str | None = None,
+        vehicle_id: str | None = None,
         alert_source_id: str | None = None,
+        alert_vehicle_id: str | None = None,
     ) -> list[WebSocket]:
         """Get connections that should receive this update."""
         result = []
+        channel_scope_ids = {value for value in (source_id, vehicle_id) if value is not None}
+        alert_scope_ids = {value for value in (alert_source_id, alert_vehicle_id) if value is not None}
         for ws, subs in self._connections.items():
             conn_source = subs.get("active_source_id", "default")
             if for_alerts and subs.get("alerts_subscribed"):
-                if alert_source_id is None or conn_source == alert_source_id:
+                if not alert_scope_ids or conn_source in alert_scope_ids:
                     result.append(ws)
             elif channel_name and channel_name in subs.get("watchlist_channels", set()):
-                if source_id is None or conn_source == source_id:
+                if not channel_scope_ids or conn_source in channel_scope_ids:
                     result.append(ws)
             elif channel_name and channel_name in subs.get("channel_detail", set()):
-                if source_id is None or conn_source == source_id:
+                if not channel_scope_ids or conn_source in channel_scope_ids:
                     result.append(ws)
         return result
 
@@ -200,6 +204,7 @@ class RealtimeWsHub:
         targets = self._get_subscribed_connections(
             channel_name=update.name,
             source_id=update.stream_id,
+            vehicle_id=update.vehicle_id,
         )
         if not targets:
             return
@@ -231,6 +236,7 @@ class RealtimeWsHub:
         targets = self._get_subscribed_connections(
             for_alerts=True,
             alert_source_id=alert_obj.stream_id,
+            alert_vehicle_id=alert_obj.vehicle_id,
         )
         if not targets:
             return

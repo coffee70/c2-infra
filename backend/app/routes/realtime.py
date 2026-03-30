@@ -75,8 +75,9 @@ def _validate_stream_batch_identities(db: Session, events: list[MeasurementEvent
             continue
         seen.add(dedupe_key)
 
-        reserved_vehicle = db.get(TelemetrySource, event.stream_id)
-        if reserved_vehicle is not None and reserved_vehicle.id != logical_vehicle_id:
+        reserved_vehicle_id = normalize_vehicle_id(event.stream_id)
+        reserved_vehicle = db.get(TelemetrySource, reserved_vehicle_id)
+        if reserved_vehicle is not None:
             raise HTTPException(status_code=400, detail="stream_id conflicts with an existing vehicle id")
 
         existing_owner = get_stream_vehicle_id(db, event.stream_id)

@@ -159,6 +159,7 @@ def test_set_active_run_registers_new_stream_ids(monkeypatch) -> None:
         "resolve_logical_vehicle_id",
         lambda _db, _source_id: "vehicle-a",
     )
+    monkeypatch.setattr(telemetry_routes, "get_stream_vehicle_id", lambda *_args: None)
     monkeypatch.setattr(
         telemetry_routes,
         "register_stream",
@@ -428,6 +429,11 @@ def test_set_active_run_idle_clears_active_stream(monkeypatch) -> None:
     monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         telemetry_routes,
+        "resolve_logical_vehicle_id",
+        lambda _db, source_id: source_id,
+    )
+    monkeypatch.setattr(
+        telemetry_routes,
         "clear_active_stream",
         lambda source_id, *, db=None: captured.update(source_id=source_id, db=db),
     )
@@ -689,6 +695,25 @@ def test_register_stream_rejects_reserved_vehicle_id() -> None:
         register_stream(db, vehicle_id="vehicle-b", stream_id="vehicle-a")
 
     assert "conflicts" in str(exc_info.value)
+    db.execute.assert_not_called()
+
+
+def test_register_stream_rejects_reserved_vehicle_id_for_same_vehicle() -> None:
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: (
+        TelemetrySource(
+            id="vehicle-a",
+            name="Vehicle A",
+            source_type="vehicle",
+            telemetry_definition_path="defs/vehicle-a.yaml",
+        )
+        if model is TelemetrySource and key == "vehicle-a"
+        else None
+    )
+
+    with pytest.raises(StreamIdConflictError):
+        register_stream(db, vehicle_id="vehicle-a", stream_id="vehicle-a")
+
     db.execute.assert_not_called()
 
 
