@@ -352,6 +352,8 @@ class RealtimeProcessor:
             current.z_score = Decimal(str(z_score)) if z_score is not None else None
             current.quality = event.quality
             current.sequence = event.sequence
+            current.packet_source = event.packet_source
+            current.receiver_id = event.receiver_id
         else:
             db.add(
                 TelemetryCurrent(

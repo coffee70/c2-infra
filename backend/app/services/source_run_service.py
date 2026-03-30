@@ -258,37 +258,6 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
     """Resolve a logical vehicle id to the active telemetry stream id when available."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
 
-    src = get_logical_source(db, logical_vehicle_id)
-    if src is not None and src.source_type == "simulator" and src.base_url:
-        payload = None
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                res = client.get(f"{src.base_url.rstrip('/')}/status")
-            if res.status_code < 400:
-                payload = res.json()
-        except Exception:
-            payload = None
-
-        if payload is not None:
-            state = payload.get("state")
-            config = payload.get("config") or {}
-            active_stream_id = config.get("stream_id")
-            packet_source = config.get("packet_source")
-            receiver_id = config.get("receiver_id")
-
-            if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
-                register_stream(
-                    db,
-                    vehicle_id=logical_vehicle_id,
-                    stream_id=active_stream_id,
-                    packet_source=packet_source if isinstance(packet_source, str) else None,
-                    receiver_id=receiver_id if isinstance(receiver_id, str) else None,
-                )
-                return active_stream_id
-
-            clear_active_stream(logical_vehicle_id, db=db)
-            return logical_vehicle_id
-
     cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
     if cached_stream_id is not None:
         return cached_stream_id
@@ -347,5 +316,36 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
 
     if latest_row is not None and getattr(latest_row, "status", None) == "idle":
         return logical_vehicle_id
+
+    src = get_logical_source(db, logical_vehicle_id)
+    if src is not None and src.source_type == "simulator" and src.base_url:
+        payload = None
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                res = client.get(f"{src.base_url.rstrip('/')}/status")
+            if res.status_code < 400:
+                payload = res.json()
+        except Exception:
+            payload = None
+
+        if payload is not None:
+            state = payload.get("state")
+            config = payload.get("config") or {}
+            active_stream_id = config.get("stream_id")
+            packet_source = config.get("packet_source")
+            receiver_id = config.get("receiver_id")
+
+            if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
+                register_stream(
+                    db,
+                    vehicle_id=logical_vehicle_id,
+                    stream_id=active_stream_id,
+                    packet_source=packet_source if isinstance(packet_source, str) else None,
+                    receiver_id=receiver_id if isinstance(receiver_id, str) else None,
+                )
+                return active_stream_id
+
+            clear_active_stream(logical_vehicle_id, db=db)
+            return logical_vehicle_id
 
     return logical_vehicle_id

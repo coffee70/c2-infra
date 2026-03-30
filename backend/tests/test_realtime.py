@@ -2,7 +2,9 @@
 
 import asyncio
 import time
+from decimal import Decimal
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -523,3 +525,82 @@ def test_process_measurement_duplicate_first_dynamic_sample_keeps_discovered_met
     assert len(updates) == 1
     assert updates[0].name == "decoder.aprs.payload_temp"
     assert orbit_submissions
+
+
+def test_process_measurement_refreshes_current_packet_identity(monkeypatch) -> None:
+    monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
+    monkeypatch.setattr("app.realtime.processor.register_stream", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.realtime.processor.resolve_channel_name", lambda *args, **kwargs: "VBAT")
+    processor = RealtimeProcessor()
+    db = MagicMock()
+    updates = []
+
+    class _ScalarResult:
+        def __init__(self, row):
+            self._row = row
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._row
+
+    meta = TelemetryMetadata(
+        id=uuid4(),
+        vehicle_id="source-a",
+        name="VBAT",
+        units="V",
+        description="Main bus voltage",
+        subsystem_tag="power",
+        channel_origin="catalog",
+    )
+    current = SimpleNamespace(
+        generation_time=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+        reception_time=datetime(2026, 3, 26, 12, 0, 1, tzinfo=timezone.utc),
+        value=Decimal("28.1"),
+        state="normal",
+        state_reason=None,
+        z_score=None,
+        quality="valid",
+        sequence=1,
+        packet_source="old-source",
+        receiver_id="old-receiver",
+    )
+    savepoint = MagicMock()
+
+    db.execute.return_value = _ScalarResult(meta)
+
+    def fake_get(model, key):
+        if model.__name__ == "TelemetryCurrent":
+            return current
+        if model.__name__ == "TelemetryStatistics":
+            return None
+        return None
+
+    db.get.side_effect = fake_get
+    db.begin_nested.return_value = savepoint
+    db.flush.return_value = None
+    monkeypatch.setattr(processor, "_broadcast_telemetry_update", updates.append)
+    monkeypatch.setattr(processor, "_maybe_submit_orbit_sample", lambda *args, **kwargs: None)
+
+    processor._process_measurement(
+        db,
+        MeasurementEvent(
+            vehicle_id="source-a",
+            stream_id="source-a",
+            channel_name="VBAT",
+            generation_time="2026-03-26T12:00:02+00:00",
+            reception_time="2026-03-26T12:00:03+00:00",
+            value=28.4,
+            packet_source="new-source",
+            receiver_id="new-receiver",
+            quality="valid",
+            sequence=2,
+        ),
+    )
+
+    assert current.packet_source == "new-source"
+    assert current.receiver_id == "new-receiver"
+    assert current.generation_time == datetime(2026, 3, 26, 12, 0, 2, tzinfo=timezone.utc)
+    assert current.reception_time == datetime(2026, 3, 26, 12, 0, 3, tzinfo=timezone.utc)
+    assert len(updates) == 1

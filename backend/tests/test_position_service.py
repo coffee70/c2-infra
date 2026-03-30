@@ -105,7 +105,7 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
             return None
 
     db.get.side_effect = fake_get
-    db.execute.side_effect = [_EmptyResult(), _EmptyResult()]
+    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _EmptyResult()]
 
     monkeypatch.setattr(
         "app.services.source_run_service.httpx.Client",
@@ -128,7 +128,7 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
-def test_resolve_active_run_id_prefers_simulator_status_over_stale_active_row(
+def test_resolve_active_run_id_recovers_simulator_stream_after_stale_active_row(
     monkeypatch,
 ) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
@@ -144,30 +144,35 @@ def test_resolve_active_run_id_prefers_simulator_status_over_stale_active_row(
     def fake_get(model, key):
         if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
             return source
+        if model.__name__ == "TelemetryStream" and key == runtime_stream_id:
+            return stale_stream
         return None
 
-    def fake_register_stream(
-        _db,
-        *,
-        vehicle_id: str,
-        stream_id: str,
-        packet_source=None,
-        receiver_id=None,
-        seen_at=None,
-    ):
-        return SimpleNamespace(
-            id=stream_id,
-            vehicle_id=vehicle_id,
-            status="active",
-            packet_source=packet_source,
-            receiver_id=receiver_id,
-            last_seen_at=seen_at,
-        )
+    stale_stream = SimpleNamespace(
+        id=runtime_stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="active",
+        packet_source="packet-old",
+        receiver_id="rx-old",
+        last_seen_at=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
+    )
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _StaleResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return stale_stream
 
     db.get.side_effect = fake_get
-    db.execute.side_effect = AssertionError(
-        "persisted active rows should not be queried before simulator status"
-    )
+    db.execute.side_effect = [_EmptyResult(), _StaleResult(), _EmptyResult()]
 
     monkeypatch.setattr(
         "app.services.source_run_service.httpx.Client",
@@ -184,13 +189,15 @@ def test_resolve_active_run_id_prefers_simulator_status_over_stale_active_row(
             )
         ),
     )
-    monkeypatch.setattr("app.services.source_run_service.register_stream", fake_register_stream)
 
     assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == runtime_stream_id
+    assert stale_stream.status == "active"
+    assert stale_stream.packet_source == "packet-new"
+    assert stale_stream.receiver_id == "rx-new"
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
-def test_resolve_active_run_id_prefers_simulator_status_over_stale_current_rows(
+def test_resolve_active_run_id_recovers_simulator_stream_after_stale_current_rows(
     monkeypatch,
 ) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
@@ -214,7 +221,7 @@ def test_resolve_active_run_id_prefers_simulator_status_over_stale_current_rows(
         def first(self):
             return None
 
-    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), AssertionError("current row fallback should not run")]
+    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _EmptyResult()]
 
     cleared: list[str] = []
 
@@ -239,74 +246,6 @@ def test_resolve_active_run_id_prefers_simulator_status_over_stale_current_rows(
     assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
     assert cleared == [DROGONSAT_SOURCE_ID]
     db.add.assert_not_called()
-
-
-def test_resolve_active_run_id_recovers_simulator_stream_even_when_latest_row_is_idle(
-    monkeypatch,
-) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    idle_stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="idle",
-        packet_source=None,
-        receiver_id=None,
-        last_seen_at=None,
-    )
-    active_stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="active",
-        packet_source="ground-station-a",
-        receiver_id="rx-7",
-        last_seen_at=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
-    )
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="simulator",
-        base_url="http://simulator:8001",
-    )
-
-    def fake_get(model, key):
-        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
-            return source
-        if key == stream_id:
-            return active_stream
-        return None
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    db.get.side_effect = fake_get
-    db.execute.side_effect = [_EmptyResult(), AssertionError("idle row guard should not short-circuit simulator recovery")]
-
-    monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: _FakeHttpxClient(
-            _FakeHttpxResponse(
-                {
-                    "state": "running",
-                    "config": {
-                        "stream_id": stream_id,
-                        "packet_source": "ground-station-a",
-                        "receiver_id": "rx-7",
-                    },
-                }
-            )
-        ),
-    )
-
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
-    assert active_stream.status == "active"
-    assert active_stream.last_seen_at is not None
-    clear_active_run(DROGONSAT_SOURCE_ID)
 
 
 def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatch) -> None:
@@ -399,56 +338,34 @@ def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatc
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
-def test_resolve_active_run_id_prefers_simulator_status_over_cached_run(monkeypatch) -> None:
+def test_resolve_active_run_id_prefers_cached_run_over_simulator_status(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     cached_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
-    runtime_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T20-17-52Z"
     source = TelemetrySource(
         id=DROGONSAT_SOURCE_ID,
         name="DrogonSat",
         source_type="simulator",
         base_url="http://simulator:8001",
     )
-    runtime_stream = SimpleNamespace(
-        id=runtime_stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="idle",
-        packet_source=None,
-        receiver_id=None,
-        last_seen_at=None,
-    )
 
     def fake_get(model, key):
         if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
             return source
-        if model.__name__ == "TelemetryStream" and key == runtime_stream_id:
-            return runtime_stream
         return None
 
     db.get.side_effect = fake_get
-    db.execute.side_effect = AssertionError("simulator status should run before cache fallback")
+    db.execute.side_effect = AssertionError("cache should short-circuit before simulator status")
     register_active_run(cached_stream_id)
 
     monkeypatch.setattr(
         "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: _FakeHttpxClient(
-            _FakeHttpxResponse(
-                {
-                    "state": "running",
-                    "config": {
-                        "stream_id": runtime_stream_id,
-                        "packet_source": "packet-new",
-                        "receiver_id": "rx-new",
-                    },
-                }
-            )
-        ),
+        lambda timeout=2.0: (_ for _ in ()).throw(AssertionError("status poll should not run")),
     )
 
     try:
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == runtime_stream_id
-        assert get_cached_active_run_id(DROGONSAT_SOURCE_ID) == runtime_stream_id
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == cached_stream_id
+        assert get_cached_active_run_id(DROGONSAT_SOURCE_ID) == cached_stream_id
     finally:
         clear_active_run(DROGONSAT_SOURCE_ID)
 
@@ -543,7 +460,7 @@ def test_resolve_active_run_id_recovers_stream_from_current_rows() -> None:
             return current
 
     db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _CurrentResult(), _EmptyResult()]
-    db.get.side_effect = [None, None, stream]
+    db.get.side_effect = lambda model, key: stream if model.__name__ == "TelemetryStream" and key == stream_id else None
 
     assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
     assert stream.status == "active"
@@ -588,7 +505,7 @@ def test_resolve_active_run_id_recovers_opaque_stream_from_current_rows() -> Non
             return current
 
     db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _CurrentResult(), _EmptyResult()]
-    db.get.side_effect = [None, None, stream]
+    db.get.side_effect = lambda model, key: stream if model.__name__ == "TelemetryStream" and key == stream_id else None
 
     assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
     assert stream.status == "active"
