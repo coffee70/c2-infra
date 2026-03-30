@@ -598,6 +598,60 @@ def test_resolve_active_run_id_recovers_opaque_stream_from_current_rows() -> Non
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_resolve_active_run_id_recovers_stream_from_idle_registry_when_current_rows_exist() -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    idle_stream = SimpleNamespace(
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="idle",
+        packet_source=None,
+        receiver_id=None,
+        last_seen_at=None,
+    )
+    current = SimpleNamespace(
+        stream_id=stream_id,
+        reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
+        generation_time=datetime(2026, 3, 13, 17, 12, 39, tzinfo=timezone.utc),
+        packet_source="ground-station-a",
+        receiver_id="rx-7",
+    )
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _IdleResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return idle_stream
+
+    class _CurrentResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return current
+
+    db.execute.side_effect = [_EmptyResult(), _IdleResult(), _CurrentResult()]
+    db.get.side_effect = lambda model, key: (
+        idle_stream if model.__name__ == "TelemetryStream" and key == stream_id else None
+    )
+
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
+    assert idle_stream.status == "active"
+    assert idle_stream.packet_source == "ground-station-a"
+    assert idle_stream.receiver_id == "rx-7"
+    assert idle_stream.last_seen_at == current.reception_time
+    db.add.assert_not_called()
+    clear_active_run(DROGONSAT_SOURCE_ID)
+
+
 def test_resolve_active_run_id_respects_explicit_idle_stream_state() -> None:
     source_id = "vehicle-a"
     clear_active_run(source_id)
@@ -617,7 +671,7 @@ def test_resolve_active_run_id_respects_explicit_idle_stream_state() -> None:
         def first(self):
             return SimpleNamespace(status="idle")
 
-    db.execute.side_effect = [_EmptyResult(), _IdleResult(), AssertionError("current row fallback should not run")]
+    db.execute.side_effect = [_EmptyResult(), _IdleResult(), _EmptyResult()]
     db.get.return_value = None
 
     assert resolve_active_run_id(db, source_id) == source_id

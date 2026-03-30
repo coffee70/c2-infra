@@ -526,10 +526,11 @@ def test_run_listing_routes_emit_stream_ids() -> None:
 
 @pytest.mark.anyio
 async def test_simulator_status_registers_stream_id_from_config(monkeypatch) -> None:
-    seen: dict[str, str] = {}
+    db = MagicMock()
+    registered: dict[str, object] = {}
 
     def fake_resolve_with_audit(_db, source_id, _action):
-        seen["source_id"] = source_id
+        registered["source_id"] = source_id
         return "http://simulator:8010"
 
     monkeypatch.setattr(
@@ -541,23 +542,102 @@ async def test_simulator_status_registers_stream_id_from_config(monkeypatch) -> 
     async def fake_proxy_get(_base_url, _path):
         return {
             "state": "active",
-            "config": {"stream_id": "vehicle-a-2026-03-28T12-00-00Z"},
+            "config": {
+                "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
+                "packet_source": "simulator-link",
+                "receiver_id": "rx-1",
+            },
             "supported_scenarios": [],
         }
 
     monkeypatch.setattr(simulator_routes, "_proxy_get", fake_proxy_get)
 
-    registered: dict[str, str] = {}
     monkeypatch.setattr(
         simulator_routes,
-        "register_active_run",
-        lambda stream_id: registered.setdefault("stream_id", stream_id),
+        "register_stream",
+        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: registered.update(
+            {
+                "db": db_arg,
+                "vehicle_id": vehicle_id,
+                "stream_id": stream_id,
+                "packet_source": packet_source,
+                "receiver_id": receiver_id,
+                "seen_at": seen_at,
+            }
+        ),
     )
 
-    response = await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=MagicMock())
+    response = await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
 
     assert response["connected"] is True
-    assert registered["stream_id"] == "vehicle-a-2026-03-28T12-00-00Z"
+    assert registered == {
+        "source_id": "vehicle-a",
+        "db": db,
+        "vehicle_id": "vehicle-a",
+        "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
+        "packet_source": "simulator-link",
+        "receiver_id": "rx-1",
+        "seen_at": None,
+    }
+
+
+@pytest.mark.anyio
+async def test_simulator_start_registers_stream_id_from_response(monkeypatch) -> None:
+    db = MagicMock()
+    registered: dict[str, object] = {}
+
+    mock_src = SimpleNamespace(telemetry_definition_path=None)
+
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_simulator_source",
+        lambda _db, _source_id: mock_src,
+    )
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_with_audit",
+        lambda _db, _source_id, _action: "http://simulator:8010",
+    )
+
+    async def fake_proxy_post(_base_url, _path, body):
+        registered["body"] = body
+        return {"stream_id": "a6107734-80af-4f61-8c69-d53ab64dd13a"}
+
+    monkeypatch.setattr(simulator_routes, "_proxy_post", fake_proxy_post)
+    monkeypatch.setattr(simulator_routes, "clear_active_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(simulator_routes, "reset_orbit_source", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        simulator_routes,
+        "register_stream",
+        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: registered.update(
+            {
+                "db": db_arg,
+                "vehicle_id": vehicle_id,
+                "stream_id": stream_id,
+                "packet_source": packet_source,
+                "receiver_id": receiver_id,
+                "seen_at": seen_at,
+            }
+        ),
+    )
+
+    response = await simulator_routes.simulator_start(
+        config=simulator_routes.StartConfig(vehicle_id="vehicle-a"),
+        db=db,
+    )
+
+    assert response["stream_id"] == "a6107734-80af-4f61-8c69-d53ab64dd13a"
+    assert registered["body"]["vehicle_id"] == "vehicle-a"
+    assert registered["body"]["packet_source"] == "simulator-link"
+    assert registered == {
+        "body": registered["body"],
+        "db": db,
+        "vehicle_id": "vehicle-a",
+        "stream_id": "a6107734-80af-4f61-8c69-d53ab64dd13a",
+        "packet_source": "simulator-link",
+        "receiver_id": None,
+        "seen_at": None,
+    }
 
 
 def test_channel_run_listing_route_emits_stream_ids(monkeypatch) -> None:

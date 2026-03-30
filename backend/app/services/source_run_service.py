@@ -320,9 +320,6 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
         .scalars()
         .first()
     )
-    if latest_row is not None and getattr(latest_row, "status", None) == "idle":
-        return logical_vehicle_id
-
     current_row = (
         db.execute(
             select(TelemetryCurrent)
@@ -347,5 +344,8 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
             seen_at=getattr(current_row, "reception_time", None),
         )
         return current_stream_id
+
+    if latest_row is not None and getattr(latest_row, "status", None) == "idle":
+        return logical_vehicle_id
 
     return logical_vehicle_id
