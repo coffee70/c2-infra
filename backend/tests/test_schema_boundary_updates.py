@@ -211,6 +211,46 @@ def test_set_active_run_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
     assert calls == []
 
 
+def test_set_active_run_idle_clears_active_stream(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        telemetry_routes,
+        "clear_active_stream",
+        lambda source_id, *, db=None: captured.update(source_id=source_id, db=db),
+    )
+
+    response = telemetry_routes.set_active_run(
+        body=telemetry_routes.ActiveRunUpdate(
+            vehicle_id="vehicle-a",
+            state="idle",
+        ),
+        db=MagicMock(),
+    )
+
+    assert response == {"status": "idle", "vehicle_id": "vehicle-a"}
+    assert captured["source_id"] == "vehicle-a"
+    assert isinstance(captured["db"], MagicMock)
+
+
+def test_resolve_scoped_run_id_defaults_to_active_stream(monkeypatch) -> None:
+    db = MagicMock()
+
+    monkeypatch.setattr(
+        telemetry_routes,
+        "ensure_run_belongs_to_source",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected explicit run lookup")),
+    )
+    monkeypatch.setattr(
+        telemetry_routes,
+        "resolve_active_stream_id",
+        lambda _db, source_id: f"{source_id}-active-stream",
+    )
+
+    assert telemetry_routes._resolve_scoped_run_id(db, "vehicle-a") == "vehicle-a-active-stream"
+
+
 def test_realtime_stream_vehicle_resolution_prefers_registry(monkeypatch) -> None:
     opaque_stream_id = "c3bb4cf5-21dd-4b84-bc91-1e3a3a944f78"
     legacy_stream_id = "vehicle-a-2026-03-28T12-00-00Z"

@@ -65,11 +65,13 @@ from app.utils.subsystem import infer_subsystem
 from app.services.statistics_service import StatisticsService
 from app.services.telemetry_service import TelemetryService, _compute_state
 from app.services.source_run_service import (
+    clear_active_stream,
     ensure_run_belongs_to_source,
     get_stream_vehicle_id,
     normalize_vehicle_id,
     normalize_source_id,
     register_stream,
+    resolve_active_stream_id,
     run_id_to_source_id,
 )
 from app.config import get_settings
@@ -89,7 +91,9 @@ def _get_channel_meta(db: Session, source_id: str, name: str) -> TelemetryMetada
 
 
 def _resolve_scoped_run_id(db: Session, source_id: str, run_id: Optional[str] = None) -> str:
-    """Return a source or run id only if it belongs to the scoped source."""
+    """Return the active stream id or validate an explicit stream id for a source."""
+    if run_id is None:
+        return resolve_active_stream_id(db, source_id)
     try:
         return ensure_run_belongs_to_source(db, source_id, run_id)
     except ValueError:
@@ -795,7 +799,7 @@ def set_active_run(
         }
 
     if body.state == "idle":
-        clear_active_run(logical_source_id, db=db)
+        clear_active_stream(logical_source_id, db=db)
         audit_log(
             "sources.active_run.set",
             source_id=logical_source_id,
