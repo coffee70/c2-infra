@@ -395,25 +395,30 @@ def test_resolve_active_run_id_prefers_live_simulator_status_over_cached_run(mon
     )
     monkeypatch.setattr(
         "app.services.source_run_service.register_stream",
-        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: captured.update(
-            {
-                "vehicle_id": vehicle_id,
-                "stream_id": stream_id,
-                "packet_source": packet_source,
-                "receiver_id": receiver_id,
-                "started_at": started_at,
-                "seen_at": seen_at,
-            }
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: (
+            captured.update(
+                {
+                    "vehicle_id": vehicle_id,
+                    "stream_id": stream_id,
+                    "packet_source": packet_source,
+                    "receiver_id": receiver_id,
+                    "started_at": started_at,
+                    "seen_at": seen_at,
+                }
+            ),
+            register_active_run(stream_id),
         ),
     )
 
     try:
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == live_stream_id
         assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == live_stream_id
         assert captured["url"] == "http://simulator:8001/status"
         assert captured["vehicle_id"] == DROGONSAT_SOURCE_ID
         assert captured["stream_id"] == live_stream_id
         assert captured["packet_source"] == "simulator-link"
         assert captured["receiver_id"] == "rx-1"
+        assert get_cached_active_run_id(DROGONSAT_SOURCE_ID) == live_stream_id
         db.execute.assert_not_called()
     finally:
         clear_active_run(DROGONSAT_SOURCE_ID)

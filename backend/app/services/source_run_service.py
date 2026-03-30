@@ -17,7 +17,9 @@ from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID, RHAEGALSAT_SOURCE_ID
 from telemetry_catalog.definitions import resolve_source_id_alias
 
 ACTIVE_STREAM_CACHE_TTL_SEC = 30.0
+SIMULATOR_STATUS_CACHE_TTL_SEC = 2.0
 _active_stream_by_vehicle: dict[str, tuple[str, float]] = {}
+_simulator_status_by_vehicle: dict[str, tuple[dict[str, object], float]] = {}
 _stream_owner_by_stream: dict[str, tuple[str, float]] = {}
 RUN_ID_RE = re.compile(r"^(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?)$")
 
@@ -131,6 +133,39 @@ def _get_cached_stream_vehicle_id(
     return vehicle_id
 
 
+def _cache_simulator_status(
+    vehicle_id: str,
+    *,
+    state: str,
+    active_stream_id: str | None,
+    packet_source: str | None = None,
+    receiver_id: str | None = None,
+    seen_at: float | None = None,
+) -> None:
+    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    _simulator_status_by_vehicle[logical_vehicle_id] = (
+        {
+            "state": state,
+            "active_stream_id": active_stream_id,
+            "packet_source": packet_source,
+            "receiver_id": receiver_id,
+        },
+        seen_at if seen_at is not None else time.time(),
+    )
+
+
+def _get_cached_simulator_status(vehicle_id: str) -> Optional[dict[str, object]]:
+    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    cached = _simulator_status_by_vehicle.get(logical_vehicle_id)
+    if cached is None:
+        return None
+    status, seen_at = cached
+    if time.time() - seen_at > SIMULATOR_STATUS_CACHE_TTL_SEC:
+        _simulator_status_by_vehicle.pop(logical_vehicle_id, None)
+        return None
+    return status
+
+
 def get_logical_source(db: Session, vehicle_id: str) -> Optional[TelemetrySource]:
     """Return the logical vehicle row."""
     return db.get(TelemetrySource, normalize_vehicle_id(vehicle_id))
@@ -214,6 +249,7 @@ def clear_active_stream(vehicle_id: str, *, db: Session | None = None) -> None:
     """Forget the active stream for a vehicle and mark it idle when possible."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
     _active_stream_by_vehicle.pop(logical_vehicle_id, None)
+    _simulator_status_by_vehicle.pop(logical_vehicle_id, None)
     if db is None:
         return
     streams = (
@@ -228,6 +264,55 @@ def clear_active_stream(vehicle_id: str, *, db: Session | None = None) -> None:
     )
     for stream in streams:
         stream.status = "idle"
+
+
+def _resolve_simulator_status(
+    db: Session,
+    logical_vehicle_id: str,
+    payload: dict[str, object],
+    *,
+    refresh_cache: bool,
+) -> str | None:
+    state = payload.get("state")
+    config = payload.get("config") or {}
+    if not isinstance(config, dict):
+        return None
+
+    active_stream_id = config.get("stream_id")
+    packet_source = config.get("packet_source")
+    receiver_id = config.get("receiver_id")
+
+    if refresh_cache:
+        _cache_simulator_status(
+            logical_vehicle_id,
+            state=state if isinstance(state, str) else "idle",
+            active_stream_id=active_stream_id if isinstance(active_stream_id, str) else None,
+            packet_source=packet_source if isinstance(packet_source, str) else None,
+            receiver_id=receiver_id if isinstance(receiver_id, str) else None,
+        )
+
+    if state == "idle":
+        clear_active_stream(logical_vehicle_id, db=db)
+        _cache_simulator_status(
+            logical_vehicle_id,
+            state="idle",
+            active_stream_id=None,
+        )
+        return logical_vehicle_id
+
+    if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
+        cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
+        if cached_stream_id != active_stream_id:
+            register_stream(
+                db,
+                vehicle_id=logical_vehicle_id,
+                stream_id=active_stream_id,
+                packet_source=packet_source if isinstance(packet_source, str) else None,
+                receiver_id=receiver_id if isinstance(receiver_id, str) else None,
+            )
+        return active_stream_id
+
+    return None
 
 
 def get_cached_active_run_id(vehicle_id: str, *, max_age_sec: float = ACTIVE_STREAM_CACHE_TTL_SEC) -> Optional[str]:
@@ -264,6 +349,17 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
 
     src = get_logical_source(db, logical_vehicle_id)
     if src is not None and src.source_type == "simulator" and src.base_url:
+        cached_status = _get_cached_simulator_status(logical_vehicle_id)
+        if cached_status is not None:
+            resolved = _resolve_simulator_status(
+                db,
+                logical_vehicle_id,
+                cached_status,
+                refresh_cache=False,
+            )
+            if resolved is not None:
+                return resolved
+
         payload = None
         try:
             with httpx.Client(timeout=timeout) as client:
@@ -274,24 +370,14 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
             payload = None
 
         if payload is not None:
-            state = payload.get("state")
-            config = payload.get("config") or {}
-            active_stream_id = config.get("stream_id")
-            packet_source = config.get("packet_source")
-            receiver_id = config.get("receiver_id")
-
-            if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
-                register_stream(
-                    db,
-                    vehicle_id=logical_vehicle_id,
-                    stream_id=active_stream_id,
-                    packet_source=packet_source if isinstance(packet_source, str) else None,
-                    receiver_id=receiver_id if isinstance(receiver_id, str) else None,
-                )
-                return active_stream_id
-
-            clear_active_stream(logical_vehicle_id, db=db)
-            return logical_vehicle_id
+            resolved = _resolve_simulator_status(
+                db,
+                logical_vehicle_id,
+                payload,
+                refresh_cache=True,
+            )
+            if resolved is not None:
+                return resolved
 
     cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
     if cached_stream_id is not None:
