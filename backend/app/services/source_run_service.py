@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, TypeVar
 import re
 
 import httpx
@@ -22,6 +22,7 @@ _active_stream_by_vehicle: dict[str, tuple[str, float]] = {}
 _simulator_status_by_vehicle: dict[str, tuple[dict[str, object], float]] = {}
 _stream_owner_by_stream: dict[str, tuple[str, float]] = {}
 RUN_ID_RE = re.compile(r"^(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?)$")
+T = TypeVar("T")
 
 
 def normalize_vehicle_id(vehicle_id: str) -> str:
@@ -154,23 +155,37 @@ def _cache_simulator_status(
     )
 
 
+def _get_ttl_cache_entry(
+    cache: dict[str, tuple[T, float]],
+    key: str,
+    *,
+    ttl_sec: float,
+) -> Optional[tuple[T, float]]:
+    """Return a TTL-governed cache entry or evict it if expired."""
+    cached = cache.get(key)
+    if cached is None:
+        return None
+    value, seen_at = cached
+    if time.time() - seen_at > ttl_sec:
+        cache.pop(key, None)
+        return None
+    return value, seen_at
+
+
+def _get_cached_simulator_status_entry(vehicle_id: str) -> Optional[tuple[dict[str, object], float]]:
+    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    return _get_ttl_cache_entry(
+        _simulator_status_by_vehicle,
+        logical_vehicle_id,
+        ttl_sec=SIMULATOR_STATUS_CACHE_TTL_SEC,
+    )
+
+
 def _get_cached_simulator_status(vehicle_id: str) -> Optional[dict[str, object]]:
     cached = _get_cached_simulator_status_entry(vehicle_id)
     if cached is None:
         return None
     return cached[0]
-
-
-def _get_cached_simulator_status_entry(vehicle_id: str) -> Optional[tuple[dict[str, object], float]]:
-    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
-    cached = _simulator_status_by_vehicle.get(logical_vehicle_id)
-    if cached is None:
-        return None
-    status, seen_at = cached
-    if time.time() - seen_at > SIMULATOR_STATUS_CACHE_TTL_SEC:
-        _simulator_status_by_vehicle.pop(logical_vehicle_id, None)
-        return None
-    return status, seen_at
 
 
 def _should_refresh_simulator_status(
@@ -317,6 +332,7 @@ def _resolve_simulator_status(
         return logical_vehicle_id
 
     if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
+        # Always refresh stream metadata from simulator runtime, even when the stream id is unchanged.
         register_stream(
             db,
             vehicle_id=logical_vehicle_id,
@@ -343,14 +359,11 @@ def _get_cached_active_run_entry(
     max_age_sec: float = ACTIVE_STREAM_CACHE_TTL_SEC,
 ) -> Optional[tuple[str, float]]:
     logical_vehicle_id = run_id_to_source_id(vehicle_id)
-    cached = _active_stream_by_vehicle.get(logical_vehicle_id)
-    if cached is None:
-        return None
-    stream_id, seen_at = cached
-    if time.time() - seen_at > max_age_sec:
-        _active_stream_by_vehicle.pop(logical_vehicle_id, None)
-        return None
-    return stream_id, seen_at
+    return _get_ttl_cache_entry(
+        _active_stream_by_vehicle,
+        logical_vehicle_id,
+        ttl_sec=max_age_sec,
+    )
 
 
 def _run_id_started_at(source_id: str) -> Optional[datetime]:
@@ -368,6 +381,68 @@ def resolve_active_run_id(db: Session, source_id: str, *, timeout: float = 2.0) 
     return resolve_active_stream_id(db, source_id, timeout=timeout)
 
 
+def _resolve_simulator_backed_active_stream(
+    db: Session,
+    logical_vehicle_id: str,
+    *,
+    base_url: str,
+    timeout: float,
+    cached_stream_entry: tuple[str, float] | None,
+) -> str | None:
+    """
+    Resolve the active stream for a simulator-backed logical vehicle.
+
+    Precedence:
+    1. A newer accepted active-stream cache entry beats an older simulator-status snapshot.
+    2. If the simulator status cache is stale, poll live /status.
+    3. Otherwise use the throttled cached simulator snapshot.
+    """
+    cached_status_entry = _get_cached_simulator_status_entry(logical_vehicle_id)
+
+    # A recently accepted active stream is newer than a throttled simulator snapshot.
+    if (
+        cached_stream_entry is not None
+        and cached_status_entry is not None
+        and cached_stream_entry[1] >= cached_status_entry[1]
+    ):
+        return cached_stream_entry[0]
+
+    if _should_refresh_simulator_status(logical_vehicle_id):
+        payload: dict[str, object] | None = None
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                res = client.get(f"{base_url.rstrip('/')}/status")
+            if res.status_code < 400:
+                raw_payload = res.json()
+                if isinstance(raw_payload, dict):
+                    payload = raw_payload
+        except Exception:
+            payload = None
+
+        if payload is not None:
+            resolved = _resolve_simulator_status(
+                db,
+                logical_vehicle_id,
+                payload,
+                refresh_cache=True,
+            )
+            if resolved is not None:
+                return resolved
+
+    if cached_status_entry is not None:
+        cached_status, _ = cached_status_entry
+        resolved = _resolve_simulator_status(
+            db,
+            logical_vehicle_id,
+            cached_status,
+            refresh_cache=False,
+        )
+        if resolved is not None:
+            return resolved
+
+    return None
+
+
 def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2.0) -> str:
     """Resolve a logical vehicle id to the active telemetry stream id when available."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
@@ -375,48 +450,15 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
 
     src = get_logical_source(db, logical_vehicle_id)
     if src is not None and src.source_type == "simulator" and src.base_url:
-        cached_status_entry = _get_cached_simulator_status_entry(logical_vehicle_id)
-        # A recently accepted stream update is newer than a throttled simulator snapshot,
-        # so prefer the active-stream cache when it was updated after the last /status poll.
-        if (
-            cached_stream_entry is not None
-            and cached_status_entry is not None
-            and cached_stream_entry[1] >= cached_status_entry[1]
-        ):
-            return cached_stream_entry[0]
-
-        if _should_refresh_simulator_status(logical_vehicle_id):
-            payload: dict[str, object] | None = None
-            try:
-                with httpx.Client(timeout=timeout) as client:
-                    res = client.get(f"{src.base_url.rstrip('/')}/status")
-                if res.status_code < 400:
-                    raw_payload = res.json()
-                    if isinstance(raw_payload, dict):
-                        payload = raw_payload
-            except Exception:
-                payload = None
-
-            if payload is not None:
-                resolved = _resolve_simulator_status(
-                    db,
-                    logical_vehicle_id,
-                    payload,
-                    refresh_cache=True,
-                )
-                if resolved is not None:
-                    return resolved
-        else:
-            if cached_status_entry is not None:
-                cached_status, _ = cached_status_entry
-                resolved = _resolve_simulator_status(
-                    db,
-                    logical_vehicle_id,
-                    cached_status,
-                    refresh_cache=False,
-                )
-                if resolved is not None:
-                    return resolved
+        resolved = _resolve_simulator_backed_active_stream(
+            db,
+            logical_vehicle_id,
+            base_url=src.base_url,
+            timeout=timeout,
+            cached_stream_entry=cached_stream_entry,
+        )
+        if resolved is not None:
+            return resolved
 
     if cached_stream_entry is not None:
         return cached_stream_entry[0]

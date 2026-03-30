@@ -464,6 +464,86 @@ def test_resolve_active_run_id_prefers_recent_active_cache_over_stale_simulator_
         clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_resolve_active_run_id_prefers_newer_simulator_status_over_older_active_cache(
+    monkeypatch,
+) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    old_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
+    live_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-53Z"
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="simulator",
+        base_url="http://simulator:8001",
+    )
+
+    def fake_get(model, key):
+        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
+            return source
+        return None
+
+    db.get.side_effect = fake_get
+    db.execute.side_effect = AssertionError("simulator status should short-circuit before DB lookups")
+    register_active_run(old_stream_id, seen_at=time.time() - 5.0)
+
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "state": "active",
+                "config": {
+                    "stream_id": live_stream_id,
+                    "packet_source": "simulator-link",
+                    "receiver_id": "rx-2",
+                },
+            }
+
+    class _Client:
+        def __init__(self, timeout=2.0):
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url):
+            captured["url"] = url
+            return _Response()
+
+    monkeypatch.setattr("app.services.source_run_service.httpx.Client", _Client)
+    monkeypatch.setattr(
+        "app.services.source_run_service.register_stream",
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: (
+            captured.update(
+                {
+                    "vehicle_id": vehicle_id,
+                    "stream_id": stream_id,
+                    "packet_source": packet_source,
+                    "receiver_id": receiver_id,
+                    "started_at": started_at,
+                    "seen_at": seen_at,
+                }
+            ),
+            register_active_run(stream_id),
+        ),
+    )
+
+    try:
+        resolved = resolve_active_run_id(db, DROGONSAT_SOURCE_ID)
+        assert resolved == live_stream_id
+        assert captured["url"] == "http://simulator:8001/status"
+        assert captured["stream_id"] == live_stream_id
+    finally:
+        clear_active_run(DROGONSAT_SOURCE_ID)
+
+
 def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
