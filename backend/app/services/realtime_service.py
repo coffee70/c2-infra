@@ -1159,7 +1159,7 @@ def get_realtime_snapshot_for_channels(
         return []
     data_source_id = normalize_source_id(source_id)
     logical_source_id = _resolve_stream_vehicle_id(db, source_id)
-    if db.get(TelemetryStream, data_source_id) is None and data_source_id == logical_source_id:
+    if data_source_id == logical_source_id:
         data_source_id = resolve_active_stream_id(db, logical_source_id)
 
     stmt = (

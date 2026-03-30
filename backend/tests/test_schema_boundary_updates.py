@@ -622,7 +622,11 @@ def test_realtime_helpers_resolve_active_stream_for_vehicle_scope(monkeypatch) -
     )
 
     snapshot_db = MagicMock()
-    snapshot_db.get.side_effect = lambda model, key: None if model.__name__ == "TelemetryStream" and key == vehicle_id else None
+    snapshot_db.get.return_value = SimpleNamespace(
+        id=vehicle_id,
+        vehicle_id=vehicle_id,
+        status="idle",
+    )
     snapshot_db.execute.side_effect = [
         _FetchAllResult(
             [
@@ -662,6 +666,7 @@ def test_realtime_helpers_resolve_active_stream_for_vehicle_scope(monkeypatch) -
     assert snapshot[0].stream_id == active_stream_id
     snapshot_params = snapshot_db.execute.call_args_list[0].args[0].compile().params.values()
     assert active_stream_id in snapshot_params
+    snapshot_db.get.assert_not_called()
 
 
 @pytest.mark.anyio
