@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import delete, desc, func, select, text
+from sqlalchemy import delete, desc, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,7 @@ from app.models.telemetry import (
     TelemetryData,
     TelemetryMetadata,
     TelemetrySource,
+    TelemetryStream,
     WatchlistEntry,
 )
 from app.services.channel_alias_service import get_aliases_by_telemetry_ids
@@ -751,12 +752,21 @@ def _merge_builtin_duplicate_source(
     db.execute(
         text(
             """
-            INSERT INTO telemetry_data (source_id, telemetry_id, timestamp, value)
+            INSERT INTO telemetry_data (
+              source_id,
+              telemetry_id,
+              timestamp,
+              value,
+              packet_source,
+              receiver_id
+            )
             SELECT
               CASE WHEN td.source_id = :old_source_id THEN :new_source_id ELSE td.source_id END,
               map.new_id,
               td.timestamp,
-              td.value
+              td.value,
+              td.packet_source,
+              td.receiver_id
             FROM telemetry_data AS td
             JOIN tmp_builtin_meta_map AS map
               ON map.old_id = td.telemetry_id
@@ -1116,19 +1126,20 @@ def reconcile_builtin_source_duplicates(db: Session) -> None:
 
 def source_has_telemetry_history(db: Session, source_id: str) -> bool:
     resolved_source_id = resolve_source_id_alias(source_id) or source_id
-    direct_history = db.execute(
+    owned_stream_ids = select(TelemetryStream.id).where(
+        TelemetryStream.vehicle_id == resolved_source_id
+    )
+    history_count = db.execute(
         select(func.count())
         .select_from(TelemetryData)
-        .where(TelemetryData.source_id == resolved_source_id)
+        .where(
+            or_(
+                TelemetryData.source_id == resolved_source_id,
+                TelemetryData.source_id.in_(owned_stream_ids),
+            )
+        )
     ).scalar_one()
-    if direct_history > 0:
-        return True
-    run_history = db.execute(
-        select(func.count())
-        .select_from(TelemetryData)
-        .where(TelemetryData.source_id.like(f"{resolved_source_id}-%"))
-    ).scalar_one()
-    return run_history > 0
+    return history_count > 0
 
 
 def get_realtime_snapshot_for_channels(

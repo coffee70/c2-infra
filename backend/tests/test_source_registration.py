@@ -516,6 +516,8 @@ def test_merge_builtin_duplicate_source_moves_channel_aliases() -> None:
     assert any("CREATE TEMP TABLE tmp_builtin_stream_scope" in stmt for stmt in statements)
     assert any("UPDATE telemetry_streams" in stmt for stmt in statements)
     assert any("packet_source" in stmt and "receiver_id" in stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt or "INSERT INTO telemetry_current" in stmt)
+    assert "packet_source" in next(stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt)
+    assert "receiver_id" in next(stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt)
     assert all("LIKE :old_run_prefix" not in stmt for stmt in statements)
 
 
@@ -1343,19 +1345,26 @@ def test_create_discovered_channel_metadata_recovers_from_concurrent_insert() ->
     db.rollback.assert_called_once()
 
 
-def test_source_has_telemetry_history_checks_custom_source_ids() -> None:
-    """Custom source ids should be checked directly for historical telemetry rows."""
+def test_source_has_telemetry_history_uses_stream_registry() -> None:
+    """Historical telemetry checks should include owned stream ids from the registry."""
 
     db = MagicMock()
-    counts = iter([1, 0])
+    statements: list[str] = []
 
     class ScalarOneResult:
         def scalar_one(self):
-            return next(counts)
+            return 1
 
-    db.execute.side_effect = lambda _statement: ScalarOneResult()
+    def fake_execute(statement):
+        statements.append(str(statement))
+        return ScalarOneResult()
+
+    db.execute.side_effect = fake_execute
 
     assert source_has_telemetry_history(db, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") is True
+    assert len(statements) == 1
+    assert "telemetry_streams" in statements[0]
+    assert "LIKE" not in statements[0]
 
 
 def test_update_source_rejects_simulator_definition_path_changes() -> None:
