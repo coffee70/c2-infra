@@ -38,6 +38,8 @@ const RANGE_PRESETS: { label: string; minutes: TimePreset }[] = [
   { label: "24 hr", minutes: 1440 },
 ];
 
+const ACTIVE_LATEST_VALUE = "__active_latest__";
+
 interface TelemetryHistoryTableProps {
   channelName: string;
   /** Source (banner source id); runs dropdown is scoped to this source. */
@@ -112,7 +114,6 @@ export function TelemetryHistoryTable({
   defaultRunId,
   units,
 }: TelemetryHistoryTableProps) {
-  const effectiveDefaultRun = defaultRunId ?? sourceId;
   const [rangeMinutes, setRangeMinutes] = useState<TimePreset>(60);
   const [customSince, setCustomSince] = useState<string | null>(null);
   const [useCustom, setUseCustom] = useState(false);
@@ -121,11 +122,11 @@ export function TelemetryHistoryTable({
   const [downloadMeta, setDownloadMeta] = useState<DownloadMeta>({});
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<string>(effectiveDefaultRun);
+  const [selectedRunId, setSelectedRunId] = useState<string>(defaultRunId ?? "");
 
   useEffect(() => {
-    setSelectedRunId(effectiveDefaultRun);
-  }, [effectiveDefaultRun]);
+    setSelectedRunId(defaultRunId ?? "");
+  }, [defaultRunId]);
 
   const runsQuery = useTelemetryChannelRunsQuery(channelName, sourceId);
   const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
@@ -154,7 +155,7 @@ export function TelemetryHistoryTable({
     catalogSourceId: sourceId,
     limit: String(limit),
     since: sinceIso,
-    source_id: selectedRunId,
+    ...(selectedRunId ? { source_id: selectedRunId } : {}),
   });
   const rows = useMemo(() => historyQuery.data?.data ?? [], [historyQuery.data]);
   const loading = historyQuery.isLoading || historyQuery.isFetching;
@@ -223,10 +224,11 @@ export function TelemetryHistoryTable({
 
   const handleExportCsv = () => {
     if (!filteredRows.length) return;
-    const csv = buildCsv(filteredRows, channelName, selectedRunId);
+    const exportSourceId = selectedRunId || sourceId;
+    const csv = buildCsv(filteredRows, channelName, exportSourceId);
     const { sinceIso, untilIso } = downloadMeta;
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = selectedRunId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = exportSourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
     const suffix =
       sinceIso && untilIso
         ? `${sinceIso}_${untilIso}`
@@ -239,13 +241,14 @@ export function TelemetryHistoryTable({
 
   const handleExportJson = () => {
     if (!filteredRows.length) return;
+    const exportSourceId = selectedRunId || sourceId;
     const payload = {
       channel_name: channelName,
-      source_id: selectedRunId,
+      source_id: exportSourceId,
       points: filteredRows,
     };
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = selectedRunId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = exportSourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
     const filename = `${safeChannel}_${safeSource}_history.json`;
     triggerDownload(
       filename,
@@ -256,7 +259,7 @@ export function TelemetryHistoryTable({
 
   const handleExportParquet = () => {
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = selectedRunId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = (selectedRunId || sourceId).replace(/[^a-zA-Z0-9_-]+/g, "_");
     const filename = `${safeChannel}_${safeSource}_history.parquet.txt`;
     const note =
       "# Parquet export\n" +
@@ -300,7 +303,8 @@ export function TelemetryHistoryTable({
   }, [runs, selectedRunId]);
 
   const handleCopyRow = async (point: HistoryPoint) => {
-    const line = `channel=${channelName} source=${selectedRunId} timestamp=${point.timestamp} value=${point.value}`;
+    const exportSourceId = selectedRunId || sourceId;
+    const line = `channel=${channelName} source=${exportSourceId} timestamp=${point.timestamp} value=${point.value}`;
     await navigator.clipboard.writeText(line);
     setCopiedKey(point.timestamp);
     setTimeout(() => {
@@ -395,14 +399,17 @@ export function TelemetryHistoryTable({
               Run
             </Label>
             <Select
-              value={selectedRunId}
-              onValueChange={setSelectedRunId}
+              value={selectedRunId || ACTIVE_LATEST_VALUE}
+              onValueChange={(value) => {
+                setSelectedRunId(value === ACTIVE_LATEST_VALUE ? "" : value);
+              }}
             >
               <SelectTrigger id="history-run" className="h-8 w-[200px] text-xs">
                 <SelectValue placeholder="Run" />
               </SelectTrigger>
-                <SelectContent>
-                  {runOptions.map((s) => (
+              <SelectContent>
+                <SelectItem value={ACTIVE_LATEST_VALUE}>Active / latest</SelectItem>
+                {runOptions.map((s) => (
                   <SelectItem key={s.stream_id ?? ""} value={s.stream_id ?? ""}>
                     {s.label || s.stream_id}
                   </SelectItem>

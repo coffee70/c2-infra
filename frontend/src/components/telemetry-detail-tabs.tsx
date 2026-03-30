@@ -73,8 +73,8 @@ interface TelemetryDetailTabsProps {
   recentData: RecentPoint[];
   /** Source (from banner / URL); only telemetry_sources ids. */
   sourceId: string;
-  /** Run id used for Summary/Live/Explain and default for History (newest run for source). */
-  currentRunId: string;
+  /** Selected run id, if any. Omit to use the active/latest stream for the source. */
+  currentRunId?: string | null;
   decodedName: string;
 }
 
@@ -92,6 +92,7 @@ export function TelemetryDetailTabs({
   currentRunId,
   decodedName,
 }: TelemetryDetailTabsProps) {
+  const effectiveRealtimeSourceId = currentRunId ?? sourceId;
   const initialChannels = [
     {
       name: decodedName,
@@ -109,9 +110,9 @@ export function TelemetryDetailTabs({
 
   return (
     <RealtimeTelemetryProvider
-      key={currentRunId}
+      key={effectiveRealtimeSourceId}
       channelNames={[decodedName]}
-      sourceId={currentRunId}
+      sourceId={effectiveRealtimeSourceId}
       vehicleId={sourceId}
       initialChannels={initialChannels}
     >
@@ -119,7 +120,7 @@ export function TelemetryDetailTabs({
         explain={explain}
         recentData={recentData}
         sourceId={sourceId}
-        currentRunId={currentRunId}
+        currentRunId={currentRunId ?? undefined}
         decodedName={decodedName}
       />
     </RealtimeTelemetryProvider>
@@ -402,7 +403,7 @@ function TelemetryDetailTabsContent({
                   <CardContent>
                     <TrendChartAnalysis
                       channelName={decodedName}
-                      sourceId={currentRunId}
+                      sourceId={currentRunId ?? sourceId}
                       units={explain.units}
                       bounds={{
                         p5: explain.statistics.p5,
@@ -430,7 +431,7 @@ function TelemetryDetailTabsContent({
                 <TelemetryHistoryTable
                   channelName={decodedName}
                   sourceId={sourceId}
-                  defaultRunId={currentRunId}
+                  defaultRunId={currentRunId ?? undefined}
                   units={explain.units}
                 />
                 </div>
@@ -445,12 +446,12 @@ function TelemetryDetailTabsContent({
                 <ExplanationBlock
                   channelName={decodedName}
                   sourceId={sourceId}
-                  runId={currentRunId}
+                  runId={currentRunId ?? undefined}
                 />
                 <ChannelRecentEvents
                   channelName={decodedName}
                   vehicleId={sourceId}
-                  streamId={currentRunId}
+                  streamId={currentRunId ?? undefined}
                   sinceMinutes={60}
                 />
                 </div>

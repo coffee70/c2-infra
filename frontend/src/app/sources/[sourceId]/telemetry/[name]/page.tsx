@@ -52,27 +52,17 @@ interface RecentPoint {
   value: number;
 }
 
-async function fetchRunsForSource(
+async function fetchSummary(
   name: string,
   sourceId: string,
-): Promise<{ stream_id: string; label: string }[]> {
+  runId?: string | null,
+): Promise<ExplainResponse | null> {
   try {
+    const params = new URLSearchParams();
+    if (runId) params.set("run_id", runId);
+    const suffix = params.toString() ? `?${params.toString()}` : "";
     const res = await fetch(
-      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/runs`,
-      { cache: "no-store" },
-    );
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.sources ?? [];
-  } catch {
-    return [];
-  }
-}
-
-async function fetchSummary(name: string, sourceId: string, runId: string): Promise<ExplainResponse | null> {
-  try {
-    const res = await fetch(
-      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/summary?run_id=${encodeURIComponent(runId)}`,
+      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/summary${suffix}`,
       { cache: "no-store" },
     );
     if (!res.ok) return null;
@@ -82,10 +72,16 @@ async function fetchSummary(name: string, sourceId: string, runId: string): Prom
   }
 }
 
-async function fetchRecent(name: string, sourceId: string, runId: string): Promise<RecentPoint[]> {
+async function fetchRecent(
+  name: string,
+  sourceId: string,
+  runId?: string | null,
+): Promise<RecentPoint[]> {
   try {
+    const params = new URLSearchParams({ limit: "100" });
+    if (runId) params.set("run_id", runId);
     const res = await fetch(
-      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/recent?limit=100&run_id=${encodeURIComponent(runId)}`,
+      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/recent?${params.toString()}`,
       { cache: "no-store" },
     );
     if (!res.ok) return [];
@@ -114,8 +110,7 @@ export default async function TelemetryDetailPage({
       : null;
   const sourceId = requestedSourceId;
 
-  const runs = await fetchRunsForSource(decodedName, sourceId);
-  const currentRunId = requestedRunId ?? runs[0]?.stream_id ?? sourceId;
+  const currentRunId = requestedRunId ?? null;
 
   const [explain, recentData] = await Promise.all([
     fetchSummary(decodedName, sourceId, currentRunId),

@@ -73,8 +73,6 @@ def ensure_stream_belongs_to_vehicle(
     if not stream_id:
         return logical_vehicle_id
     owning_vehicle_id = get_stream_vehicle_id(db, stream_id)
-    if owning_vehicle_id is None and normalize_vehicle_id(stream_id) == logical_vehicle_id:
-        return logical_vehicle_id
     if owning_vehicle_id != logical_vehicle_id:
         raise ValueError("Run not found for source")
     return stream_id

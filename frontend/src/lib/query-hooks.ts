@@ -409,7 +409,7 @@ export function useTelemetryExplanationQuery(
   runId?: string,
   enabled = true
 ) {
-  const suffix = runId && runId !== sourceId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  const suffix = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
   return useQuery<ExplainResponse>({
     queryKey: queryKeys.telemetryExplanation(channelName, runId ?? sourceId),
     enabled,

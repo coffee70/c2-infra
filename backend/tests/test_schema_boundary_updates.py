@@ -35,7 +35,11 @@ from app.routes import telemetry as telemetry_routes
 from app.services import telemetry_service as telemetry_service_module
 from app.services import overview_service as overview_service_module
 from app.services.telemetry_service import TelemetryService
-from app.services.source_run_service import StreamIdConflictError, register_stream
+from app.services.source_run_service import (
+    StreamIdConflictError,
+    ensure_stream_belongs_to_vehicle,
+    register_stream,
+)
 from app.services import realtime_service
 from app.models.telemetry import TelemetrySource
 
@@ -715,6 +719,24 @@ def test_register_stream_rejects_reserved_vehicle_id_for_same_vehicle() -> None:
         register_stream(db, vehicle_id="vehicle-a", stream_id="vehicle-a")
 
     db.execute.assert_not_called()
+
+
+def test_ensure_stream_belongs_to_vehicle_rejects_vehicle_id_as_explicit_run(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.services.source_run_service.get_stream_vehicle_id",
+        lambda _db, _stream_id: None,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        ensure_stream_belongs_to_vehicle(
+            MagicMock(),
+            vehicle_id="vehicle-a",
+            stream_id="vehicle-a",
+        )
+
+    assert "Run not found for source" in str(exc_info.value)
 
 
 def test_register_stream_uses_idempotent_missing_row_path() -> None:
