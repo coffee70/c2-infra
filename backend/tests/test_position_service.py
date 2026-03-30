@@ -401,6 +401,32 @@ def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_resolve_active_run_id_does_not_poll_simulator_when_cache_hits(monkeypatch) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    cached_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="simulator",
+        base_url="http://simulator:8001",
+    )
+
+    db.get.side_effect = lambda model, source_id: source if source_id == DROGONSAT_SOURCE_ID else None
+    db.execute.side_effect = AssertionError("local cache should short-circuit before DB or simulator polling")
+    register_active_run(cached_stream_id)
+
+    monkeypatch.setattr(
+        "app.services.source_run_service.httpx.Client",
+        lambda timeout=2.0: (_ for _ in ()).throw(AssertionError("status poll should not run")),
+    )
+
+    try:
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == cached_stream_id
+    finally:
+        clear_active_run(DROGONSAT_SOURCE_ID)
+
+
 def test_resolve_active_run_id_only_queries_active_stream_rows() -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
