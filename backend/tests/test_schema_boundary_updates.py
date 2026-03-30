@@ -723,6 +723,76 @@ async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(mo
     db.get.assert_called_once()
 
 
+@pytest.mark.anyio
+async def test_realtime_ingest_rejects_same_stream_id_for_multiple_vehicles(monkeypatch) -> None:
+    db = MagicMock()
+    sources = {
+        "vehicle-a": TelemetrySource(
+            id="vehicle-a",
+            name="Vehicle A",
+            source_type="vehicle",
+            telemetry_definition_path="defs/vehicle-a.yaml",
+        ),
+        "vehicle-b": TelemetrySource(
+            id="vehicle-b",
+            name="Vehicle B",
+            source_type="vehicle",
+            telemetry_definition_path="defs/vehicle-b.yaml",
+        ),
+    }
+    db.get.side_effect = lambda model, key: sources.get(key) if model is TelemetrySource else None
+    db.execute.side_effect = lambda *_args, **_kwargs: _ScalarResult(None)
+
+    class FakeBus:
+        def publish_measurement(self, *_args, **_kwargs):
+            raise AssertionError("validation should fail before queueing")
+
+        def measurement_queue_size(self):
+            return 0
+
+        def measurement_queue_maxsize(self):
+            return 1
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(request_id="req-1"),
+        headers={"X-Request-ID": "req-1"},
+        method="POST",
+        url=SimpleNamespace(path="/realtime/ingest"),
+    )
+
+    monkeypatch.setattr(realtime_routes, "get_session_factory", lambda: lambda: db)
+    monkeypatch.setattr(realtime_routes, "get_realtime_bus", lambda: FakeBus())
+    monkeypatch.setattr(realtime_routes, "audit_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await realtime_routes.ingest_realtime(
+            body=MeasurementEventBatch.model_validate(
+                {
+                    "events": [
+                        {
+                            "vehicle_id": "vehicle-a",
+                            "stream_id": "shared-stream",
+                            "channel_name": "VBAT",
+                            "value": 4.2,
+                            "reception_time": "2026-03-28T12:00:00Z",
+                        },
+                        {
+                            "vehicle_id": "vehicle-b",
+                            "stream_id": "shared-stream",
+                            "channel_name": "VBAT",
+                            "value": 4.3,
+                            "reception_time": "2026-03-28T12:00:01Z",
+                        },
+                    ]
+                }
+            ),
+            request=request,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "stream_id maps to multiple vehicles in the same batch"
+
+
 def test_register_stream_rejects_vehicle_reassignment() -> None:
     stream = SimpleNamespace(
         id="vehicle-b-2026-03-28T12-00-00Z",

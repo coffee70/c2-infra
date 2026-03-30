@@ -67,13 +67,18 @@ def _resolve_stream_vehicle_id(db: Session, stream_id: str) -> str:
 
 def _validate_stream_batch_identities(db: Session, events: list[MeasurementEvent]) -> None:
     """Reject colliding or foreign-owned stream ids before queueing realtime events."""
-    seen: set[tuple[str, str]] = set()
+    stream_owners: dict[str, str] = {}
     for event in events:
         logical_vehicle_id = normalize_vehicle_id(event.vehicle_id)
-        dedupe_key = (logical_vehicle_id, event.stream_id)
-        if dedupe_key in seen:
+        prior_owner = stream_owners.get(event.stream_id)
+        if prior_owner is not None:
+            if prior_owner != logical_vehicle_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="stream_id maps to multiple vehicles in the same batch",
+                )
             continue
-        seen.add(dedupe_key)
+        stream_owners[event.stream_id] = logical_vehicle_id
 
         reserved_vehicle_id = normalize_vehicle_id(event.stream_id)
         reserved_vehicle = db.get(TelemetrySource, reserved_vehicle_id)

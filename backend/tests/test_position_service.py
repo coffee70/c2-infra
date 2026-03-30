@@ -620,7 +620,7 @@ def test_resolve_active_run_id_only_queries_active_stream_rows() -> None:
     assert any("JOIN telemetry_metadata" in sql and "telemetry_metadata.source_id" in sql for sql in seen)
 
 
-def test_resolve_active_run_id_prefers_persisted_active_stream_over_stale_row() -> None:
+def test_resolve_active_run_id_ignores_stale_active_row_without_current_rows() -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
@@ -661,11 +661,13 @@ def test_resolve_active_run_id_prefers_persisted_active_stream_over_stale_row() 
     db.get.side_effect = fake_get
     db.execute.side_effect = [_EmptyResult(), _StaleResult(), _EmptyResult()]
 
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
-def test_resolve_active_run_id_returns_persisted_active_stream_for_simulator(monkeypatch) -> None:
+def test_resolve_active_run_id_falls_back_to_logical_vehicle_when_simulator_status_is_unavailable(
+    monkeypatch,
+) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
@@ -712,7 +714,7 @@ def test_resolve_active_run_id_returns_persisted_active_stream_for_simulator(mon
     )
 
     try:
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
         assert stale_stream.status == "active"
     finally:
         clear_active_run(DROGONSAT_SOURCE_ID)
