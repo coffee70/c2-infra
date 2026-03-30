@@ -231,7 +231,7 @@ def register_stream(
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
     reserved_vehicle_id = normalize_vehicle_id(stream_id)
     existing_vehicle = db.get(TelemetrySource, reserved_vehicle_id)
-    if existing_vehicle is not None:
+    if existing_vehicle is not None and reserved_vehicle_id != logical_vehicle_id:
         raise StreamIdConflictError("stream_id conflicts with an existing vehicle id")
 
     observed_at = seen_at or started_at or datetime.now(timezone.utc)

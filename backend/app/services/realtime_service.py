@@ -23,7 +23,12 @@ from app.models.telemetry import (
     WatchlistEntry,
 )
 from app.services.channel_alias_service import get_aliases_by_telemetry_ids
-from app.services.source_run_service import get_stream_vehicle_id, normalize_source_id, run_id_to_source_id
+from app.services.source_run_service import (
+    get_stream_vehicle_id,
+    normalize_source_id,
+    resolve_active_stream_id,
+    run_id_to_source_id,
+)
 from app.utils.subsystem import infer_subsystem
 from telemetry_catalog.builtins import BUILT_IN_SOURCES
 from telemetry_catalog.builtins import LEGACY_SOURCE_ID_ALIASES
@@ -1154,6 +1159,8 @@ def get_realtime_snapshot_for_channels(
         return []
     data_source_id = normalize_source_id(source_id)
     logical_source_id = _resolve_stream_vehicle_id(db, source_id)
+    if db.get(TelemetryStream, data_source_id) is None and data_source_id == logical_source_id:
+        data_source_id = resolve_active_stream_id(db, logical_source_id)
 
     stmt = (
         select(TelemetryMetadata, TelemetryCurrent)
