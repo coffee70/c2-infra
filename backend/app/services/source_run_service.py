@@ -155,6 +155,13 @@ def _cache_simulator_status(
 
 
 def _get_cached_simulator_status(vehicle_id: str) -> Optional[dict[str, object]]:
+    cached = _get_cached_simulator_status_entry(vehicle_id)
+    if cached is None:
+        return None
+    return cached[0]
+
+
+def _get_cached_simulator_status_entry(vehicle_id: str) -> Optional[tuple[dict[str, object], float]]:
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
     cached = _simulator_status_by_vehicle.get(logical_vehicle_id)
     if cached is None:
@@ -163,7 +170,7 @@ def _get_cached_simulator_status(vehicle_id: str) -> Optional[dict[str, object]]
     if time.time() - seen_at > SIMULATOR_STATUS_CACHE_TTL_SEC:
         _simulator_status_by_vehicle.pop(logical_vehicle_id, None)
         return None
-    return status
+    return status, seen_at
 
 
 def _should_refresh_simulator_status(
@@ -324,6 +331,17 @@ def _resolve_simulator_status(
 
 def get_cached_active_run_id(vehicle_id: str, *, max_age_sec: float = ACTIVE_STREAM_CACHE_TTL_SEC) -> Optional[str]:
     """Backward-compatible wrapper returning the active stream id for a vehicle."""
+    cached = _get_cached_active_run_entry(vehicle_id, max_age_sec=max_age_sec)
+    if cached is None:
+        return None
+    return cached[0]
+
+
+def _get_cached_active_run_entry(
+    vehicle_id: str,
+    *,
+    max_age_sec: float = ACTIVE_STREAM_CACHE_TTL_SEC,
+) -> Optional[tuple[str, float]]:
     logical_vehicle_id = run_id_to_source_id(vehicle_id)
     cached = _active_stream_by_vehicle.get(logical_vehicle_id)
     if cached is None:
@@ -332,7 +350,7 @@ def get_cached_active_run_id(vehicle_id: str, *, max_age_sec: float = ACTIVE_STR
     if time.time() - seen_at > max_age_sec:
         _active_stream_by_vehicle.pop(logical_vehicle_id, None)
         return None
-    return stream_id
+    return stream_id, seen_at
 
 
 def _run_id_started_at(source_id: str) -> Optional[datetime]:
@@ -353,9 +371,20 @@ def resolve_active_run_id(db: Session, source_id: str, *, timeout: float = 2.0) 
 def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2.0) -> str:
     """Resolve a logical vehicle id to the active telemetry stream id when available."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    cached_stream_entry = _get_cached_active_run_entry(logical_vehicle_id)
 
     src = get_logical_source(db, logical_vehicle_id)
     if src is not None and src.source_type == "simulator" and src.base_url:
+        cached_status_entry = _get_cached_simulator_status_entry(logical_vehicle_id)
+        # A recently accepted stream update is newer than a throttled simulator snapshot,
+        # so prefer the active-stream cache when it was updated after the last /status poll.
+        if (
+            cached_stream_entry is not None
+            and cached_status_entry is not None
+            and cached_stream_entry[1] >= cached_status_entry[1]
+        ):
+            return cached_stream_entry[0]
+
         if _should_refresh_simulator_status(logical_vehicle_id):
             payload: dict[str, object] | None = None
             try:
@@ -378,8 +407,8 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
                 if resolved is not None:
                     return resolved
         else:
-            cached_status = _get_cached_simulator_status(logical_vehicle_id)
-            if cached_status is not None:
+            if cached_status_entry is not None:
+                cached_status, _ = cached_status_entry
                 resolved = _resolve_simulator_status(
                     db,
                     logical_vehicle_id,
@@ -389,9 +418,8 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
                 if resolved is not None:
                     return resolved
 
-    cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
-    if cached_stream_id is not None:
-        return cached_stream_id
+    if cached_stream_entry is not None:
+        return cached_stream_entry[0]
 
     freshness_cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
     row = (

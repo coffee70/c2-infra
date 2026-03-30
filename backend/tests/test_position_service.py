@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -9,6 +10,7 @@ from unittest.mock import MagicMock
 from app.models.schemas import PositionSample
 from app.models.telemetry import TelemetrySource
 from app.services import position_service
+from app.services import source_run_service as srs
 from app.services.source_run_service import (
     clear_active_run,
     get_cached_active_run_id,
@@ -420,6 +422,44 @@ def test_resolve_active_run_id_prefers_live_simulator_status_over_cached_run(mon
         assert captured["receiver_id"] == "rx-1"
         assert get_cached_active_run_id(DROGONSAT_SOURCE_ID) == live_stream_id
         db.execute.assert_not_called()
+    finally:
+        clear_active_run(DROGONSAT_SOURCE_ID)
+
+
+def test_resolve_active_run_id_prefers_recent_active_cache_over_stale_simulator_status(
+    monkeypatch,
+) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    cached_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-53Z"
+    stale_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="simulator",
+        base_url="http://simulator:8001",
+    )
+
+    db.get.side_effect = lambda model, key: source if model is TelemetrySource and key == DROGONSAT_SOURCE_ID else None
+    db.execute.side_effect = AssertionError("stale simulator cache should not outrank a newer active stream")
+
+    srs._cache_simulator_status(
+        DROGONSAT_SOURCE_ID,
+        state="running",
+        active_stream_id=stale_stream_id,
+        packet_source="simulator-link",
+        receiver_id="rx-1",
+        seen_at=time.time() - 10.0,
+    )
+    register_active_run(cached_stream_id, seen_at=time.time())
+
+    monkeypatch.setattr(
+        "app.services.source_run_service.httpx.Client",
+        lambda timeout=2.0: (_ for _ in ()).throw(AssertionError("should not poll when a newer active cache exists")),
+    )
+
+    try:
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == cached_stream_id
     finally:
         clear_active_run(DROGONSAT_SOURCE_ID)
 
