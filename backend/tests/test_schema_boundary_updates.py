@@ -507,14 +507,52 @@ def test_insert_data_registers_new_stream_without_prior_persistence(monkeypatch)
     assert calls == ["register:vehicle-a:vehicle-a-2026-03-28T12-00-00Z"]
 
 
+def test_insert_data_does_not_register_stream_when_telemetry_missing(monkeypatch) -> None:
+    service = TelemetryService(MagicMock(), object(), object())
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        telemetry_service_module,
+        "get_stream_vehicle_id",
+        lambda _db, _stream_id: None,
+    )
+    monkeypatch.setattr(
+        telemetry_service_module,
+        "register_stream",
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: calls.append(
+            f"register:{vehicle_id}:{stream_id}"
+        ),
+    )
+    monkeypatch.setattr(service, "get_by_name", lambda _source_id, _name: None)
+
+    with pytest.raises(ValueError) as exc_info:
+        service.insert_data(
+            "vehicle-a-2026-03-28T12-00-00Z",
+            "VBAT",
+            [(datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc), 4.2)],
+            vehicle_id="vehicle-a",
+        )
+
+    assert "Telemetry not found" in str(exc_info.value)
+    assert calls == []
+
+
 def test_run_listing_routes_emit_stream_ids() -> None:
     source_db = MagicMock()
-    source_db.execute.return_value = _FetchAllResult(
-        [
-            ("a6107734-80af-4f61-8c69-d53ab64dd13a", datetime(2026, 3, 28, 12, 5, tzinfo=timezone.utc)),
-            ("7bc0f5c6-2f47-4e88-9f1e-0ce5d73d0b2b", datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)),
-        ]
-    )
+
+    def fake_execute(statement):
+        sql = str(statement).lower()
+        assert "telemetry_data" in sql
+        assert "telemetry_metadata" in sql
+        assert "telemetry_streams" not in sql
+        return _FetchAllResult(
+            [
+                ("a6107734-80af-4f61-8c69-d53ab64dd13a", datetime(2026, 3, 28, 12, 5, tzinfo=timezone.utc)),
+                ("7bc0f5c6-2f47-4e88-9f1e-0ce5d73d0b2b", datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)),
+            ]
+        )
+
+    source_db.execute.side_effect = fake_execute
 
     response = telemetry_routes.get_source_runs("vehicle-a", db=source_db)
 
@@ -648,9 +686,17 @@ def test_channel_run_listing_route_emits_stream_ids(monkeypatch) -> None:
     )
 
     db = MagicMock()
-    db.execute.return_value = _FetchAllResult(
-        [("a6107734-80af-4f61-8c69-d53ab64dd13a", datetime(2026, 3, 28, 12, 5, tzinfo=timezone.utc))]
-    )
+
+    def fake_execute(statement):
+        sql = str(statement).lower()
+        assert "telemetry_data" in sql
+        assert "telemetry_metadata" in sql
+        assert "telemetry_streams" not in sql
+        return _FetchAllResult(
+            [("a6107734-80af-4f61-8c69-d53ab64dd13a", datetime(2026, 3, 28, 12, 5, tzinfo=timezone.utc))]
+        )
+
+    db.execute.side_effect = fake_execute
 
     response = telemetry_routes.get_channel_runs("VBAT", "vehicle-a", db=db)
 

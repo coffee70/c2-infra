@@ -16,12 +16,12 @@ ENTITY_TYPES = ("telemetry_channel", "alert", "system", "operator_action")
 
 
 def _stream_scope_clause(stream_id: str):
-    """Include stream-scoped events plus vehicle-level system events."""
+    """Include stream-scoped events plus the shared feed-status event."""
     return or_(
         OpsEvent.stream_id == stream_id,
         and_(
-            OpsEvent.entity_type == "system",
             OpsEvent.stream_id.is_(None),
+            OpsEvent.event_type == "system.feed_status",
         ),
     )
 

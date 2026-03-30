@@ -144,6 +144,9 @@ class TelemetryService:
         existing_owner = get_stream_vehicle_id(self._db, stream_id)
         if existing_owner is not None and normalize_vehicle_id(existing_owner) != logical_vehicle_id:
             raise ValueError("Run not found for source")
+        meta = self.get_by_name(logical_vehicle_id, telemetry_name)
+        if not meta:
+            raise ValueError(f"Telemetry not found: {telemetry_name}")
         register_stream(
             self._db,
             vehicle_id=logical_vehicle_id,
@@ -151,9 +154,6 @@ class TelemetryService:
             packet_source=packet_source,
             receiver_id=receiver_id,
         )
-        meta = self.get_by_name(logical_vehicle_id, telemetry_name)
-        if not meta:
-            raise ValueError(f"Telemetry not found: {telemetry_name}")
 
         rows = [
             TelemetryData(

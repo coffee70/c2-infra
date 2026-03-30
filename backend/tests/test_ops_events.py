@@ -69,7 +69,7 @@ def test_write_event_uses_vehicle_and_stream_fields() -> None:
     db.flush.assert_called_once()
 
 
-def test_query_events_with_stream_scope_keeps_vehicle_level_system_events() -> None:
+def test_query_events_with_stream_scope_keeps_feed_status_events() -> None:
     db = MagicMock()
     statements: list[str] = []
 
@@ -85,7 +85,7 @@ def test_query_events_with_stream_scope_keeps_vehicle_level_system_events() -> N
             return []
 
     def fake_execute(statement):
-        sql = str(statement)
+        sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
         statements.append(sql)
         if "count(" in sql.lower():
             return _CountResult()
@@ -101,4 +101,4 @@ def test_query_events_with_stream_scope_keeps_vehicle_level_system_events() -> N
     )
 
     assert any("ops_events.stream_id IS NULL" in sql for sql in statements)
-    assert any("ops_events.entity_type = :entity_type_1" in sql for sql in statements)
+    assert any("ops_events.event_type = 'system.feed_status'" in sql for sql in statements)

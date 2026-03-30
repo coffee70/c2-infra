@@ -7,7 +7,7 @@ from typing import Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,7 +17,6 @@ from app.models.telemetry import (
     TelemetryMetadata,
     TelemetrySource,
     TelemetryStatistics,
-    TelemetryStream,
 )
 from app.models.schemas import (
     ActiveRunUpdate,
@@ -291,11 +290,14 @@ def get_source_runs(
     logical_source_id = normalize_source_id(source_id)
 
     stmt = (
-        select(TelemetryStream.id, TelemetryStream.last_seen_at)
-        .where(
-            TelemetryStream.vehicle_id == logical_source_id,
+        select(
+            TelemetryData.source_id,
+            func.max(TelemetryData.timestamp).label("last_seen_at"),
         )
-        .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
+        .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
+        .where(TelemetryMetadata.vehicle_id == logical_source_id)
+        .group_by(TelemetryData.source_id)
+        .order_by(desc(func.max(TelemetryData.timestamp)), TelemetryData.source_id.desc())
     )
 
     rows = db.execute(stmt).fetchall()
@@ -617,14 +619,17 @@ def get_channel_runs(
 
     logical_source_id = normalize_source_id(source_id)
     stmt = (
-        select(TelemetryStream.id, TelemetryStream.last_seen_at)
-        .join(TelemetryData, TelemetryData.source_id == TelemetryStream.id)
+        select(
+            TelemetryData.source_id,
+            func.max(TelemetryData.timestamp).label("last_seen_at"),
+        )
+        .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
         .where(
-            TelemetryStream.vehicle_id == logical_source_id,
+            TelemetryMetadata.vehicle_id == logical_source_id,
             TelemetryData.telemetry_id == meta.id,
         )
-        .distinct()
-        .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
+        .group_by(TelemetryData.source_id)
+        .order_by(desc(func.max(TelemetryData.timestamp)), TelemetryData.source_id.desc())
     )
 
     rows = db.execute(stmt).fetchall()
