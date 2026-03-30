@@ -88,13 +88,15 @@ def create_discovered_channel_metadata(
             discovered_at=seen_at,
             last_seen_at=seen_at,
         )
-        db.add(meta)
+        savepoint = db.begin_nested()
         try:
+            db.add(meta)
             db.flush()
+            savepoint.commit()
             return meta
         except IntegrityError:
             # Another ingest worker won the race to create the same discovered channel.
-            db.rollback()
+            savepoint.rollback()
             meta = db.execute(
                 select(TelemetryMetadata).where(
                     TelemetryMetadata.source_id == source_id,

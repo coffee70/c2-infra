@@ -1317,6 +1317,7 @@ def test_create_discovered_channel_metadata_recovers_from_concurrent_insert() ->
     existing = MagicMock()
     existing.channel_origin = "discovered"
     existing.discovery_namespace = None
+    savepoint = MagicMock()
 
     class ScalarResult:
         def __init__(self, rows):
@@ -1332,6 +1333,7 @@ def test_create_discovered_channel_metadata_recovers_from_concurrent_insert() ->
         ScalarResult([]),
         ScalarResult([existing]),
     ]
+    db.begin_nested.return_value = savepoint
     db.flush.side_effect = IntegrityError("insert", {}, Exception("duplicate key"))
 
     meta = create_discovered_channel_metadata(
@@ -1342,7 +1344,9 @@ def test_create_discovered_channel_metadata_recovers_from_concurrent_insert() ->
     )
 
     assert meta is existing
-    db.rollback.assert_called_once()
+    savepoint.rollback.assert_called_once()
+    savepoint.commit.assert_not_called()
+    db.rollback.assert_not_called()
 
 
 def test_source_has_telemetry_history_uses_stream_registry() -> None:

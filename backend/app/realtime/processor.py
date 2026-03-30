@@ -269,7 +269,7 @@ class RealtimeProcessor:
                 return
             meta = create_discovered_channel_metadata(
                 db,
-                vehicle_id=vehicle_id,
+                source_id=vehicle_id,
                 channel_name=channel_name,
                 discovery_namespace=discovery_namespace,
                 observed_at=recv_time,

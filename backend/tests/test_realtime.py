@@ -260,9 +260,10 @@ def test_process_measurement_creates_discovered_channel_for_unknown_input(monkey
     db.get.return_value = None
     db.add.side_effect = added.append
 
+    create_mock = MagicMock(return_value=meta)
     monkeypatch.setattr(
         "app.realtime.processor.create_discovered_channel_metadata",
-        lambda *args, **kwargs: meta,
+        create_mock,
     )
     monkeypatch.setattr(processor, "_broadcast_telemetry_update", updates.append)
     monkeypatch.setattr(
@@ -287,6 +288,7 @@ def test_process_measurement_creates_discovered_channel_for_unknown_input(monkey
 
     processor._process_measurement(db, event)
 
+    assert create_mock.call_args.kwargs["source_id"] == "source-a"
     assert any(getattr(obj, "telemetry_id", None) == meta.id for obj in added)
     assert any(getattr(obj, "state", None) == "normal" for obj in added)
     assert len(updates) == 1
