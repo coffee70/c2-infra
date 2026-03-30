@@ -17,6 +17,7 @@ from app.models.telemetry import (
     TelemetryMetadata,
     TelemetrySource,
     TelemetryStatistics,
+    TelemetryStream,
 )
 from app.models.schemas import (
     ActiveRunUpdate,
@@ -291,13 +292,11 @@ def get_source_runs(
 
     stmt = (
         select(
-            TelemetryData.source_id,
-            func.max(TelemetryData.timestamp).label("last_seen_at"),
+            TelemetryStream.id,
+            TelemetryStream.last_seen_at,
         )
-        .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
-        .where(TelemetryMetadata.vehicle_id == logical_source_id)
-        .group_by(TelemetryData.source_id)
-        .order_by(desc(func.max(TelemetryData.timestamp)), TelemetryData.source_id.desc())
+        .where(TelemetryStream.vehicle_id == logical_source_id)
+        .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
     )
 
     rows = db.execute(stmt).fetchall()
@@ -618,9 +617,10 @@ def get_channel_runs(
         raise HTTPException(status_code=404, detail="Telemetry not found")
 
     logical_source_id = normalize_source_id(source_id)
-    stmt = (
+
+    channel_last_seen = (
         select(
-            TelemetryData.source_id,
+            TelemetryData.source_id.label("source_id"),
             func.max(TelemetryData.timestamp).label("last_seen_at"),
         )
         .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
@@ -629,7 +629,22 @@ def get_channel_runs(
             TelemetryData.telemetry_id == meta.id,
         )
         .group_by(TelemetryData.source_id)
-        .order_by(desc(func.max(TelemetryData.timestamp)), TelemetryData.source_id.desc())
+        .subquery()
+    )
+
+    stmt = (
+        select(
+            TelemetryStream.id,
+            func.coalesce(channel_last_seen.c.last_seen_at, TelemetryStream.last_seen_at).label(
+                "last_seen_at"
+            ),
+        )
+        .outerjoin(channel_last_seen, channel_last_seen.c.source_id == TelemetryStream.id)
+        .where(TelemetryStream.vehicle_id == logical_source_id)
+        .order_by(
+            desc(func.coalesce(channel_last_seen.c.last_seen_at, TelemetryStream.last_seen_at)),
+            TelemetryStream.id.desc(),
+        )
     )
 
     rows = db.execute(stmt).fetchall()

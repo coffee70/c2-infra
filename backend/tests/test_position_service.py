@@ -595,6 +595,58 @@ def test_resolve_active_run_id_recovers_stream_from_idle_registry_when_current_r
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_resolve_active_run_id_prefers_simulator_status_over_idle_registry_row(monkeypatch) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    idle_stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="idle",
+        packet_source=None,
+        receiver_id=None,
+        last_seen_at=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
+    )
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="simulator",
+        base_url="http://simulator:8001",
+    )
+
+    def fake_get(model, key):
+        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
+            return source
+        if model.__name__ == "TelemetryStream" and key == stream_id:
+            return idle_stream
+        return None
+
+    db.get.side_effect = fake_get
+    db.execute.side_effect = AssertionError("simulator status should run before persisted rows")
+
+    monkeypatch.setattr(
+        "app.services.source_run_service.httpx.Client",
+        lambda timeout=2.0: _FakeHttpxClient(
+            _FakeHttpxResponse(
+                {
+                    "state": "running",
+                    "config": {
+                        "stream_id": stream_id,
+                        "packet_source": "packet-new",
+                        "receiver_id": "rx-new",
+                    },
+                }
+            )
+        ),
+    )
+
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
+    assert idle_stream.status == "active"
+    assert idle_stream.packet_source == "packet-new"
+    assert idle_stream.receiver_id == "rx-new"
+    clear_active_run(DROGONSAT_SOURCE_ID)
+
+
 def test_resolve_active_run_id_respects_explicit_idle_stream_state() -> None:
     source_id = "vehicle-a"
     clear_active_run(source_id)
