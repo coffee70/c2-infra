@@ -33,6 +33,7 @@ from app.routes import simulator as simulator_routes
 from app.routes import position as position_routes
 from app.routes import telemetry as telemetry_routes
 from app.services import telemetry_service as telemetry_service_module
+from app.services import overview_service as overview_service_module
 from app.services.telemetry_service import TelemetryService
 from app.services.source_run_service import StreamIdConflictError, register_stream
 from app.services import realtime_service
@@ -155,8 +156,8 @@ def test_set_active_run_registers_new_stream_ids(monkeypatch) -> None:
     monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         telemetry_routes,
-        "get_stream_vehicle_id",
-        lambda _db, _stream_id: None,
+        "resolve_logical_vehicle_id",
+        lambda _db, _source_id: "vehicle-a",
     )
     monkeypatch.setattr(
         telemetry_routes,
@@ -173,7 +174,7 @@ def test_set_active_run_registers_new_stream_ids(monkeypatch) -> None:
 
     response = telemetry_routes.set_active_run(
         body=telemetry_routes.ActiveRunUpdate(
-            vehicle_id="vehicle-a",
+            vehicle_id="opaque-stream-id",
             stream_id="2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e",
             state="active",
         ),
@@ -187,6 +188,208 @@ def test_set_active_run_registers_new_stream_ids(monkeypatch) -> None:
     }
     assert captured["vehicle_id"] == "vehicle-a"
     assert captured["stream_id"] == "2d2cc0c2-5a5a-4ac6-8f2d-7d04d6c35b0e"
+
+
+def test_overview_service_resolves_stream_inputs_to_logical_vehicle(monkeypatch) -> None:
+    from app.services.overview_service import get_all_telemetry_channels_for_source, get_watchlist
+
+    logical_vehicle_id = "vehicle-a"
+    opaque_source_id = "opaque-stream-id"
+    telemetry_id = uuid4()
+    db = MagicMock()
+    captured_sql: list[str] = []
+    alias_vehicle_ids: list[str] = []
+
+    class _FetchAllResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    first_rows = [(telemetry_id, "VBAT", "catalog", None)]
+    second_rows = [(logical_vehicle_id, "VBAT", 0, telemetry_id, "catalog", None)]
+
+    def fake_execute(statement):
+        captured_sql.append(str(statement.compile(compile_kwargs={"literal_binds": True})))
+        if len(captured_sql) == 1:
+            return _FetchAllResult(first_rows)
+        return _FetchAllResult(second_rows)
+
+    db.execute.side_effect = fake_execute
+    monkeypatch.setattr(
+        overview_service_module,
+        "resolve_logical_vehicle_id",
+        lambda _db, _source_id: logical_vehicle_id,
+    )
+    monkeypatch.setattr(
+        overview_service_module,
+        "get_aliases_by_telemetry_ids",
+        lambda _db, *, vehicle_id, telemetry_ids: (
+            alias_vehicle_ids.append(vehicle_id)
+            or ({telemetry_ids[0]: ["BAT"]} if telemetry_ids else {})
+        ),
+    )
+
+    channels = get_all_telemetry_channels_for_source(db, opaque_source_id)
+    watchlist_rows = get_watchlist(
+        db,
+        opaque_source_id,
+    )
+
+    assert channels == [
+        {
+            "name": "VBAT",
+            "aliases": ["BAT"],
+            "channel_origin": "catalog",
+            "discovery_namespace": None,
+        }
+    ]
+    assert watchlist_rows == [
+        {
+            "source_id": logical_vehicle_id,
+            "name": "VBAT",
+            "aliases": ["BAT"],
+            "display_order": 0,
+            "channel_origin": "catalog",
+            "discovery_namespace": None,
+        }
+    ]
+    assert alias_vehicle_ids == [logical_vehicle_id, logical_vehicle_id]
+    assert any(f"telemetry_metadata.source_id = '{logical_vehicle_id}'" in sql for sql in captured_sql)
+    assert any(f"watchlist.source_id = '{logical_vehicle_id}'" in sql for sql in captured_sql)
+
+
+def test_telemetry_filter_routes_resolve_stream_inputs_to_logical_vehicle(monkeypatch) -> None:
+    logical_vehicle_id = "vehicle-a"
+    opaque_source_id = "opaque-stream-id"
+    db = MagicMock()
+    captured_sql: list[str] = []
+
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._rows
+
+        def fetchall(self):
+            return self._rows
+
+    subsystem_meta = SimpleNamespace(name="BATTERY_VOLT", units="V")
+
+    def fake_execute(statement):
+        captured_sql.append(str(statement.compile(compile_kwargs={"literal_binds": True})))
+        if len(captured_sql) == 1:
+            return _Result([subsystem_meta])
+        if len(captured_sql) == 2:
+            return _Result([("V",)])
+        return _Result([("stream-1", datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc))])
+
+    db.execute.side_effect = fake_execute
+    monkeypatch.setattr(
+        telemetry_routes,
+        "resolve_logical_vehicle_id",
+        lambda _db, _source_id: logical_vehicle_id,
+    )
+    monkeypatch.setattr(telemetry_routes, "infer_subsystem", lambda _name, _meta: "power")
+
+    subsystems = telemetry_routes.list_subsystems(source_id=opaque_source_id, db=db)
+    units = telemetry_routes.list_units(source_id=opaque_source_id, db=db)
+    sources = telemetry_routes.get_source_runs(source_id=opaque_source_id, db=db)
+
+    assert subsystems == {"subsystems": ["power"]}
+    assert units == {"units": ["V"]}
+    assert sources.sources[0].stream_id == "stream-1"
+    assert any(f"telemetry_metadata.source_id = '{logical_vehicle_id}'" in sql for sql in captured_sql)
+
+
+def test_overview_summary_routes_resolve_stream_inputs_to_logical_vehicle(monkeypatch) -> None:
+    from app.services.overview_service import get_anomalies, get_overview
+
+    logical_vehicle_id = "vehicle-a"
+    opaque_source_id = "opaque-stream-id"
+    telemetry_id = uuid4()
+    meta = SimpleNamespace(
+        id=telemetry_id,
+        name="VBAT",
+        units="V",
+        description=None,
+        channel_origin=None,
+        discovery_namespace=None,
+        red_low=None,
+        red_high=4.5,
+    )
+    stats = SimpleNamespace(std_dev=1.0, mean=4.0)
+    current = SimpleNamespace(value=5.0, generation_time=datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc))
+    db = MagicMock()
+    captured_sql: list[str] = []
+
+    class _Result:
+        def __init__(self, first_value, rows):
+            self._first_value = first_value
+            self._rows = rows
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._first_value
+
+        def fetchall(self):
+            return self._rows
+
+    def fake_execute(statement):
+        captured_sql.append(str(statement.compile(compile_kwargs={"literal_binds": True})))
+        return _Result(meta, [(meta, stats)])
+
+    db.execute.side_effect = fake_execute
+    db.get.side_effect = lambda model, key: current if model is overview_service_module.TelemetryCurrent and key == (opaque_source_id, telemetry_id) else stats if model is overview_service_module.TelemetryStatistics and key == (opaque_source_id, telemetry_id) else None
+
+    monkeypatch.setattr(
+        overview_service_module,
+        "resolve_logical_vehicle_id",
+        lambda _db, _source_id: logical_vehicle_id,
+    )
+    monkeypatch.setattr(
+        overview_service_module,
+        "get_watchlist",
+        lambda _db, _source_id: [
+            {
+                "source_id": logical_vehicle_id,
+                "name": meta.name,
+                "aliases": ["BAT"],
+                "display_order": 0,
+                "channel_origin": "catalog",
+                "discovery_namespace": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        overview_service_module,
+        "get_all_telemetry_channels_for_source",
+        lambda _db, _source_id: [
+            {
+                "name": meta.name,
+                "aliases": ["BAT"],
+                "channel_origin": "catalog",
+                "discovery_namespace": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(overview_service_module, "infer_subsystem", lambda _name, _meta: "power")
+    monkeypatch.setattr(overview_service_module, "_get_recent_for_sparkline", lambda *_args, **_kwargs: [])
+
+    overview = get_overview(db, opaque_source_id)
+    anomalies = get_anomalies(db, opaque_source_id)
+
+    assert overview[0]["name"] == "VBAT"
+    assert overview[0]["aliases"] == ["BAT"]
+    assert anomalies["power"][0]["name"] == "VBAT"
+    assert any(f"telemetry_metadata.source_id = '{logical_vehicle_id}'" in sql for sql in captured_sql)
 
 
 def test_set_active_run_rejects_stream_vehicle_mismatch(monkeypatch) -> None:

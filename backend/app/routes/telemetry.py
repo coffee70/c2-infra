@@ -70,6 +70,7 @@ from app.services.source_run_service import (
     get_stream_vehicle_id,
     normalize_vehicle_id,
     normalize_source_id,
+    resolve_logical_vehicle_id,
     register_stream,
     StreamIdConflictError,
     resolve_active_stream_id,
@@ -291,7 +292,7 @@ def get_source_runs(
     db: Session = Depends(get_db),
 ):
     """List run ids for a source (any channel). Newest first."""
-    logical_source_id = normalize_source_id(source_id)
+    logical_source_id = resolve_logical_vehicle_id(db, source_id)
 
     stmt = (
         select(
@@ -384,7 +385,7 @@ def list_subsystems(
     db: Session = Depends(get_db),
 ):
     """Get distinct subsystem tags for filter dropdown."""
-    logical_source_id = run_id_to_source_id(source_id)
+    logical_source_id = resolve_logical_vehicle_id(db, source_id)
     stmt = (
         select(TelemetryMetadata)
         .where(TelemetryMetadata.source_id == logical_source_id)
@@ -403,7 +404,7 @@ def list_units(
     db: Session = Depends(get_db),
 ):
     """Get distinct units for filter dropdown."""
-    logical_source_id = run_id_to_source_id(source_id)
+    logical_source_id = resolve_logical_vehicle_id(db, source_id)
     stmt = (
         select(TelemetryMetadata.units)
         .where(TelemetryMetadata.source_id == logical_source_id)
@@ -619,7 +620,7 @@ def get_channel_runs(
     if not meta:
         raise HTTPException(status_code=404, detail="Telemetry not found")
 
-    logical_source_id = normalize_source_id(source_id)
+    logical_source_id = resolve_logical_vehicle_id(db, source_id)
 
     channel_last_seen = (
         select(
@@ -797,7 +798,7 @@ def set_active_run(
     External adapters (e.g. SatNOGS/FUNcube-1) use this to mark AOS/LOS
     without needing simulator-specific /status polling.
     """
-    logical_source_id = run_id_to_source_id(body.vehicle_id)
+    logical_source_id = resolve_logical_vehicle_id(db, body.vehicle_id)
 
     if body.state == "active":
         if not body.stream_id:

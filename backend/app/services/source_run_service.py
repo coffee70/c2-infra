@@ -56,6 +56,13 @@ def run_id_to_source_id(source_id: str) -> str:
     return resolve_source_id_alias(prefix) or prefix
 
 
+def resolve_logical_vehicle_id(db: Session | None, source_id: str) -> str:
+    """Resolve either a vehicle id or a stream id to the owning logical vehicle."""
+    if db is None:
+        return run_id_to_source_id(source_id)
+    return get_stream_vehicle_id(db, source_id) or run_id_to_source_id(source_id)
+
+
 def ensure_stream_belongs_to_vehicle(
     db: Session,
     vehicle_id: str,
@@ -538,8 +545,6 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
     if latest_row is not None:
         latest_status = getattr(latest_row, "status", None)
         if latest_status == "active":
-            if src is not None and src.source_type == "simulator":
-                return logical_vehicle_id
             _active_stream_by_vehicle[logical_vehicle_id] = (latest_row.id, time.time())
             return latest_row.id
         if latest_status == "idle":

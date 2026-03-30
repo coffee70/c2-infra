@@ -513,6 +513,10 @@ def test_merge_builtin_duplicate_source_moves_channel_aliases() -> None:
 
     assert any("INSERT INTO telemetry_channel_aliases" in stmt for stmt in statements)
     assert any("DELETE FROM telemetry_channel_aliases" in stmt for stmt in statements)
+    assert any("CREATE TEMP TABLE tmp_builtin_stream_scope" in stmt for stmt in statements)
+    assert any("UPDATE telemetry_streams" in stmt for stmt in statements)
+    assert any("packet_source" in stmt and "receiver_id" in stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt or "INSERT INTO telemetry_current" in stmt)
+    assert all("LIKE :old_run_prefix" not in stmt for stmt in statements)
 
 
 def test_bootstrap_builtin_sources_skips_invalid_catalogs_without_aborting(monkeypatch) -> None:
@@ -817,6 +821,13 @@ def test_seed_metadata_merges_discovered_alias_conflict_into_canonical_channel(m
     assert any("INSERT INTO telemetry_current" in stmt for stmt in statements)
     assert any("INSERT INTO telemetry_statistics" in stmt for stmt in statements)
     assert any("UPDATE telemetry_alerts" in stmt for stmt in statements)
+    assert any("tmp_same_source_stream_scope" in stmt for stmt in statements)
+    data_merge_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt)
+    current_merge_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_current" in stmt)
+    assert "packet_source" in data_merge_sql
+    assert "receiver_id" in data_merge_sql
+    assert "packet_source" in current_merge_sql
+    assert "receiver_id" in current_merge_sql
     current_merge_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_current" in stmt)
     assert "EXCLUDED.generation_time > telemetry_current.generation_time" in current_merge_sql
     assert "EXCLUDED.generation_time = telemetry_current.generation_time" in current_merge_sql

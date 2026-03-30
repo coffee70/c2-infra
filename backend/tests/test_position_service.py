@@ -665,7 +665,7 @@ def test_resolve_active_run_id_prefers_persisted_active_stream_over_stale_row() 
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
-def test_resolve_active_run_id_ignores_stale_active_row_for_simulator(monkeypatch) -> None:
+def test_resolve_active_run_id_returns_persisted_active_stream_for_simulator(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
@@ -712,7 +712,7 @@ def test_resolve_active_run_id_ignores_stale_active_row_for_simulator(monkeypatc
     )
 
     try:
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
         assert stale_stream.status == "active"
     finally:
         clear_active_run(DROGONSAT_SOURCE_ID)
