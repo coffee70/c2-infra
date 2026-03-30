@@ -262,10 +262,6 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
     """Resolve a logical vehicle id to the active telemetry stream id when available."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
 
-    cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
-    if cached_stream_id is not None:
-        return cached_stream_id
-
     src = get_logical_source(db, logical_vehicle_id)
     if src is not None and src.source_type == "simulator" and src.base_url:
         payload = None
@@ -296,6 +292,10 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
 
             clear_active_stream(logical_vehicle_id, db=db)
             return logical_vehicle_id
+
+    cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
+    if cached_stream_id is not None:
+        return cached_stream_id
 
     freshness_cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
     row = (

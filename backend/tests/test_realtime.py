@@ -340,6 +340,72 @@ def test_process_measurement_skips_unknown_explicit_channel_without_dynamic_cont
     assert updates == []
 
 
+def test_process_measurement_does_not_record_feed_health_for_rejected_stream(monkeypatch) -> None:
+    monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
+    processor = RealtimeProcessor()
+    db = MagicMock()
+    recorded: list[str] = []
+
+    class _ScalarResult:
+        def __init__(self, row):
+            self._row = row
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._row
+
+    class _FeedHealthTracker:
+        def record_reception(self, source_id: str) -> None:
+            recorded.append(source_id)
+
+    meta = TelemetryMetadata(
+        id=uuid4(),
+        vehicle_id="vehicle-a",
+        name="VBAT",
+        units="V",
+        description=None,
+        subsystem_tag="power",
+        channel_origin="catalog",
+        discovery_namespace=None,
+        discovered_at=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+        last_seen_at=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+    )
+
+    db.execute.return_value = _ScalarResult(meta)
+    db.get.return_value = None
+
+    monkeypatch.setattr(
+        "app.realtime.processor.get_feed_health_tracker",
+        lambda: _FeedHealthTracker(),
+    )
+    monkeypatch.setattr(
+        "app.realtime.processor.resolve_channel_name",
+        lambda *_args, **_kwargs: "VBAT",
+    )
+    monkeypatch.setattr(
+        "app.realtime.processor.register_stream",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("Run not found for source")),
+    )
+
+    event = MeasurementEvent(
+        vehicle_id="vehicle-a",
+        stream_id="vehicle-b-2026-03-26T12-00-00Z",
+        channel_name="VBAT",
+        generation_time="2026-03-26T12:00:01+00:00",
+        reception_time="2026-03-26T12:00:02+00:00",
+        value=28.0,
+        quality="valid",
+        sequence=1,
+    )
+
+    with pytest.raises(ValueError):
+        processor._process_measurement(db, event)
+
+    assert recorded == []
+
+
 def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkeypatch) -> None:
     monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
     monkeypatch.setattr(

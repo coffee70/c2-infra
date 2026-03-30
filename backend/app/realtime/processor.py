@@ -240,7 +240,6 @@ class RealtimeProcessor:
         """Process single measurement: validate, persist, update current, check alerts."""
         vehicle_id = normalize_vehicle_id(event.vehicle_id)
         stream_id = event.stream_id
-        get_feed_health_tracker().record_reception(vehicle_id)
         gen_time = _parse_time(event.generation_time)
         recv_time = (
             _parse_time(event.reception_time)
@@ -288,6 +287,7 @@ class RealtimeProcessor:
             receiver_id=event.receiver_id,
             seen_at=recv_time,
         )
+        get_feed_health_tracker().record_reception(vehicle_id)
 
         # Persist to Timescale. Use a savepoint so duplicate sample retries do not
         # roll back a newly discovered metadata row created earlier in this transaction.

@@ -338,10 +338,11 @@ def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatc
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
-def test_resolve_active_run_id_prefers_cached_run_over_simulator_status(monkeypatch) -> None:
+def test_resolve_active_run_id_prefers_live_simulator_status_over_cached_run(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     cached_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
+    live_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-53Z"
     source = TelemetrySource(
         id=DROGONSAT_SOURCE_ID,
         name="DrogonSat",
@@ -355,17 +356,65 @@ def test_resolve_active_run_id_prefers_cached_run_over_simulator_status(monkeypa
         return None
 
     db.get.side_effect = fake_get
-    db.execute.side_effect = AssertionError("cache should short-circuit before simulator status")
+    db.execute.side_effect = AssertionError("simulator status should short-circuit before DB lookups")
     register_active_run(cached_stream_id)
+
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "state": "active",
+                "config": {
+                    "stream_id": live_stream_id,
+                    "packet_source": "simulator-link",
+                    "receiver_id": "rx-1",
+                },
+            }
+
+    class _Client:
+        def __init__(self, timeout=2.0):
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url):
+            captured["url"] = url
+            return _Response()
 
     monkeypatch.setattr(
         "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: (_ for _ in ()).throw(AssertionError("status poll should not run")),
+        _Client,
+    )
+    monkeypatch.setattr(
+        "app.services.source_run_service.register_stream",
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: captured.update(
+            {
+                "vehicle_id": vehicle_id,
+                "stream_id": stream_id,
+                "packet_source": packet_source,
+                "receiver_id": receiver_id,
+                "started_at": started_at,
+                "seen_at": seen_at,
+            }
+        ),
     )
 
     try:
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == cached_stream_id
-        assert get_cached_active_run_id(DROGONSAT_SOURCE_ID) == cached_stream_id
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == live_stream_id
+        assert captured["url"] == "http://simulator:8001/status"
+        assert captured["vehicle_id"] == DROGONSAT_SOURCE_ID
+        assert captured["stream_id"] == live_stream_id
+        assert captured["packet_source"] == "simulator-link"
+        assert captured["receiver_id"] == "rx-1"
+        db.execute.assert_not_called()
     finally:
         clear_active_run(DROGONSAT_SOURCE_ID)
 
@@ -387,7 +436,7 @@ def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
     register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z")
 
     def fail_client(timeout=2.0):
-        raise AssertionError("status poll should not run")
+        raise TimeoutError("status poll timeout")
 
     monkeypatch.setattr(
         "app.services.source_run_service.httpx.Client",
@@ -401,25 +450,20 @@ def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
-def test_resolve_active_run_id_does_not_poll_simulator_when_cache_hits(monkeypatch) -> None:
+def test_resolve_active_run_id_can_use_cache_for_non_simulator_sources(monkeypatch) -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
     cached_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
     source = TelemetrySource(
         id=DROGONSAT_SOURCE_ID,
         name="DrogonSat",
-        source_type="simulator",
-        base_url="http://simulator:8001",
+        source_type="ground_station",
+        base_url=None,
     )
 
     db.get.side_effect = lambda model, source_id: source if source_id == DROGONSAT_SOURCE_ID else None
-    db.execute.side_effect = AssertionError("local cache should short-circuit before DB or simulator polling")
+    db.execute.side_effect = AssertionError("local cache should short-circuit before DB lookups")
     register_active_run(cached_stream_id)
-
-    monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: (_ for _ in ()).throw(AssertionError("status poll should not run")),
-    )
 
     try:
         assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == cached_stream_id
