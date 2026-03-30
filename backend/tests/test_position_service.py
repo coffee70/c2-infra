@@ -665,6 +665,59 @@ def test_resolve_active_run_id_prefers_persisted_active_stream_over_stale_row() 
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_resolve_active_run_id_ignores_stale_active_row_for_simulator(monkeypatch) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    stale_stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="active",
+        packet_source="ground-station-a",
+        receiver_id="rx-7",
+        last_seen_at=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
+    )
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="simulator",
+        base_url="http://simulator:8001",
+    )
+
+    def fake_get(model, key):
+        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
+            return source
+        return None
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _StaleResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return stale_stream
+
+    db.get.side_effect = fake_get
+    db.execute.side_effect = [_EmptyResult(), _StaleResult(), _EmptyResult()]
+
+    monkeypatch.setattr(
+        "app.services.source_run_service.httpx.Client",
+        lambda timeout=2.0: (_ for _ in ()).throw(TimeoutError("simulator status timeout")),
+    )
+
+    try:
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
+        assert stale_stream.status == "active"
+    finally:
+        clear_active_run(DROGONSAT_SOURCE_ID)
+
+
 def test_resolve_active_run_id_recovers_stream_from_current_rows() -> None:
     clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()

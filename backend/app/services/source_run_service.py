@@ -538,6 +538,8 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
     if latest_row is not None:
         latest_status = getattr(latest_row, "status", None)
         if latest_status == "active":
+            if src is not None and src.source_type == "simulator":
+                return logical_vehicle_id
             _active_stream_by_vehicle[logical_vehicle_id] = (latest_row.id, time.time())
             return latest_row.id
         if latest_status == "idle":

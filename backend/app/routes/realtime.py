@@ -6,10 +6,10 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, get_session_factory
 from app.models.schemas import (
     MeasurementEvent,
     MeasurementEventBatch,
@@ -18,7 +18,7 @@ from app.models.schemas import (
     WsSnapshotAlerts,
     WsSnapshotWatchlist,
 )
-from app.models.telemetry import TelemetryAlert, TelemetryMetadata
+from app.models.telemetry import TelemetryAlert, TelemetryMetadata, TelemetrySource
 from app.realtime.bus import get_realtime_bus
 from app.realtime.ws_hub import get_ws_hub
 from app.services.ops_events_service import write_event as write_ops_event
@@ -27,7 +27,11 @@ from app.services.realtime_service import (
     get_realtime_snapshot_for_channels,
     get_watchlist_channel_names,
 )
-from app.services.source_run_service import get_stream_vehicle_id, run_id_to_source_id
+from app.services.source_run_service import (
+    get_stream_vehicle_id,
+    normalize_vehicle_id,
+    run_id_to_source_id,
+)
 from app.lib.audit import audit_log
 
 logger = logging.getLogger(__name__)
@@ -61,6 +65,25 @@ def _resolve_stream_vehicle_id(db: Session, stream_id: str) -> str:
     return get_stream_vehicle_id(db, stream_id) or run_id_to_source_id(stream_id)
 
 
+def _validate_stream_batch_identities(db: Session, events: list[MeasurementEvent]) -> None:
+    """Reject colliding or foreign-owned stream ids before queueing realtime events."""
+    seen: set[tuple[str, str]] = set()
+    for event in events:
+        logical_vehicle_id = normalize_vehicle_id(event.vehicle_id)
+        dedupe_key = (logical_vehicle_id, event.stream_id)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        reserved_vehicle = db.get(TelemetrySource, event.stream_id)
+        if reserved_vehicle is not None and reserved_vehicle.id != logical_vehicle_id:
+            raise HTTPException(status_code=400, detail="stream_id conflicts with an existing vehicle id")
+
+        existing_owner = get_stream_vehicle_id(db, event.stream_id)
+        if existing_owner is not None and normalize_vehicle_id(existing_owner) != logical_vehicle_id:
+            raise HTTPException(status_code=400, detail="stream_id does not belong to vehicle")
+
+
 @router.post("/ingest")
 async def ingest_realtime(
     body: MeasurementEventBatch,
@@ -69,8 +92,13 @@ async def ingest_realtime(
     """Ingest batch of realtime measurement events. Async to avoid thread pool contention with processor."""
     started_at = time.perf_counter()
     request_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
+    session = get_session_factory()()
     bus = get_realtime_bus()
     raw_events = body.events
+    try:
+        _validate_stream_batch_identities(session, raw_events)
+    finally:
+        session.close()
     vehicle_ids = sorted({e.vehicle_id for e in raw_events})
     filled_reception = sum(1 for e in raw_events if not e.reception_time)
     synthesized_generation = sum(1 for e in raw_events if not e.generation_time and e.reception_time)
@@ -159,7 +187,6 @@ async def websocket_realtime(websocket: WebSocket) -> None:
     await hub.connect(websocket)
 
     # Get DB session factory for snapshot/ack/resolve
-    from app.database import get_session_factory
     session_factory = get_session_factory()
 
     try:

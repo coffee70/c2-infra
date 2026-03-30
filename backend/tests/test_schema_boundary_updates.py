@@ -7,6 +7,7 @@ from uuid import uuid4
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 sys.modules.setdefault(
     "app.services.embedding_service",
@@ -20,7 +21,12 @@ sys.modules.setdefault(
     ),
 )
 
-from app.models.schemas import TelemetryDataIngest, TelemetrySchemaCreate, WatchlistAddRequest
+from app.models.schemas import (
+    MeasurementEventBatch,
+    TelemetryDataIngest,
+    TelemetrySchemaCreate,
+    WatchlistAddRequest,
+)
 from app.routes import ops as ops_routes
 from app.routes import realtime as realtime_routes
 from app.routes import simulator as simulator_routes
@@ -387,6 +393,60 @@ def test_realtime_helpers_use_registry_for_opaque_stream_ids(monkeypatch) -> Non
     alert_params = alerts_db.execute.call_args.args[0].compile().params.values()
     assert vehicle_id in alert_params
     assert f"legacy:{opaque_stream_id}" not in alert_params
+
+
+@pytest.mark.anyio
+async def test_realtime_ingest_rejects_colliding_stream_ids_before_queueing(monkeypatch) -> None:
+    db = MagicMock()
+    source = TelemetrySource(
+        id="vehicle-a",
+        name="Vehicle A",
+        source_type="vehicle",
+        telemetry_definition_path="defs/vehicle-a.yaml",
+    )
+    db.get.return_value = source
+
+    class FakeBus:
+        def publish_measurement(self, *_args, **_kwargs):
+            raise AssertionError("realtime queue should not be reached on identity validation failure")
+
+        def measurement_queue_size(self):
+            return 0
+
+        def measurement_queue_maxsize(self):
+            return 1
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(request_id="req-1"),
+        headers={"X-Request-ID": "req-1"},
+        method="POST",
+        url=SimpleNamespace(path="/realtime/ingest"),
+    )
+
+    monkeypatch.setattr(realtime_routes, "get_session_factory", lambda: lambda: db)
+    monkeypatch.setattr(realtime_routes, "get_realtime_bus", lambda: FakeBus())
+    monkeypatch.setattr(realtime_routes, "audit_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await realtime_routes.ingest_realtime(
+            body=MeasurementEventBatch.model_validate(
+                {
+                    "events": [
+                        {
+                            "vehicle_id": "vehicle-b",
+                            "stream_id": "vehicle-a",
+                            "channel_name": "VBAT",
+                            "value": 4.2,
+                            "reception_time": "2026-03-28T12:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            request=request,
+        )
+
+    assert exc_info.value.status_code == 400
+    db.get.assert_called_once()
 
 
 def test_register_stream_rejects_vehicle_reassignment() -> None:
