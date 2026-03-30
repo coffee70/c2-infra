@@ -11,6 +11,7 @@ from app.models.telemetry import TelemetrySource
 from app.services import position_service
 from app.services.source_run_service import (
     clear_active_run,
+    get_cached_active_run_id,
     register_active_run,
     resolve_active_run_id,
     run_id_to_source_id,
@@ -396,6 +397,60 @@ def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatc
     assert stream.status == "active"
     assert stream.last_seen_at == current.reception_time
     clear_active_run(DROGONSAT_SOURCE_ID)
+
+
+def test_resolve_active_run_id_prefers_simulator_status_over_cached_run(monkeypatch) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    cached_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
+    runtime_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T20-17-52Z"
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="simulator",
+        base_url="http://simulator:8001",
+    )
+    runtime_stream = SimpleNamespace(
+        id=runtime_stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="idle",
+        packet_source=None,
+        receiver_id=None,
+        last_seen_at=None,
+    )
+
+    def fake_get(model, key):
+        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
+            return source
+        if model.__name__ == "TelemetryStream" and key == runtime_stream_id:
+            return runtime_stream
+        return None
+
+    db.get.side_effect = fake_get
+    db.execute.side_effect = AssertionError("simulator status should run before cache fallback")
+    register_active_run(cached_stream_id)
+
+    monkeypatch.setattr(
+        "app.services.source_run_service.httpx.Client",
+        lambda timeout=2.0: _FakeHttpxClient(
+            _FakeHttpxResponse(
+                {
+                    "state": "running",
+                    "config": {
+                        "stream_id": runtime_stream_id,
+                        "packet_source": "packet-new",
+                        "receiver_id": "rx-new",
+                    },
+                }
+            )
+        ),
+    )
+
+    try:
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == runtime_stream_id
+        assert get_cached_active_run_id(DROGONSAT_SOURCE_ID) == runtime_stream_id
+    finally:
+        clear_active_run(DROGONSAT_SOURCE_ID)
 
 
 def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:

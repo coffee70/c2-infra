@@ -18,6 +18,7 @@ from telemetry_catalog.definitions import resolve_source_id_alias
 
 ACTIVE_STREAM_CACHE_TTL_SEC = 30.0
 _active_stream_by_vehicle: dict[str, tuple[str, float]] = {}
+_stream_owner_by_stream: dict[str, tuple[str, float]] = {}
 RUN_ID_RE = re.compile(r"^(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?)$")
 
 
@@ -77,7 +78,7 @@ def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
         return cached_vehicle_id
     row = db.get(TelemetryStream, stream_id)
     if row is not None:
-        _active_stream_by_vehicle[row.vehicle_id] = (stream_id, time.time())
+        _cache_stream_owner(stream_id, row.vehicle_id)
         return row.vehicle_id
     if cached_vehicle_id is not None:
         return cached_vehicle_id
@@ -92,7 +93,7 @@ def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
         .first()
     )
     if vehicle_id is not None:
-        _active_stream_by_vehicle[vehicle_id] = (stream_id, time.time())
+        _cache_stream_owner(stream_id, vehicle_id)
         return vehicle_id
 
     vehicle_id = (
@@ -106,8 +107,12 @@ def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
         .first()
     )
     if vehicle_id is not None:
-        _active_stream_by_vehicle[vehicle_id] = (stream_id, time.time())
+        _cache_stream_owner(stream_id, vehicle_id)
     return vehicle_id
+
+
+def _cache_stream_owner(stream_id: str, vehicle_id: str, *, seen_at: float | None = None) -> None:
+    _stream_owner_by_stream[stream_id] = (vehicle_id, seen_at if seen_at is not None else time.time())
 
 
 def _get_cached_stream_vehicle_id(
@@ -116,13 +121,14 @@ def _get_cached_stream_vehicle_id(
     max_age_sec: float = ACTIVE_STREAM_CACHE_TTL_SEC,
 ) -> Optional[str]:
     now = time.time()
-    for vehicle_id, (cached_stream_id, seen_at) in list(_active_stream_by_vehicle.items()):
-        if now - seen_at > max_age_sec:
-            _active_stream_by_vehicle.pop(vehicle_id, None)
-            continue
-        if cached_stream_id == stream_id:
-            return vehicle_id
-    return None
+    cached = _stream_owner_by_stream.get(stream_id)
+    if cached is None:
+        return None
+    vehicle_id, seen_at = cached
+    if now - seen_at > max_age_sec:
+        _stream_owner_by_stream.pop(stream_id, None)
+        return None
+    return vehicle_id
 
 
 def get_logical_source(db: Session, vehicle_id: str) -> Optional[TelemetrySource]:
@@ -171,6 +177,7 @@ def register_stream(
     if receiver_id is not None:
         stream.receiver_id = receiver_id
 
+    _cache_stream_owner(stream_id, logical_vehicle_id)
     _active_stream_by_vehicle[logical_vehicle_id] = (stream_id, time.time())
     return stream
 
@@ -251,10 +258,6 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
     """Resolve a logical vehicle id to the active telemetry stream id when available."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
 
-    cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
-    if cached_stream_id is not None:
-        return cached_stream_id
-
     src = get_logical_source(db, logical_vehicle_id)
     if src is not None and src.source_type == "simulator" and src.base_url:
         payload = None
@@ -285,6 +288,10 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
 
             clear_active_stream(logical_vehicle_id, db=db)
             return logical_vehicle_id
+
+    cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
+    if cached_stream_id is not None:
+        return cached_stream_id
 
     freshness_cutoff = datetime.now(timezone.utc) - timedelta(seconds=60)
     row = (
