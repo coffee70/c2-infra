@@ -465,7 +465,7 @@ export function OverviewContent() {
           initialAnomalies={anomalies}
           hasError={!!error}
           sources={sources}
-          initialSourceId={effectiveSource || DEFAULT_SOURCE_ID}
+          sourceId={effectiveSource || DEFAULT_SOURCE_ID}
           feedSourceId={committedRunId ?? undefined}
           defaultSourceId={DEFAULT_SOURCE_ID}
           initialSimulatorSourceId={initialSimulatorSourceId}

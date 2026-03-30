@@ -190,10 +190,10 @@ interface RealtimeOverviewWrapperProps {
   initialAnomalies: AnomaliesData;
   hasError: boolean;
   sources: TelemetrySource[];
-  initialSourceId: string;
+  sourceId: string;
   /** Current run id for feed status and live subscription (when source has multiple runs). */
   feedSourceId?: string;
-  /** When set, we never sync sourceId to initialSourceId when it equals this (avoids reverting user selection to fallback while data loads). */
+  /** When set, we never sync the selected source to this fallback while data loads. */
   defaultSourceId?: string;
   /** Pre-fetched simulator status for the initial source to avoid "Disconnected" flash. */
   initialSimulatorSourceId?: string | null;
@@ -214,10 +214,10 @@ function isOverviewTabId(value: string | null): value is OverviewTabId {
 export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
   const {
     initialChannels,
-    initialSourceId,
+    sourceId,
     feedSourceId,
   } = props;
-  const effectiveRunId = feedSourceId ?? initialSourceId;
+  const effectiveRunId = feedSourceId ?? sourceId;
   const channelNames = useMemo(
     () => initialChannels.map((ch) => ch.name),
     [initialChannels]
@@ -243,7 +243,7 @@ export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
     <RealtimeTelemetryProvider
       channelNames={channelNames}
       sourceId={effectiveRunId}
-      vehicleId={initialSourceId}
+      vehicleId={sourceId}
       initialChannels={initialChannelsForProvider}
     >
       <RealtimeOverviewContent {...props} />
@@ -254,7 +254,7 @@ export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
 function RealtimeOverviewContent({
   initialAnomalies,
   sources,
-  initialSourceId,
+  sourceId,
   feedSourceId,
   initialSimulatorSourceId = null,
   initialSimulatorStatus = null,
@@ -269,7 +269,7 @@ function RealtimeOverviewContent({
   const [currentHash, setCurrentHash] = useState<string>(
     typeof window !== "undefined" ? window.location.hash : ""
   );
-  const effectiveRunId = feedSourceId ?? initialSourceId;
+  const effectiveRunId = feedSourceId ?? sourceId;
   const activeRunRef = useRef(effectiveRunId);
   const [alertStore, setAlertStore] = useState<{
     runId: string;
@@ -285,7 +285,6 @@ function RealtimeOverviewContent({
   const router = useRouter();
   const pathname = usePathname();
   const { channelsArray, isLive: live, client } = useRealtimeTelemetry();
-  const sourceId = initialSourceId;
   const visibleAlertStore =
     alertStore.runId === effectiveRunId
       ? alertStore
