@@ -700,6 +700,22 @@ async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(mo
     monkeypatch.setattr(realtime_routes, "get_session_factory", lambda: lambda: db)
     monkeypatch.setattr(realtime_routes, "get_realtime_bus", lambda: FakeBus())
     monkeypatch.setattr(realtime_routes, "get_stream_vehicle_id", lambda *_args, **_kwargs: None)
+    registered: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        realtime_routes,
+        "register_stream",
+        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: registered.append(
+            {
+                "db": db_arg,
+                "vehicle_id": vehicle_id,
+                "stream_id": stream_id,
+                "packet_source": packet_source,
+                "receiver_id": receiver_id,
+                "started_at": started_at,
+                "seen_at": seen_at,
+            }
+        ),
+    )
     monkeypatch.setattr(realtime_routes, "audit_log", lambda *_args, **_kwargs: None)
 
     response = await realtime_routes.ingest_realtime(
@@ -720,7 +736,82 @@ async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(mo
     )
 
     assert response == {"accepted": 1}
+    assert registered == [
+        {
+            "db": db,
+            "vehicle_id": "vehicle-a",
+            "stream_id": "vehicle-a",
+            "packet_source": None,
+            "receiver_id": None,
+            "started_at": None,
+            "seen_at": None,
+        }
+    ]
     db.get.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_realtime_ingest_rejects_conflicting_stream_before_queueing(monkeypatch) -> None:
+    db = MagicMock()
+    source = TelemetrySource(
+        id="vehicle-a",
+        name="Vehicle A",
+        source_type="vehicle",
+        telemetry_definition_path="defs/vehicle-a.yaml",
+    )
+    db.get.side_effect = lambda model, key: source if model is TelemetrySource and key == "vehicle-a" else None
+
+    class FakeBus:
+        def publish_measurement(self, *_args, **_kwargs):
+            raise AssertionError("validation should fail before queueing")
+
+        def measurement_queue_size(self):
+            return 0
+
+        def measurement_queue_maxsize(self):
+            return 1
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(request_id="req-1"),
+        headers={"X-Request-ID": "req-1"},
+        method="POST",
+        url=SimpleNamespace(path="/realtime/ingest"),
+    )
+
+    monkeypatch.setattr(realtime_routes, "get_session_factory", lambda: lambda: db)
+    monkeypatch.setattr(realtime_routes, "get_realtime_bus", lambda: FakeBus())
+    monkeypatch.setattr(realtime_routes, "get_stream_vehicle_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        realtime_routes,
+        "register_stream",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StreamIdConflictError("stream_id does not belong to vehicle")
+        ),
+    )
+    monkeypatch.setattr(realtime_routes, "audit_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await realtime_routes.ingest_realtime(
+            body=MeasurementEventBatch.model_validate(
+                {
+                    "events": [
+                        {
+                            "vehicle_id": "vehicle-a",
+                            "stream_id": "shared-stream",
+                            "channel_name": "VBAT",
+                            "value": 4.2,
+                            "reception_time": "2026-03-28T12:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            request=request,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "does not belong to vehicle" in str(exc_info.value.detail)
+    db.commit.assert_not_called()
+    db.rollback.assert_called_once()
 
 
 @pytest.mark.anyio
@@ -805,10 +896,10 @@ def test_register_stream_rejects_vehicle_reassignment() -> None:
     db = MagicMock()
     db.get.side_effect = lambda model, key: stream if model.__name__ == "TelemetryStream" and key == stream.id else None
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(StreamIdConflictError) as exc_info:
         register_stream(db, vehicle_id="vehicle-a", stream_id=stream.id)
 
-    assert "Run not found for source" in str(exc_info.value)
+    assert "does not belong to vehicle" in str(exc_info.value)
     assert stream.vehicle_id == "vehicle-b"
     db.add.assert_not_called()
 
@@ -1175,6 +1266,39 @@ async def test_simulator_status_registers_stream_id_from_config(monkeypatch) -> 
 
 
 @pytest.mark.anyio
+async def test_simulator_status_returns_disconnected_on_stream_conflict(monkeypatch) -> None:
+    db = MagicMock()
+
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_with_audit",
+        lambda _db, _source_id, _action: "http://simulator:8010",
+    )
+
+    async def fake_proxy_get(_base_url, _path):
+        return {
+            "state": "active",
+            "config": {
+                "stream_id": "vehicle-b-2026-03-28T12-00-00Z",
+            },
+            "supported_scenarios": ["nominal"],
+        }
+
+    monkeypatch.setattr(simulator_routes, "_proxy_get", fake_proxy_get)
+    monkeypatch.setattr(
+        simulator_routes,
+        "register_stream",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StreamIdConflictError("stream_id does not belong to vehicle")
+        ),
+    )
+
+    payload = await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
+
+    assert payload == {"connected": False, "supported_scenarios": []}
+
+
+@pytest.mark.anyio
 async def test_simulator_start_registers_stream_id_from_response(monkeypatch) -> None:
     db = MagicMock()
     registered: dict[str, object] = {}
@@ -1233,6 +1357,47 @@ async def test_simulator_start_registers_stream_id_from_response(monkeypatch) ->
         "started_at": None,
         "seen_at": None,
     }
+
+
+@pytest.mark.anyio
+async def test_simulator_start_rejects_stream_conflict(monkeypatch) -> None:
+    db = MagicMock()
+
+    mock_src = SimpleNamespace(telemetry_definition_path=None)
+
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_simulator_source",
+        lambda _db, _source_id: mock_src,
+    )
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_with_audit",
+        lambda _db, _source_id, _action: "http://simulator:8010",
+    )
+
+    async def fake_proxy_post(_base_url, _path, body):
+        return {"stream_id": "a6107734-80af-4f61-8c69-d53ab64dd13a"}
+
+    monkeypatch.setattr(simulator_routes, "_proxy_post", fake_proxy_post)
+    monkeypatch.setattr(simulator_routes, "clear_active_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(simulator_routes, "reset_orbit_source", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        simulator_routes,
+        "register_stream",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StreamIdConflictError("stream_id does not belong to vehicle")
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await simulator_routes.simulator_start(
+            config=simulator_routes.StartConfig(vehicle_id="vehicle-a"),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "does not belong to vehicle" in str(exc_info.value.detail)
 
 
 def test_channel_run_listing_route_emits_stream_ids(monkeypatch) -> None:

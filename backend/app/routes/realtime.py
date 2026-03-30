@@ -28,8 +28,10 @@ from app.services.realtime_service import (
     get_watchlist_channel_names,
 )
 from app.services.source_run_service import (
+    StreamIdConflictError,
     get_stream_vehicle_id,
     normalize_vehicle_id,
+    register_stream,
     run_id_to_source_id,
 )
 from app.lib.audit import audit_log
@@ -103,6 +105,23 @@ async def ingest_realtime(
     raw_events = body.events
     try:
         _validate_stream_batch_identities(session, raw_events)
+        reserved_streams: set[tuple[str, str]] = set()
+        for event in raw_events:
+            stream_key = (normalize_vehicle_id(event.vehicle_id), event.stream_id)
+            if stream_key in reserved_streams:
+                continue
+            reserved_streams.add(stream_key)
+            register_stream(
+                session,
+                vehicle_id=event.vehicle_id,
+                stream_id=event.stream_id,
+                packet_source=event.packet_source if isinstance(event.packet_source, str) else None,
+                receiver_id=event.receiver_id if isinstance(event.receiver_id, str) else None,
+            )
+        session.commit()
+    except StreamIdConflictError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         session.close()
     vehicle_ids = sorted({e.vehicle_id for e in raw_events})

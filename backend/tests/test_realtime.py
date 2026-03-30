@@ -21,6 +21,7 @@ from app.realtime.processor import (
     _resolve_measurement_channel,
 )
 from app.routes.realtime import _normalize_event_times, _validate_stream_batch_identities
+from app.services.source_run_service import StreamIdConflictError
 from app.services.telemetry_service import _compute_state
 
 
@@ -419,7 +420,9 @@ def test_process_measurement_does_not_record_feed_health_for_rejected_stream(mon
     )
     monkeypatch.setattr(
         "app.realtime.processor.register_stream",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("Run not found for source")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            StreamIdConflictError("stream_id does not belong to vehicle")
+        ),
     )
 
     event = MeasurementEvent(

@@ -255,7 +255,7 @@ def register_stream(
     if stream is None:
         raise RuntimeError("Telemetry stream registration failed")
     if stream.vehicle_id != logical_vehicle_id:
-        raise ValueError("Run not found for source")
+        raise StreamIdConflictError("stream_id does not belong to vehicle")
     stream.vehicle_id = logical_vehicle_id
     stream.status = "active"
     if getattr(stream, "started_at", None) is None:
