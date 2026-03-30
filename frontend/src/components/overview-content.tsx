@@ -431,7 +431,7 @@ export function OverviewContent() {
               Operator Overview
             </h1>
           </div>
-          <div className="flex min-h-[16rem] items-center justify-center">
+          <div className="flex min-h-64 items-center justify-center">
             <div className="flex flex-col items-center gap-4">
               <Spinner size="lg" className="h-10 w-10" />
               <p className="text-sm text-muted-foreground">Loading overview…</p>
