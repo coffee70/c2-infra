@@ -689,7 +689,8 @@ def test_channel_run_listing_route_emits_stream_ids(monkeypatch) -> None:
     def fake_execute(statement):
         sql = str(statement).lower()
         assert "telemetry_streams" in sql
-        assert "coalesce" in sql
+        assert "left outer join" not in sql
+        assert " join " in sql
         return _FetchAllResult(
             [("a6107734-80af-4f61-8c69-d53ab64dd13a", datetime(2026, 3, 28, 12, 5, tzinfo=timezone.utc))]
         )

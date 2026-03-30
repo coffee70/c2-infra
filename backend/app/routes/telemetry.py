@@ -635,14 +635,12 @@ def get_channel_runs(
     stmt = (
         select(
             TelemetryStream.id,
-            func.coalesce(channel_last_seen.c.last_seen_at, TelemetryStream.last_seen_at).label(
-                "last_seen_at"
-            ),
+            channel_last_seen.c.last_seen_at,
         )
-        .outerjoin(channel_last_seen, channel_last_seen.c.source_id == TelemetryStream.id)
+        .join(channel_last_seen, channel_last_seen.c.source_id == TelemetryStream.id)
         .where(TelemetryStream.vehicle_id == logical_source_id)
         .order_by(
-            desc(func.coalesce(channel_last_seen.c.last_seen_at, TelemetryStream.last_seen_at)),
+            desc(channel_last_seen.c.last_seen_at),
             TelemetryStream.id.desc(),
         )
     )
