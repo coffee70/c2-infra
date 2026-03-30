@@ -28,8 +28,9 @@ from app.routes import position as position_routes
 from app.routes import telemetry as telemetry_routes
 from app.services import telemetry_service as telemetry_service_module
 from app.services.telemetry_service import TelemetryService
-from app.services.source_run_service import register_stream
+from app.services.source_run_service import StreamIdConflictError, register_stream
 from app.services import realtime_service
+from app.models.telemetry import TelemetrySource
 
 
 class _ScalarResult:
@@ -398,7 +399,7 @@ def test_register_stream_rejects_vehicle_reassignment() -> None:
         receiver_id=None,
     )
     db = MagicMock()
-    db.get.return_value = stream
+    db.get.side_effect = lambda model, key: stream if model.__name__ == "TelemetryStream" and key == stream.id else None
 
     with pytest.raises(ValueError) as exc_info:
         register_stream(db, vehicle_id="vehicle-a", stream_id=stream.id)
@@ -406,6 +407,26 @@ def test_register_stream_rejects_vehicle_reassignment() -> None:
     assert "Run not found for source" in str(exc_info.value)
     assert stream.vehicle_id == "vehicle-b"
     db.add.assert_not_called()
+
+
+def test_register_stream_rejects_reserved_vehicle_id() -> None:
+    db = MagicMock()
+    db.get.side_effect = lambda model, key: (
+        TelemetrySource(
+            id="vehicle-a",
+            name="Vehicle A",
+            source_type="vehicle",
+            telemetry_definition_path="defs/vehicle-a.yaml",
+        )
+        if model is TelemetrySource and key == "vehicle-a"
+        else None
+    )
+
+    with pytest.raises(StreamIdConflictError) as exc_info:
+        register_stream(db, vehicle_id="vehicle-b", stream_id="vehicle-a")
+
+    assert "conflicts" in str(exc_info.value)
+    db.execute.assert_not_called()
 
 
 def test_register_stream_uses_idempotent_missing_row_path() -> None:
@@ -420,7 +441,7 @@ def test_register_stream_uses_idempotent_missing_row_path() -> None:
         receiver_id=None,
     )
     db = MagicMock()
-    db.get.side_effect = [None, stream]
+    db.get.side_effect = [None, None, stream]
 
     captured: dict[str, object] = {}
 
@@ -449,6 +470,59 @@ def test_register_stream_uses_idempotent_missing_row_path() -> None:
     assert stream.last_seen_at == observed_at
     assert stream.packet_source == "ground-station-a"
     assert stream.receiver_id == "rx-7"
+
+
+def test_set_active_run_rejects_vehicle_id_collision(monkeypatch) -> None:
+    monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(telemetry_routes, "get_stream_vehicle_id", lambda *_args: None)
+    monkeypatch.setattr(
+        telemetry_routes,
+        "register_stream",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StreamIdConflictError("stream_id conflicts with an existing vehicle id")
+        ),
+    )
+
+    with pytest.raises(telemetry_routes.HTTPException) as exc_info:
+        telemetry_routes.set_active_run(
+            body=telemetry_routes.ActiveRunUpdate(
+                vehicle_id="vehicle-b",
+                stream_id="vehicle-a",
+                state="active",
+            ),
+            db=MagicMock(),
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+def test_ingest_data_rejects_vehicle_id_collision(monkeypatch) -> None:
+    class FakeService:
+        def __init__(self, *_args):
+            pass
+
+        def insert_data(self, *_args, **_kwargs):
+            raise StreamIdConflictError("stream_id conflicts with an existing vehicle id")
+
+    monkeypatch.setattr(telemetry_routes, "TelemetryService", FakeService)
+    monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(telemetry_routes.HTTPException) as exc_info:
+        telemetry_routes.ingest_data(
+            body=TelemetryDataIngest(
+                telemetry_name="VBAT",
+                data=[{"timestamp": "2026-03-28T12:00:00Z", "value": 4.2}],
+                vehicle_id="vehicle-b",
+                stream_id="vehicle-a",
+                packet_source="ground-station-a",
+                receiver_id="rx-7",
+            ),
+            db=MagicMock(),
+            embedding=object(),
+            llm=object(),
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:

@@ -11,7 +11,7 @@ from app.database import get_db
 from app.lib.audit import audit_log
 from app.models.telemetry import TelemetrySource
 from app.orbit import reset_source as reset_orbit_source
-from app.services.source_run_service import clear_active_run, register_stream
+from app.services.source_run_service import StreamIdConflictError, clear_active_run, register_stream
 from telemetry_catalog.definitions import resolve_source_id_alias
 
 router = APIRouter()
@@ -117,13 +117,16 @@ async def simulator_status(
         packet_source = config.get("packet_source")
         receiver_id = config.get("receiver_id")
         if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
-            register_stream(
-                db,
-                vehicle_id=resolved_source_id,
-                stream_id=active_stream_id,
-                packet_source=packet_source if isinstance(packet_source, str) else None,
-                receiver_id=receiver_id if isinstance(receiver_id, str) else None,
-            )
+            try:
+                register_stream(
+                    db,
+                    vehicle_id=resolved_source_id,
+                    stream_id=active_stream_id,
+                    packet_source=packet_source if isinstance(packet_source, str) else None,
+                    receiver_id=receiver_id if isinstance(receiver_id, str) else None,
+                )
+            except StreamIdConflictError as e:
+                raise HTTPException(status_code=400, detail=str(e))
         elif state == "idle":
             clear_active_run(resolved_source_id, db=db)
         if not isinstance(payload.get("supported_scenarios"), list):
@@ -167,13 +170,16 @@ async def simulator_start(
         reset_orbit_source(resolved_source_id)
         stream_id = result.get("stream_id")
         if isinstance(stream_id, str) and stream_id:
-            register_stream(
-                db,
-                vehicle_id=resolved_source_id,
-                stream_id=stream_id,
-                packet_source=body.get("packet_source"),
-                receiver_id=body.get("receiver_id"),
-            )
+            try:
+                register_stream(
+                    db,
+                    vehicle_id=resolved_source_id,
+                    stream_id=stream_id,
+                    packet_source=body.get("packet_source"),
+                    receiver_id=body.get("receiver_id"),
+                )
+            except StreamIdConflictError as e:
+                raise HTTPException(status_code=400, detail=str(e))
         audit_log(
             "simulator.start.proxied",
             origin="frontend",

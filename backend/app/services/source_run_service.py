@@ -25,6 +25,10 @@ RUN_ID_RE = re.compile(r"^(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?)$")
 T = TypeVar("T")
 
 
+class StreamIdConflictError(ValueError):
+    """Raised when a stream id collides with a reserved vehicle id."""
+
+
 def normalize_vehicle_id(vehicle_id: str) -> str:
     """Normalize an exact vehicle id alias to its stored id."""
     return resolve_source_id_alias(vehicle_id) or vehicle_id
@@ -76,9 +80,14 @@ def ensure_run_belongs_to_source(db: Session, source_id: str, run_id: str | None
 
 def get_stream_vehicle_id(db: Session | None, stream_id: str) -> Optional[str]:
     """Resolve a stream id to its owning vehicle, if known."""
+    logical_vehicle_id = normalize_vehicle_id(stream_id)
+    if db is not None and logical_vehicle_id == stream_id and db.get(TelemetrySource, logical_vehicle_id) is not None:
+        return None
+
     cached_vehicle_id = _get_cached_stream_vehicle_id(stream_id)
     if db is None:
         return cached_vehicle_id
+
     row = db.get(TelemetryStream, stream_id)
     if row is not None:
         _cache_stream_owner(stream_id, row.vehicle_id)
@@ -219,6 +228,10 @@ def register_stream(
 ) -> TelemetryStream:
     """Create or update a telemetry stream row and mark it active in cache."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    reserved_vehicle_id = normalize_vehicle_id(stream_id)
+    existing_vehicle = db.get(TelemetrySource, reserved_vehicle_id)
+    if existing_vehicle is not None and existing_vehicle.id != logical_vehicle_id:
+        raise StreamIdConflictError("stream_id conflicts with an existing vehicle id")
 
     observed_at = seen_at or started_at or datetime.now(timezone.utc)
     started_at = started_at or observed_at
@@ -333,13 +346,16 @@ def _resolve_simulator_status(
 
     if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
         # Always refresh stream metadata from simulator runtime, even when the stream id is unchanged.
-        register_stream(
-            db,
-            vehicle_id=logical_vehicle_id,
-            stream_id=active_stream_id,
-            packet_source=packet_source if isinstance(packet_source, str) else None,
-            receiver_id=receiver_id if isinstance(receiver_id, str) else None,
-        )
+        try:
+            register_stream(
+                db,
+                vehicle_id=logical_vehicle_id,
+                stream_id=active_stream_id,
+                packet_source=packet_source if isinstance(packet_source, str) else None,
+                receiver_id=receiver_id if isinstance(receiver_id, str) else None,
+            )
+        except StreamIdConflictError:
+            return None
         return active_stream_id
 
     return None
@@ -505,17 +521,26 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
     )
     current_stream_id = getattr(current_row, "stream_id", None)
     if isinstance(current_stream_id, str) and current_stream_id:
-        register_stream(
-            db,
-            vehicle_id=logical_vehicle_id,
-            stream_id=current_stream_id,
-            packet_source=getattr(current_row, "packet_source", None),
-            receiver_id=getattr(current_row, "receiver_id", None),
-            seen_at=getattr(current_row, "reception_time", None),
-        )
-        return current_stream_id
+        try:
+            register_stream(
+                db,
+                vehicle_id=logical_vehicle_id,
+                stream_id=current_stream_id,
+                packet_source=getattr(current_row, "packet_source", None),
+                receiver_id=getattr(current_row, "receiver_id", None),
+                seen_at=getattr(current_row, "reception_time", None),
+            )
+        except StreamIdConflictError:
+            pass
+        else:
+            return current_stream_id
 
-    if latest_row is not None and getattr(latest_row, "status", None) == "idle":
-        return logical_vehicle_id
+    if latest_row is not None:
+        latest_status = getattr(latest_row, "status", None)
+        if latest_status == "active":
+            _active_stream_by_vehicle[logical_vehicle_id] = (latest_row.id, time.time())
+            return latest_row.id
+        if latest_status == "idle":
+            return logical_vehicle_id
 
     return logical_vehicle_id

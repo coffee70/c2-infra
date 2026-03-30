@@ -95,7 +95,7 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
     def fake_get(model, key):
         if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
             return source
-        if key == stream_id:
+        if model.__name__ == "TelemetryStream" and key == stream_id:
             return stream
         return None
 
@@ -287,7 +287,7 @@ def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatc
     def fake_get(model, key):
         if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
             return source
-        if key == stream_id:
+        if model.__name__ == "TelemetryStream" and key == stream_id:
             return stream
         return None
 
@@ -618,6 +618,51 @@ def test_resolve_active_run_id_only_queries_active_stream_rows() -> None:
     assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
     assert any("telemetry_streams.status" in sql for sql in seen)
     assert any("JOIN telemetry_metadata" in sql and "telemetry_metadata.source_id" in sql for sql in seen)
+
+
+def test_resolve_active_run_id_prefers_persisted_active_stream_over_stale_row() -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    stale_stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="active",
+        packet_source="ground-station-a",
+        receiver_id="rx-7",
+        last_seen_at=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
+    )
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="ground_station",
+        base_url=None,
+    )
+
+    def fake_get(model, key):
+        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
+            return source
+        return None
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _StaleResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return stale_stream
+
+    db.get.side_effect = fake_get
+    db.execute.side_effect = [_EmptyResult(), _StaleResult(), _EmptyResult()]
+
+    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
+    clear_active_run(DROGONSAT_SOURCE_ID)
 
 
 def test_resolve_active_run_id_recovers_stream_from_current_rows() -> None:

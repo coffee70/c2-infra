@@ -71,6 +71,7 @@ from app.services.source_run_service import (
     normalize_vehicle_id,
     normalize_source_id,
     register_stream,
+    StreamIdConflictError,
     resolve_active_stream_id,
     run_id_to_source_id,
 )
@@ -176,6 +177,8 @@ def ingest_data(
             packet_source=body.packet_source,
             receiver_id=body.receiver_id,
         )
+    except StreamIdConflictError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     audit_log(
@@ -802,8 +805,10 @@ def set_active_run(
         existing_owner = get_stream_vehicle_id(db, body.stream_id)
         if existing_owner is not None and normalize_vehicle_id(existing_owner) != logical_source_id:
             raise HTTPException(status_code=400, detail="stream_id does not belong to vehicle")
-
-        register_stream(db, vehicle_id=logical_source_id, stream_id=body.stream_id)
+        try:
+            register_stream(db, vehicle_id=logical_source_id, stream_id=body.stream_id)
+        except StreamIdConflictError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         audit_log(
             "sources.active_run.set",
             source_id=logical_source_id,
