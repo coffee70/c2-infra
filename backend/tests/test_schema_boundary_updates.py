@@ -154,11 +154,12 @@ def test_set_active_run_registers_new_stream_ids(monkeypatch) -> None:
     monkeypatch.setattr(
         telemetry_routes,
         "register_stream",
-        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: captured.update(
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: captured.update(
             vehicle_id=vehicle_id,
             stream_id=stream_id,
             packet_source=packet_source,
             receiver_id=receiver_id,
+            started_at=started_at,
             seen_at=seen_at,
         ),
     )
@@ -192,7 +193,7 @@ def test_set_active_run_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
     monkeypatch.setattr(
         telemetry_routes,
         "register_stream",
-        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: calls.append(
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: calls.append(
             f"register:{vehicle_id}:{stream_id}"
         ),
     )
@@ -435,6 +436,7 @@ def test_register_stream_uses_idempotent_missing_row_path() -> None:
         stream_id=stream_id,
         packet_source="ground-station-a",
         receiver_id="rx-7",
+        started_at=datetime(2026, 3, 28, 11, 59, tzinfo=timezone.utc),
         seen_at=observed_at,
     )
 
@@ -443,6 +445,7 @@ def test_register_stream_uses_idempotent_missing_row_path() -> None:
     assert registered is stream
     assert stream.vehicle_id == "vehicle-a"
     assert stream.status == "active"
+    assert stream.started_at == datetime(2026, 3, 28, 11, 59, tzinfo=timezone.utc)
     assert stream.last_seen_at == observed_at
     assert stream.packet_source == "ground-station-a"
     assert stream.receiver_id == "rx-7"
@@ -460,7 +463,7 @@ def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
     monkeypatch.setattr(
         telemetry_service_module,
         "register_stream",
-        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: calls.append(
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: calls.append(
             f"register:{vehicle_id}:{stream_id}"
         ),
     )
@@ -480,7 +483,7 @@ def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
 
 def test_insert_data_registers_new_stream_without_prior_persistence(monkeypatch) -> None:
     service = TelemetryService(MagicMock(), object(), object())
-    calls: list[str] = []
+    captured: dict[str, object] = {}
 
     monkeypatch.setattr(
         telemetry_service_module,
@@ -490,8 +493,15 @@ def test_insert_data_registers_new_stream_without_prior_persistence(monkeypatch)
     monkeypatch.setattr(
         telemetry_service_module,
         "register_stream",
-        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: calls.append(
-            f"register:{vehicle_id}:{stream_id}"
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: captured.update(
+            {
+                "vehicle_id": vehicle_id,
+                "stream_id": stream_id,
+                "packet_source": packet_source,
+                "receiver_id": receiver_id,
+                "started_at": started_at,
+                "seen_at": seen_at,
+            }
         ),
     )
     monkeypatch.setattr(service, "get_by_name", lambda _source_id, _name: SimpleNamespace(id=uuid4()))
@@ -499,12 +509,23 @@ def test_insert_data_registers_new_stream_without_prior_persistence(monkeypatch)
     rows = service.insert_data(
         "vehicle-a-2026-03-28T12-00-00Z",
         "VBAT",
-        [(datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc), 4.2)],
+        [
+            (datetime(2026, 3, 28, 12, 3, tzinfo=timezone.utc), 4.2),
+            (datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc), 4.1),
+            (datetime(2026, 3, 28, 12, 5, tzinfo=timezone.utc), 4.3),
+        ],
         vehicle_id="vehicle-a",
     )
 
-    assert rows == 1
-    assert calls == ["register:vehicle-a:vehicle-a-2026-03-28T12-00-00Z"]
+    assert rows == 3
+    assert captured == {
+        "vehicle_id": "vehicle-a",
+        "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
+        "packet_source": None,
+        "receiver_id": None,
+        "started_at": datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc),
+        "seen_at": datetime(2026, 3, 28, 12, 5, tzinfo=timezone.utc),
+    }
 
 
 def test_insert_data_does_not_register_stream_when_telemetry_missing(monkeypatch) -> None:
@@ -519,7 +540,7 @@ def test_insert_data_does_not_register_stream_when_telemetry_missing(monkeypatch
     monkeypatch.setattr(
         telemetry_service_module,
         "register_stream",
-        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: calls.append(
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: calls.append(
             f"register:{vehicle_id}:{stream_id}"
         ),
     )
@@ -592,13 +613,14 @@ async def test_simulator_status_registers_stream_id_from_config(monkeypatch) -> 
     monkeypatch.setattr(
         simulator_routes,
         "register_stream",
-        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: registered.update(
+        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: registered.update(
             {
                 "db": db_arg,
                 "vehicle_id": vehicle_id,
                 "stream_id": stream_id,
                 "packet_source": packet_source,
                 "receiver_id": receiver_id,
+                "started_at": started_at,
                 "seen_at": seen_at,
             }
         ),
@@ -614,6 +636,7 @@ async def test_simulator_status_registers_stream_id_from_config(monkeypatch) -> 
         "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
         "packet_source": "simulator-link",
         "receiver_id": "rx-1",
+        "started_at": None,
         "seen_at": None,
     }
 
@@ -646,13 +669,14 @@ async def test_simulator_start_registers_stream_id_from_response(monkeypatch) ->
     monkeypatch.setattr(
         simulator_routes,
         "register_stream",
-        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None: registered.update(
+        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: registered.update(
             {
                 "db": db_arg,
                 "vehicle_id": vehicle_id,
                 "stream_id": stream_id,
                 "packet_source": packet_source,
                 "receiver_id": receiver_id,
+                "started_at": started_at,
                 "seen_at": seen_at,
             }
         ),
@@ -673,6 +697,7 @@ async def test_simulator_start_registers_stream_id_from_response(monkeypatch) ->
         "stream_id": "a6107734-80af-4f61-8c69-d53ab64dd13a",
         "packet_source": "simulator-link",
         "receiver_id": None,
+        "started_at": None,
         "seen_at": None,
     }
 

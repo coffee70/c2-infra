@@ -143,12 +143,14 @@ def register_stream(
     stream_id: str,
     packet_source: str | None = None,
     receiver_id: str | None = None,
+    started_at: datetime | None = None,
     seen_at: datetime | None = None,
 ) -> TelemetryStream:
     """Create or update a telemetry stream row and mark it active in cache."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
 
-    observed_at = seen_at or datetime.now(timezone.utc)
+    observed_at = seen_at or started_at or datetime.now(timezone.utc)
+    started_at = started_at or observed_at
     stream = db.get(TelemetryStream, stream_id)
     if stream is None:
         db.execute(
@@ -159,7 +161,7 @@ def register_stream(
                 packet_source=packet_source,
                 receiver_id=receiver_id,
                 status="active",
-                started_at=observed_at,
+                started_at=started_at,
                 last_seen_at=observed_at,
             )
             .on_conflict_do_nothing(index_elements=[TelemetryStream.id])
@@ -171,6 +173,8 @@ def register_stream(
         raise ValueError("Run not found for source")
     stream.vehicle_id = logical_vehicle_id
     stream.status = "active"
+    if getattr(stream, "started_at", None) is None:
+        stream.started_at = started_at
     stream.last_seen_at = observed_at
     if packet_source is not None:
         stream.packet_source = packet_source

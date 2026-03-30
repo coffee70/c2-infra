@@ -147,12 +147,15 @@ class TelemetryService:
         meta = self.get_by_name(logical_vehicle_id, telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")
+        sample_timestamps = [ts for ts, _ in data]
         register_stream(
             self._db,
             vehicle_id=logical_vehicle_id,
             stream_id=stream_id,
             packet_source=packet_source,
             receiver_id=receiver_id,
+            started_at=min(sample_timestamps) if sample_timestamps else None,
+            seen_at=max(sample_timestamps) if sample_timestamps else None,
         )
 
         rows = [

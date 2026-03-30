@@ -14,8 +14,8 @@ def test_simulator_default_source_id_falls_back_to_stable_alias(monkeypatch) -> 
 
     module = _reload_simulator_main()
 
-    assert module.DEFAULT_SOURCE_ID == "simulator"
-    assert module._generate_run_source_id(None).startswith("simulator-")
+    assert module.DEFAULT_VEHICLE_ID == "simulator"
+    assert module._generate_stream_id(None).startswith("simulator-")
 
 
 def test_simulator_default_source_id_honors_env_override(monkeypatch) -> None:
@@ -23,5 +23,5 @@ def test_simulator_default_source_id_honors_env_override(monkeypatch) -> None:
 
     module = _reload_simulator_main()
 
-    assert module.DEFAULT_SOURCE_ID == "custom-simulator"
-    assert module._generate_run_source_id(None).startswith("custom-simulator-")
+    assert module.DEFAULT_VEHICLE_ID == "custom-simulator"
+    assert module._generate_stream_id(None).startswith("custom-simulator-")
