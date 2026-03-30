@@ -166,6 +166,20 @@ def _get_cached_simulator_status(vehicle_id: str) -> Optional[dict[str, object]]
     return status
 
 
+def _should_refresh_simulator_status(
+    vehicle_id: str,
+    *,
+    min_poll_interval_sec: float = SIMULATOR_STATUS_CACHE_TTL_SEC,
+) -> bool:
+    """Return True when the next simulator /status call should be refreshed."""
+    logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    cached = _simulator_status_by_vehicle.get(logical_vehicle_id)
+    if cached is None:
+        return True
+    _status, seen_at = cached
+    return (time.time() - seen_at) > min_poll_interval_sec
+
+
 def get_logical_source(db: Session, vehicle_id: str) -> Optional[TelemetrySource]:
     """Return the logical vehicle row."""
     return db.get(TelemetrySource, normalize_vehicle_id(vehicle_id))
@@ -293,23 +307,16 @@ def _resolve_simulator_status(
 
     if state == "idle":
         clear_active_stream(logical_vehicle_id, db=db)
-        _cache_simulator_status(
-            logical_vehicle_id,
-            state="idle",
-            active_stream_id=None,
-        )
         return logical_vehicle_id
 
     if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
-        cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
-        if cached_stream_id != active_stream_id:
-            register_stream(
-                db,
-                vehicle_id=logical_vehicle_id,
-                stream_id=active_stream_id,
-                packet_source=packet_source if isinstance(packet_source, str) else None,
-                receiver_id=receiver_id if isinstance(receiver_id, str) else None,
-            )
+        register_stream(
+            db,
+            vehicle_id=logical_vehicle_id,
+            stream_id=active_stream_id,
+            packet_source=packet_source if isinstance(packet_source, str) else None,
+            receiver_id=receiver_id if isinstance(receiver_id, str) else None,
+        )
         return active_stream_id
 
     return None
@@ -349,35 +356,38 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
 
     src = get_logical_source(db, logical_vehicle_id)
     if src is not None and src.source_type == "simulator" and src.base_url:
-        cached_status = _get_cached_simulator_status(logical_vehicle_id)
-        if cached_status is not None:
-            resolved = _resolve_simulator_status(
-                db,
-                logical_vehicle_id,
-                cached_status,
-                refresh_cache=False,
-            )
-            if resolved is not None:
-                return resolved
+        if _should_refresh_simulator_status(logical_vehicle_id):
+            payload: dict[str, object] | None = None
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    res = client.get(f"{src.base_url.rstrip('/')}/status")
+                if res.status_code < 400:
+                    raw_payload = res.json()
+                    if isinstance(raw_payload, dict):
+                        payload = raw_payload
+            except Exception:
+                payload = None
 
-        payload = None
-        try:
-            with httpx.Client(timeout=timeout) as client:
-                res = client.get(f"{src.base_url.rstrip('/')}/status")
-            if res.status_code < 400:
-                payload = res.json()
-        except Exception:
-            payload = None
-
-        if payload is not None:
-            resolved = _resolve_simulator_status(
-                db,
-                logical_vehicle_id,
-                payload,
-                refresh_cache=True,
-            )
-            if resolved is not None:
-                return resolved
+            if payload is not None:
+                resolved = _resolve_simulator_status(
+                    db,
+                    logical_vehicle_id,
+                    payload,
+                    refresh_cache=True,
+                )
+                if resolved is not None:
+                    return resolved
+        else:
+            cached_status = _get_cached_simulator_status(logical_vehicle_id)
+            if cached_status is not None:
+                resolved = _resolve_simulator_status(
+                    db,
+                    logical_vehicle_id,
+                    cached_status,
+                    refresh_cache=False,
+                )
+                if resolved is not None:
+                    return resolved
 
     cached_stream_id = get_cached_active_run_id(logical_vehicle_id)
     if cached_stream_id is not None:
