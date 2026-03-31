@@ -70,6 +70,7 @@ from app.services.source_run_service import (
     get_stream_vehicle_id,
     normalize_vehicle_id,
     normalize_source_id,
+    SourceNotFoundError,
     resolve_logical_vehicle_id,
     register_stream,
     StreamIdConflictError,
@@ -824,6 +825,8 @@ def set_active_run(
             register_stream(db, vehicle_id=logical_source_id, stream_id=body.stream_id)
         except StreamIdConflictError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        except SourceNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
         audit_log(
             "sources.active_run.set",
             source_id=logical_source_id,

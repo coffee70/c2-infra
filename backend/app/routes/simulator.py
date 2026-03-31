@@ -11,7 +11,12 @@ from app.database import get_db
 from app.lib.audit import audit_log
 from app.models.telemetry import TelemetrySource
 from app.orbit import reset_source as reset_orbit_source
-from app.services.source_run_service import StreamIdConflictError, clear_active_run, register_stream
+from app.services.source_run_service import (
+    StreamIdConflictError,
+    SourceNotFoundError,
+    clear_active_run,
+    register_stream,
+)
 from telemetry_catalog.definitions import resolve_source_id_alias
 
 router = APIRouter()
@@ -128,6 +133,8 @@ async def simulator_status(
                 )
             except StreamIdConflictError as e:
                 conflict_exc = HTTPException(status_code=400, detail=str(e))
+            except SourceNotFoundError as e:
+                conflict_exc = HTTPException(status_code=404, detail=str(e))
         elif state == "idle":
             clear_active_run(resolved_source_id, db=db)
     except (httpx.ConnectError, httpx.TimeoutException, HTTPException) as e:
@@ -183,6 +190,8 @@ async def simulator_start(
                 )
             except StreamIdConflictError as e:
                 raise HTTPException(status_code=400, detail=str(e))
+            except SourceNotFoundError as e:
+                raise HTTPException(status_code=404, detail=str(e))
         audit_log(
             "simulator.start.proxied",
             origin="frontend",

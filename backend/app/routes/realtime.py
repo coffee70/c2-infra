@@ -29,6 +29,7 @@ from app.services.realtime_service import (
 )
 from app.services.source_run_service import (
     StreamIdConflictError,
+    SourceNotFoundError,
     get_stream_vehicle_id,
     normalize_vehicle_id,
     register_stream,
@@ -124,6 +125,9 @@ async def ingest_realtime(
     except StreamIdConflictError as e:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(e))
+    except SourceNotFoundError as e:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(e))
     finally:
         session.close()
     vehicle_ids = sorted({e.vehicle_id for e in raw_events})

@@ -37,6 +37,7 @@ from app.services import overview_service as overview_service_module
 from app.services.telemetry_service import TelemetryService
 from app.services.source_run_service import (
     StreamIdConflictError,
+    SourceNotFoundError,
     ensure_stream_belongs_to_vehicle,
     register_stream,
 )
@@ -891,6 +892,57 @@ async def test_realtime_ingest_rejects_conflicting_stream_before_queueing(monkey
 
 
 @pytest.mark.anyio
+async def test_realtime_ingest_rejects_missing_source(monkeypatch) -> None:
+    db = MagicMock()
+    db.get.return_value = None
+
+    class FakeBus:
+        def publish_measurement(self, *_args, **_kwargs):
+            raise AssertionError("validation should fail before queueing")
+
+        def measurement_queue_size(self):
+            return 0
+
+        def measurement_queue_maxsize(self):
+            return 1
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(request_id="req-1"),
+        headers={"X-Request-ID": "req-1"},
+        method="POST",
+        url=SimpleNamespace(path="/realtime/ingest"),
+    )
+
+    monkeypatch.setattr(realtime_routes, "get_session_factory", lambda: lambda: db)
+    monkeypatch.setattr(realtime_routes, "get_realtime_bus", lambda: FakeBus())
+    monkeypatch.setattr(realtime_routes, "get_stream_vehicle_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(realtime_routes, "audit_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await realtime_routes.ingest_realtime(
+            body=MeasurementEventBatch.model_validate(
+                {
+                    "events": [
+                        {
+                            "vehicle_id": "vehicle-a",
+                            "stream_id": "shared-stream",
+                            "channel_name": "VBAT",
+                            "value": 4.2,
+                            "reception_time": "2026-03-28T12:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            request=request,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "Source not found: vehicle-a" in str(exc_info.value.detail)
+    db.commit.assert_not_called()
+    db.rollback.assert_called_once()
+
+
+@pytest.mark.anyio
 async def test_realtime_ingest_rejects_same_stream_id_for_multiple_vehicles(monkeypatch) -> None:
     db = MagicMock()
     sources = {
@@ -969,8 +1021,20 @@ def test_register_stream_rejects_vehicle_reassignment() -> None:
         packet_source=None,
         receiver_id=None,
     )
+    source = TelemetrySource(
+        id="vehicle-a",
+        name="Vehicle A",
+        source_type="vehicle",
+        telemetry_definition_path="defs/vehicle-a.yaml",
+    )
     db = MagicMock()
-    db.get.side_effect = lambda model, key: stream if model.__name__ == "TelemetryStream" and key == stream.id else None
+    db.get.side_effect = lambda model, key: (
+        source
+        if model is TelemetrySource and key == "vehicle-a"
+        else stream
+        if model.__name__ == "TelemetryStream" and key == stream.id
+        else None
+    )
 
     with pytest.raises(StreamIdConflictError) as exc_info:
         register_stream(db, vehicle_id="vehicle-a", stream_id=stream.id)
@@ -984,12 +1048,12 @@ def test_register_stream_rejects_reserved_vehicle_id() -> None:
     db = MagicMock()
     db.get.side_effect = lambda model, key: (
         TelemetrySource(
-            id="vehicle-a",
-            name="Vehicle A",
+            id=key,
+            name=f"Vehicle {key[-1].upper()}",
             source_type="vehicle",
-            telemetry_definition_path="defs/vehicle-a.yaml",
+            telemetry_definition_path=f"defs/{key}.yaml",
         )
-        if model is TelemetrySource and key == "vehicle-a"
+        if model is TelemetrySource and key in {"vehicle-a", "vehicle-b"}
         else None
     )
 
@@ -997,6 +1061,17 @@ def test_register_stream_rejects_reserved_vehicle_id() -> None:
         register_stream(db, vehicle_id="vehicle-b", stream_id="vehicle-a")
 
     assert "conflicts" in str(exc_info.value)
+    db.execute.assert_not_called()
+
+
+def test_register_stream_rejects_missing_source() -> None:
+    db = MagicMock()
+    db.get.return_value = None
+
+    with pytest.raises(SourceNotFoundError) as exc_info:
+        register_stream(db, vehicle_id="vehicle-a", stream_id="vehicle-a-2026-03-28T12-00-00Z")
+
+    assert "Source not found: vehicle-a" in str(exc_info.value)
     db.execute.assert_not_called()
 
 
@@ -1017,7 +1092,7 @@ def test_register_stream_allows_reserved_vehicle_id_for_same_vehicle() -> None:
         receiver_id=None,
         started_at=None,
     )
-    db.get.side_effect = [source, None, stream]
+    db.get.side_effect = [source, source, None, stream]
     db.execute.return_value = None
 
     observed_at = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
@@ -1058,6 +1133,12 @@ def test_ensure_stream_belongs_to_vehicle_rejects_vehicle_id_as_explicit_run(
 def test_register_stream_uses_idempotent_missing_row_path() -> None:
     stream_id = "vehicle-a-2026-03-28T12-00-00Z"
     observed_at = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    source = TelemetrySource(
+        id="vehicle-a",
+        name="Vehicle A",
+        source_type="vehicle",
+        telemetry_definition_path="defs/vehicle-a.yaml",
+    )
     stream = SimpleNamespace(
         id=stream_id,
         vehicle_id="vehicle-a",
@@ -1067,7 +1148,7 @@ def test_register_stream_uses_idempotent_missing_row_path() -> None:
         receiver_id=None,
     )
     db = MagicMock()
-    db.get.side_effect = [None, None, stream]
+    db.get.side_effect = [source, None, None, stream]
 
     captured: dict[str, object] = {}
 
@@ -1117,9 +1198,30 @@ def test_set_active_run_rejects_vehicle_id_collision(monkeypatch) -> None:
                 state="active",
             ),
             db=MagicMock(),
-        )
+    )
 
     assert exc_info.value.status_code == 400
+
+
+def test_set_active_run_rejects_missing_source(monkeypatch) -> None:
+    monkeypatch.setattr(telemetry_routes, "audit_log", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(telemetry_routes, "get_stream_vehicle_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(telemetry_routes, "resolve_logical_vehicle_id", lambda _db, source_id: source_id)
+    db = MagicMock()
+    db.get.return_value = None
+
+    with pytest.raises(telemetry_routes.HTTPException) as exc_info:
+        telemetry_routes.set_active_run(
+            body=telemetry_routes.ActiveRunUpdate(
+                vehicle_id="vehicle-a",
+                stream_id="vehicle-a-2026-03-28T12-00-00Z",
+                state="active",
+            ),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "Source not found: vehicle-a" in str(exc_info.value.detail)
 
 
 def test_ingest_data_rejects_vehicle_id_collision(monkeypatch) -> None:
@@ -1377,6 +1479,35 @@ async def test_simulator_status_rejects_stream_conflict(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
+async def test_simulator_status_rejects_missing_source(monkeypatch) -> None:
+    db = MagicMock()
+    db.get.return_value = None
+
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_with_audit",
+        lambda _db, _source_id, _action: "http://simulator:8010",
+    )
+
+    async def fake_proxy_get(_base_url, _path):
+        return {
+            "state": "active",
+            "config": {
+                "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
+            },
+            "supported_scenarios": ["nominal"],
+        }
+
+    monkeypatch.setattr(simulator_routes, "_proxy_get", fake_proxy_get)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
+
+    assert exc_info.value.status_code == 404
+    assert "Source not found: vehicle-a" in str(exc_info.value.detail)
+
+
+@pytest.mark.anyio
 async def test_simulator_start_registers_stream_id_from_response(monkeypatch) -> None:
     db = MagicMock()
     registered: dict[str, object] = {}
@@ -1476,6 +1607,41 @@ async def test_simulator_start_rejects_stream_conflict(monkeypatch) -> None:
 
     assert exc_info.value.status_code == 400
     assert "does not belong to vehicle" in str(exc_info.value.detail)
+
+
+@pytest.mark.anyio
+async def test_simulator_start_rejects_missing_source(monkeypatch) -> None:
+    db = MagicMock()
+    db.get.return_value = None
+
+    mock_src = SimpleNamespace(telemetry_definition_path=None)
+
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_simulator_source",
+        lambda _db, _source_id: mock_src,
+    )
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_with_audit",
+        lambda _db, _source_id, _action: "http://simulator:8010",
+    )
+
+    async def fake_proxy_post(_base_url, _path, body):
+        return {"stream_id": "a6107734-80af-4f61-8c69-d53ab64dd13a"}
+
+    monkeypatch.setattr(simulator_routes, "_proxy_post", fake_proxy_post)
+    monkeypatch.setattr(simulator_routes, "clear_active_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(simulator_routes, "reset_orbit_source", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await simulator_routes.simulator_start(
+            config=simulator_routes.StartConfig(vehicle_id="vehicle-a"),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "Source not found: vehicle-a" in str(exc_info.value.detail)
 
 
 def test_channel_run_listing_route_emits_stream_ids(monkeypatch) -> None:

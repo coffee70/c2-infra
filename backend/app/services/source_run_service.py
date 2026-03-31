@@ -29,6 +29,10 @@ class StreamIdConflictError(ValueError):
     """Raised when a stream id collides with a reserved vehicle id."""
 
 
+class SourceNotFoundError(ValueError):
+    """Raised when stream registration targets an unknown logical vehicle."""
+
+
 def normalize_vehicle_id(vehicle_id: str) -> str:
     """Normalize an exact vehicle id alias to its stored id."""
     return resolve_source_id_alias(vehicle_id) or vehicle_id
@@ -230,6 +234,10 @@ def register_stream(
 ) -> TelemetryStream:
     """Create or update a telemetry stream row and optionally mark it active in cache."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
+    source = db.get(TelemetrySource, logical_vehicle_id)
+    if source is None:
+        raise SourceNotFoundError(f"Source not found: {logical_vehicle_id}")
+
     reserved_vehicle_id = normalize_vehicle_id(stream_id)
     existing_vehicle = db.get(TelemetrySource, reserved_vehicle_id)
     if existing_vehicle is not None and reserved_vehicle_id != logical_vehicle_id:
@@ -360,7 +368,7 @@ def _resolve_simulator_status(
                 packet_source=packet_source if isinstance(packet_source, str) else None,
                 receiver_id=receiver_id if isinstance(receiver_id, str) else None,
             )
-        except StreamIdConflictError:
+        except (SourceNotFoundError, StreamIdConflictError):
             return None
         return active_stream_id
 
@@ -539,7 +547,7 @@ def resolve_active_stream_id(db: Session, vehicle_id: str, *, timeout: float = 2
                 receiver_id=getattr(current_row, "receiver_id", None),
                 seen_at=getattr(current_row, "reception_time", None),
             )
-        except StreamIdConflictError:
+        except (SourceNotFoundError, StreamIdConflictError):
             pass
         else:
             return current_stream_id
