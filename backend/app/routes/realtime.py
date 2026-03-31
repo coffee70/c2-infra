@@ -32,7 +32,6 @@ from app.services.source_run_service import (
     SourceNotFoundError,
     get_stream_vehicle_id,
     normalize_vehicle_id,
-    register_stream,
     run_id_to_source_id,
 )
 from app.lib.audit import audit_log
@@ -71,8 +70,14 @@ def _resolve_stream_vehicle_id(db: Session, stream_id: str) -> str:
 def _validate_stream_batch_identities(db: Session, events: list[MeasurementEvent]) -> None:
     """Reject colliding or foreign-owned stream ids before queueing realtime events."""
     stream_owners: dict[str, str] = {}
+    seen_vehicles: set[str] = set()
     for event in events:
         logical_vehicle_id = normalize_vehicle_id(event.vehicle_id)
+        if logical_vehicle_id not in seen_vehicles:
+            source = db.get(TelemetrySource, logical_vehicle_id)
+            if source is None:
+                raise SourceNotFoundError(f"Source not found: {logical_vehicle_id}")
+            seen_vehicles.add(logical_vehicle_id)
         prior_owner = stream_owners.get(event.stream_id)
         if prior_owner is not None:
             if prior_owner != logical_vehicle_id:
@@ -106,22 +111,6 @@ async def ingest_realtime(
     raw_events = body.events
     try:
         _validate_stream_batch_identities(session, raw_events)
-        reserved_streams: set[tuple[str, str]] = set()
-        # Reserve ownership in-band, but do not mark the stream active until telemetry lands.
-        for event in raw_events:
-            stream_key = (normalize_vehicle_id(event.vehicle_id), event.stream_id)
-            if stream_key in reserved_streams:
-                continue
-            reserved_streams.add(stream_key)
-            register_stream(
-                session,
-                vehicle_id=event.vehicle_id,
-                stream_id=event.stream_id,
-                packet_source=event.packet_source if isinstance(event.packet_source, str) else None,
-                receiver_id=event.receiver_id if isinstance(event.receiver_id, str) else None,
-                activate=False,
-            )
-        session.commit()
     except StreamIdConflictError as e:
         session.rollback()
         raise HTTPException(status_code=400, detail=str(e))

@@ -745,7 +745,7 @@ def test_realtime_helpers_resolve_active_stream_for_vehicle_scope(monkeypatch) -
 
 
 @pytest.mark.anyio
-async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(monkeypatch) -> None:
+async def test_realtime_ingest_does_not_persist_streams_when_publish_drops(monkeypatch) -> None:
     db = MagicMock()
     source = TelemetrySource(
         id="vehicle-a",
@@ -755,9 +755,12 @@ async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(mo
     )
     db.get.side_effect = lambda model, key: source if model is TelemetrySource and key == "vehicle-a" else None
 
+    published: list[object] = []
+
     class FakeBus:
-        def publish_measurement(self, *_args, **_kwargs):
-            return True
+        def publish_measurement(self, event, *_args, **_kwargs):
+            published.append(event)
+            return False
 
         def measurement_queue_size(self):
             return 0
@@ -775,23 +778,6 @@ async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(mo
     monkeypatch.setattr(realtime_routes, "get_session_factory", lambda: lambda: db)
     monkeypatch.setattr(realtime_routes, "get_realtime_bus", lambda: FakeBus())
     monkeypatch.setattr(realtime_routes, "get_stream_vehicle_id", lambda *_args, **_kwargs: None)
-    registered: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        realtime_routes,
-        "register_stream",
-        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None, activate=True: registered.append(
-            {
-                "db": db_arg,
-                "vehicle_id": vehicle_id,
-                "stream_id": stream_id,
-                "packet_source": packet_source,
-                "receiver_id": receiver_id,
-                "started_at": started_at,
-                "seen_at": seen_at,
-                "activate": activate,
-            }
-        ),
-    )
     monkeypatch.setattr(realtime_routes, "audit_log", lambda *_args, **_kwargs: None)
 
     response = await realtime_routes.ingest_realtime(
@@ -811,32 +797,31 @@ async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(mo
         request=request,
     )
 
-    assert response == {"accepted": 1}
-    assert registered == [
-        {
-            "db": db,
-            "vehicle_id": "vehicle-a",
-            "stream_id": "vehicle-a",
-            "packet_source": None,
-            "receiver_id": None,
-            "started_at": None,
-            "seen_at": None,
-            "activate": False,
-        }
-    ]
-    db.get.assert_called_once()
+    assert response == {"accepted": 0}
+    assert len(published) == 1
+    assert db.get.call_count == 2
+    db.commit.assert_not_called()
+    db.rollback.assert_not_called()
 
 
 @pytest.mark.anyio
 async def test_realtime_ingest_rejects_conflicting_stream_before_queueing(monkeypatch) -> None:
     db = MagicMock()
-    source = TelemetrySource(
-        id="vehicle-a",
-        name="Vehicle A",
-        source_type="vehicle",
-        telemetry_definition_path="defs/vehicle-a.yaml",
-    )
-    db.get.side_effect = lambda model, key: source if model is TelemetrySource and key == "vehicle-a" else None
+    sources = {
+        "vehicle-a": TelemetrySource(
+            id="vehicle-a",
+            name="Vehicle A",
+            source_type="vehicle",
+            telemetry_definition_path="defs/vehicle-a.yaml",
+        ),
+        "vehicle-b": TelemetrySource(
+            id="vehicle-b",
+            name="Vehicle B",
+            source_type="vehicle",
+            telemetry_definition_path="defs/vehicle-b.yaml",
+        ),
+    }
+    db.get.side_effect = lambda model, key: sources.get(key) if model is TelemetrySource else None
 
     class FakeBus:
         def publish_measurement(self, *_args, **_kwargs):
@@ -858,13 +843,6 @@ async def test_realtime_ingest_rejects_conflicting_stream_before_queueing(monkey
     monkeypatch.setattr(realtime_routes, "get_session_factory", lambda: lambda: db)
     monkeypatch.setattr(realtime_routes, "get_realtime_bus", lambda: FakeBus())
     monkeypatch.setattr(realtime_routes, "get_stream_vehicle_id", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        realtime_routes,
-        "register_stream",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            StreamIdConflictError("stream_id does not belong to vehicle")
-        ),
-    )
     monkeypatch.setattr(realtime_routes, "audit_log", lambda *_args, **_kwargs: None)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -872,12 +850,12 @@ async def test_realtime_ingest_rejects_conflicting_stream_before_queueing(monkey
             body=MeasurementEventBatch.model_validate(
                 {
                     "events": [
-                        {
-                            "vehicle_id": "vehicle-a",
-                            "stream_id": "shared-stream",
-                            "channel_name": "VBAT",
-                            "value": 4.2,
-                            "reception_time": "2026-03-28T12:00:00Z",
+                    {
+                        "vehicle_id": "vehicle-a",
+                        "stream_id": "vehicle-b",
+                        "channel_name": "VBAT",
+                        "value": 4.2,
+                        "reception_time": "2026-03-28T12:00:00Z",
                         }
                     ]
                 }
@@ -886,9 +864,9 @@ async def test_realtime_ingest_rejects_conflicting_stream_before_queueing(monkey
         )
 
     assert exc_info.value.status_code == 400
-    assert "does not belong to vehicle" in str(exc_info.value.detail)
+    assert "conflicts with an existing vehicle id" in str(exc_info.value.detail)
     db.commit.assert_not_called()
-    db.rollback.assert_called_once()
+    db.rollback.assert_not_called()
 
 
 @pytest.mark.anyio

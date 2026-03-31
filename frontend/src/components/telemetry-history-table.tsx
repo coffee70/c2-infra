@@ -277,7 +277,13 @@ export function TelemetryHistoryTable({
 
   const runOptions = useMemo(() => {
     const getRunKey = (run: { stream_id?: string }) => run.stream_id ?? "";
-    const byId = new Map(runs.map((s) => [getRunKey(s), s]));
+    const byId = new Map<string, { stream_id?: string; label: string }>();
+    for (const run of runs) {
+      const key = getRunKey(run);
+      if (!byId.has(key)) {
+        byId.set(key, run);
+      }
+    }
     if (selectedRunId && !byId.has(selectedRunId)) {
       byId.set(selectedRunId, {
         stream_id: selectedRunId,
@@ -294,12 +300,7 @@ export function TelemetryHistoryTable({
             : selectedRunId,
       });
     }
-    // Preserve newest-first order (by stream_id desc) to match backend; label sort would put older dates first.
-    return Array.from(byId.values()).sort((a, b) => {
-      const left = getRunKey(a);
-      const right = getRunKey(b);
-      return right.localeCompare(left, undefined, { sensitivity: "base" });
-    });
+    return Array.from(byId.values());
   }, [runs, selectedRunId]);
 
   const handleCopyRow = async (point: HistoryPoint) => {

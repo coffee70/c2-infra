@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type APIRequestContext } from "@playwright/test";
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || "http://127.0.0.1:8000";
 
@@ -10,6 +10,33 @@ function formatRunLabel(runId: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function ingestRealtimeSample(
+  request: APIRequestContext,
+  sourceId: string,
+  streamId: string,
+  channelName: string,
+  value: number,
+  receptionTime: string,
+) {
+  const response = await request.post(`${API_URL}/telemetry/realtime/ingest`, {
+    data: {
+      events: [
+        {
+          vehicle_id: sourceId,
+          stream_id: streamId,
+          channel_name: channelName,
+          value,
+          reception_time: receptionTime,
+        },
+      ],
+    },
+  });
+
+  expect(response.ok()).toBeTruthy();
+  const payload = (await response.json()) as { accepted?: number };
+  expect(payload.accepted).toBe(1);
 }
 
 test("telemetry detail preserves source scope while honoring run query", async ({
@@ -71,4 +98,68 @@ test("telemetry detail preserves source scope while honoring run query", async (
 
   await page.getByRole("tab", { name: "History" }).click();
   await expect(page.locator("#history-run")).toContainText(expectedRunLabel);
+});
+
+test("telemetry history run dropdown preserves backend ordering for opaque ids", async ({
+  page,
+  request,
+}) => {
+  const sourceId = "86a0057f-4733-4de6-af60-455cb3954f1d";
+  const channelName = "PWR_MAIN_BUS_VOLT";
+  const olderRunId = "fffffff0-0000-0000-0000-000000000000";
+  const newerRunId = "00000000-0000-0000-0000-000000000001";
+
+  await ingestRealtimeSample(
+    request,
+    sourceId,
+    olderRunId,
+    channelName,
+    3.1,
+    "2026-03-28T12:00:00Z",
+  );
+  await ingestRealtimeSample(
+    request,
+    sourceId,
+    newerRunId,
+    channelName,
+    3.2,
+    "2026-03-28T12:05:00Z",
+  );
+
+  await expect
+    .poll(
+      async () => {
+        const runsResponse = await request.get(
+          `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(channelName)}/runs`,
+        );
+        expect(runsResponse.ok()).toBeTruthy();
+        const runsPayload = (await runsResponse.json()) as {
+          sources?: Array<{ stream_id?: string }>;
+        };
+        return (runsPayload.sources ?? [])
+          .map((run) => run.stream_id)
+          .filter((runId): runId is string => typeof runId === "string" && runId.length > 0);
+      },
+      { timeout: 45_000 },
+    )
+    .toEqual([newerRunId, olderRunId]);
+
+  await page.goto(
+    `/sources/${encodeURIComponent(sourceId)}/telemetry/${encodeURIComponent(channelName)}?run=${encodeURIComponent(newerRunId)}`,
+  );
+
+  await expect(page).toHaveURL(
+    new RegExp(
+      `${escapeRegExp(`/sources/${sourceId}/telemetry/${channelName}`)}\\?run=${escapeRegExp(newerRunId)}$`,
+    ),
+  );
+
+  await page.getByRole("tab", { name: "History" }).click();
+  await page.locator("#history-run").click();
+
+  const options = page.getByRole("option");
+  await expect(options).toHaveCount(3);
+  await expect(options.nth(0)).toContainText("Active / latest");
+  await expect(options.nth(1)).toContainText(newerRunId);
+  await expect(options.nth(2)).toContainText(olderRunId);
 });
