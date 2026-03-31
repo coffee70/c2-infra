@@ -66,16 +66,16 @@ async def test_broadcast_telemetry_update_matches_vehicle_and_stream_scope() -> 
     )
 
     assert vehicle_ws.send_text.await_count == 1
-    assert base_ws.send_text.await_count == 0
+    assert base_ws.send_text.await_count == 1
     assert stream_ws.send_text.await_count == 1
     assert other_ws.send_text.await_count == 0
 
 
 @pytest.mark.anyio
-async def test_vehicle_scoped_subscription_follows_later_stream_changes() -> None:
+async def test_historical_stream_scoped_subscription_stays_pinned() -> None:
     hub = RealtimeWsHub()
     vehicle_ws = _make_ws("vehicle-a")
-    explicit_base_ws = _make_ws("vehicle-a")
+    stream_ws = _make_ws("stream-1")
     hub._connections = {
         vehicle_ws: {
             "active_vehicle_id": "vehicle-a",
@@ -84,9 +84,9 @@ async def test_vehicle_scoped_subscription_follows_later_stream_changes() -> Non
             "channel_detail": set(),
             "alerts_subscribed": True,
         },
-        explicit_base_ws: {
+        stream_ws: {
             "active_vehicle_id": "vehicle-a",
-            "active_stream_id": "vehicle-a",
+            "active_stream_id": "stream-1",
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -107,7 +107,7 @@ async def test_vehicle_scoped_subscription_follows_later_stream_changes() -> Non
     )
 
     assert vehicle_ws.send_text.await_count == 1
-    assert explicit_base_ws.send_text.await_count == 0
+    assert stream_ws.send_text.await_count == 0
 
 
 @pytest.mark.anyio
@@ -167,6 +167,6 @@ async def test_broadcast_alert_event_matches_vehicle_and_stream_scope() -> None:
     )
 
     assert vehicle_ws.send_text.await_count == 1
-    assert base_ws.send_text.await_count == 0
+    assert base_ws.send_text.await_count == 1
     assert stream_ws.send_text.await_count == 1
     assert other_ws.send_text.await_count == 0

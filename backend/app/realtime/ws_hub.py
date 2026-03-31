@@ -74,8 +74,12 @@ class RealtimeWsHub:
         for ws, subs in self._connections.items():
             conn_vehicle_id = subs.get("active_vehicle_id", "default")
             conn_stream_id = subs.get("active_stream_id")
+            # Treat the logical vehicle id as the base live stream.
+            # Only subscriptions pinned to a different concrete stream stay exact.
             scope_matches = (
-                conn_stream_id == stream_id if conn_stream_id is not None else conn_vehicle_id == vehicle_id
+                conn_vehicle_id == vehicle_id
+                if conn_stream_id is None or conn_stream_id == conn_vehicle_id
+                else conn_stream_id == stream_id
             )
             if for_alerts and subs.get("alerts_subscribed"):
                 if scope_matches:

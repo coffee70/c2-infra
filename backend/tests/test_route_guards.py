@@ -74,6 +74,14 @@ def test_resolve_scoped_run_id_accepts_persisted_stream_without_registry() -> No
     assert ensure_run_belongs_to_source(db, source_id, stream_id) == stream_id
 
 
+def test_resolve_scoped_run_id_accepts_vehicle_id_as_explicit_run() -> None:
+    source_id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
+    db = MagicMock()
+    db.get.side_effect = AssertionError("unexpected stream lookup")
+
+    assert ensure_run_belongs_to_source(db, source_id, source_id) == source_id
+
+
 def test_resolve_scoped_run_id_accepts_registered_stream_before_persistence() -> None:
     source_id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
     stream_id = f"{source_id}-2026-03-15T14-00-00Z"

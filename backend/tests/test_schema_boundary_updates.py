@@ -1260,22 +1260,22 @@ def test_register_stream_allows_reserved_vehicle_id_for_same_vehicle() -> None:
     db.execute.assert_called_once()
 
 
-def test_ensure_stream_belongs_to_vehicle_rejects_vehicle_id_as_explicit_run(
+def test_ensure_stream_belongs_to_vehicle_accepts_vehicle_id_as_explicit_run(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
         "app.services.source_run_service.get_stream_vehicle_id",
-        lambda _db, _stream_id: None,
+        lambda _db, _stream_id: (_ for _ in ()).throw(AssertionError("unexpected stream lookup")),
     )
 
-    with pytest.raises(ValueError) as exc_info:
+    assert (
         ensure_stream_belongs_to_vehicle(
             MagicMock(),
             vehicle_id="vehicle-a",
             stream_id="vehicle-a",
         )
-
-    assert "Run not found for source" in str(exc_info.value)
+        == "vehicle-a"
+    )
 
 
 def test_register_stream_uses_idempotent_missing_row_path() -> None:
