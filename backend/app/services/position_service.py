@@ -22,7 +22,7 @@ from app.models.schemas import (
 )
 from app.services.channel_alias_service import resolve_channel_metadata, resolve_channel_name
 from app.services.overview_service import _get_latest_value_and_ts
-from app.services.source_run_service import normalize_source_id, resolve_active_run_id, run_id_to_source_id
+from app.services.source_run_service import resolve_latest_stream_id, run_id_to_source_id
 from app.utils.coordinates import ecef_to_lla, eci_to_lla
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def _get_latest_for_channel(
     if not meta:
         return None, None
 
-    data_source_id = normalize_source_id(source_id)
+    data_source_id = resolve_latest_stream_id(db, source_id)
     current = db.get(TelemetryCurrent, (data_source_id, meta.id))
     if current:
         return float(current.value), current.generation_time
@@ -347,7 +347,7 @@ def get_latest_positions(
         src = sources_by_id.get(mapping.source_id)
         if not src:
             continue
-        data_source_id = resolve_active_run_id(db, mapping.source_id)
+        data_source_id = resolve_latest_stream_id(db, mapping.source_id)
         samples.append(
             _build_sample_for_mapping(
                 db,

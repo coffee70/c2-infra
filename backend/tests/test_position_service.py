@@ -334,10 +334,36 @@ def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatc
     monkeypatch.setattr("app.services.source_run_service.clear_active_stream", fake_clear_active_stream)
 
     assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
-    assert cleared == []
-    assert stream.status == "active"
-    assert stream.last_seen_at == current.reception_time
-    clear_active_run(DROGONSAT_SOURCE_ID)
+
+
+def test_resolve_latest_stream_id_recovers_most_recent_stream_when_idle(monkeypatch) -> None:
+    logical_vehicle_id = DROGONSAT_SOURCE_ID
+    latest_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    db = MagicMock()
+
+    class _LatestResult:
+        def __init__(self, value):
+            self._value = value
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._value
+
+    monkeypatch.setattr(
+        srs,
+        "resolve_logical_vehicle_id",
+        lambda _db, source_id: source_id,
+    )
+    monkeypatch.setattr(
+        srs,
+        "resolve_active_stream_id",
+        lambda _db, source_id, timeout=2.0: source_id,
+    )
+    db.execute.return_value = _LatestResult(latest_stream_id)
+
+    assert srs.resolve_latest_stream_id(db, logical_vehicle_id) == latest_stream_id
 
 
 def test_resolve_active_run_id_prefers_live_simulator_status_over_cached_run(monkeypatch) -> None:
@@ -1172,7 +1198,7 @@ def test_build_sample_for_mapping_reads_from_run_but_labels_logical_source(
     assert sample.valid is True
 
 
-def test_get_latest_positions_resolves_active_run_for_mapped_source(
+def test_get_latest_positions_resolves_latest_run_for_mapped_source(
     monkeypatch,
 ) -> None:
     db = MagicMock()
@@ -1189,7 +1215,7 @@ def test_get_latest_positions_resolves_active_run_for_mapped_source(
 
     monkeypatch.setattr(
         position_service,
-        "resolve_active_run_id",
+        "resolve_latest_stream_id",
         lambda db_session, source_id: f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
     )
 

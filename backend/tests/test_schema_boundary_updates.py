@@ -313,7 +313,7 @@ def test_telemetry_filter_routes_resolve_stream_inputs_to_logical_vehicle(monkey
     assert any(f"telemetry_metadata.source_id = '{logical_vehicle_id}'" in sql for sql in captured_sql)
 
 
-def test_overview_summary_routes_resolve_stream_inputs_to_logical_vehicle(monkeypatch) -> None:
+def test_overview_summary_routes_use_latest_stream_for_idle_vehicle(monkeypatch) -> None:
     from app.services.overview_service import get_anomalies, get_overview
 
     logical_vehicle_id = "vehicle-a"
@@ -362,6 +362,11 @@ def test_overview_summary_routes_resolve_stream_inputs_to_logical_vehicle(monkey
     )
     monkeypatch.setattr(
         overview_service_module,
+        "resolve_latest_stream_id",
+        lambda _db, _source_id: opaque_source_id,
+    )
+    monkeypatch.setattr(
+        overview_service_module,
         "get_watchlist",
         lambda _db, _source_id: [
             {
@@ -389,8 +394,8 @@ def test_overview_summary_routes_resolve_stream_inputs_to_logical_vehicle(monkey
     monkeypatch.setattr(overview_service_module, "infer_subsystem", lambda _name, _meta: "power")
     monkeypatch.setattr(overview_service_module, "_get_recent_for_sparkline", lambda *_args, **_kwargs: [])
 
-    overview = get_overview(db, opaque_source_id)
-    anomalies = get_anomalies(db, opaque_source_id)
+    overview = get_overview(db, logical_vehicle_id)
+    anomalies = get_anomalies(db, logical_vehicle_id)
 
     assert overview[0]["name"] == "VBAT"
     assert overview[0]["aliases"] == ["BAT"]

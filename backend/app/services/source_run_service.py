@@ -411,6 +411,27 @@ def resolve_active_run_id(db: Session, source_id: str, *, timeout: float = 2.0) 
     return resolve_active_stream_id(db, source_id, timeout=timeout)
 
 
+def resolve_latest_stream_id(db: Session, source_id: str, *, timeout: float = 2.0) -> str:
+    """Resolve a logical vehicle to the most recent concrete telemetry stream."""
+    logical_vehicle_id = resolve_logical_vehicle_id(db, source_id)
+    resolved = resolve_active_stream_id(db, logical_vehicle_id, timeout=timeout)
+    if resolved != logical_vehicle_id:
+        return resolved
+
+    latest_stream_id = (
+        db.execute(
+            select(TelemetryStream.id)
+            .where(TelemetryStream.vehicle_id == logical_vehicle_id)
+            .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
+        )
+        .scalars()
+        .first()
+    )
+    if isinstance(latest_stream_id, str) and latest_stream_id:
+        return latest_stream_id
+    return logical_vehicle_id
+
+
 def _resolve_simulator_backed_active_stream(
     db: Session,
     logical_vehicle_id: str,

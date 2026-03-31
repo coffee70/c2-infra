@@ -21,7 +21,7 @@ from app.services.channel_alias_service import (
     resolve_channel_metadata,
     resolve_channel_name,
 )
-from app.services.source_run_service import normalize_source_id, resolve_logical_vehicle_id
+from app.services.source_run_service import resolve_latest_stream_id, resolve_logical_vehicle_id
 from app.services.telemetry_service import _compute_state
 from app.utils.subsystem import infer_subsystem
 
@@ -202,7 +202,7 @@ def _get_recent_for_sparkline(
 
 def get_overview(db: Session, source_id: str = "default") -> list[dict]:
     """Get overview data for all watchlist channels, optionally filtered by source."""
-    data_source_id = normalize_source_id(source_id)
+    data_source_id = resolve_latest_stream_id(db, source_id)
     logical_source_id = resolve_logical_vehicle_id(db, source_id)
     watchlist = get_watchlist(db, source_id)
     if not watchlist:
@@ -274,7 +274,7 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
 
 def get_anomalies(db: Session, source_id: str = "default") -> dict[str, list[dict]]:
     """Get anomalous channels grouped by subsystem, optionally filtered by source."""
-    data_source_id = normalize_source_id(source_id)
+    data_source_id = resolve_latest_stream_id(db, source_id)
     logical_source_id = resolve_logical_vehicle_id(db, source_id)
     stmt = (
         select(TelemetryMetadata, TelemetryStatistics)
