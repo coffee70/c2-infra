@@ -412,7 +412,10 @@ def resolve_active_run_id(db: Session, source_id: str, *, timeout: float = 2.0) 
 
 
 def resolve_latest_stream_id(db: Session, source_id: str, *, timeout: float = 2.0) -> str:
-    """Resolve a logical vehicle to the most recent concrete telemetry stream."""
+    """Resolve a vehicle to its latest concrete stream, preserving explicit stream ids."""
+    if get_stream_vehicle_id(db, source_id) is not None:
+        return source_id
+
     logical_vehicle_id = resolve_logical_vehicle_id(db, source_id)
     resolved = resolve_active_stream_id(db, logical_vehicle_id, timeout=timeout)
     if resolved != logical_vehicle_id:

@@ -353,6 +353,11 @@ def test_resolve_latest_stream_id_recovers_most_recent_stream_when_idle(monkeypa
 
     monkeypatch.setattr(
         srs,
+        "get_stream_vehicle_id",
+        lambda _db, _source_id: None,
+    )
+    monkeypatch.setattr(
+        srs,
         "resolve_logical_vehicle_id",
         lambda _db, source_id: source_id,
     )
@@ -364,6 +369,29 @@ def test_resolve_latest_stream_id_recovers_most_recent_stream_when_idle(monkeypa
     db.execute.return_value = _LatestResult(latest_stream_id)
 
     assert srs.resolve_latest_stream_id(db, logical_vehicle_id) == latest_stream_id
+
+
+def test_resolve_latest_stream_id_preserves_explicit_stream_id(monkeypatch) -> None:
+    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    db = MagicMock()
+
+    monkeypatch.setattr(
+        srs,
+        "get_stream_vehicle_id",
+        lambda _db, source_id: DROGONSAT_SOURCE_ID if source_id == stream_id else None,
+    )
+    monkeypatch.setattr(
+        srs,
+        "resolve_logical_vehicle_id",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected logical lookup")),
+    )
+    monkeypatch.setattr(
+        srs,
+        "resolve_active_stream_id",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected active lookup")),
+    )
+
+    assert srs.resolve_latest_stream_id(db, stream_id) == stream_id
 
 
 def test_resolve_active_run_id_prefers_live_simulator_status_over_cached_run(monkeypatch) -> None:
