@@ -756,6 +756,7 @@ async def test_realtime_ingest_does_not_persist_streams_when_publish_drops(monke
     db.get.side_effect = lambda model, key: source if model is TelemetrySource and key == "vehicle-a" else None
 
     published: list[object] = []
+    reserved: list[tuple[str, str, bool]] = []
 
     class FakeBus:
         def publish_measurement(self, event, *_args, **_kwargs):
@@ -778,6 +779,13 @@ async def test_realtime_ingest_does_not_persist_streams_when_publish_drops(monke
     monkeypatch.setattr(realtime_routes, "get_session_factory", lambda: lambda: db)
     monkeypatch.setattr(realtime_routes, "get_realtime_bus", lambda: FakeBus())
     monkeypatch.setattr(realtime_routes, "get_stream_vehicle_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        realtime_routes,
+        "register_stream",
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None, activate=True: reserved.append(
+            (vehicle_id, stream_id, activate)
+        ),
+    )
     monkeypatch.setattr(realtime_routes, "audit_log", lambda *_args, **_kwargs: None)
 
     response = await realtime_routes.ingest_realtime(
@@ -799,8 +807,13 @@ async def test_realtime_ingest_does_not_persist_streams_when_publish_drops(monke
 
     assert response == {"accepted": 0}
     assert len(published) == 1
+    assert reserved == [("vehicle-a", "vehicle-a", False)]
     assert db.get.call_count == 2
-    db.commit.assert_not_called()
+    assert db.commit.call_count == 2
+    assert db.execute.call_count == 1
+    stmt = db.execute.call_args.args[0]
+    assert "delete" in str(stmt).lower()
+    assert "telemetry_streams" in str(stmt).lower()
     db.rollback.assert_not_called()
 
 
