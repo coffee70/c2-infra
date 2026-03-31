@@ -50,6 +50,20 @@ def _resolve_stream_vehicle_id(db: Session, source_id: str) -> str:
     return get_stream_vehicle_id(db, source_id) or run_id_to_source_id(source_id)
 
 
+def _resolve_realtime_stream_scope(db: Session, source_id: str) -> tuple[str, str]:
+    """Return the data stream id and logical vehicle id for realtime lookups.
+
+    If the caller explicitly selected a concrete stream row, keep that stream id
+    even when it is numerically equal to the vehicle id.
+    """
+    data_source_id = normalize_source_id(source_id)
+    logical_source_id = _resolve_stream_vehicle_id(db, source_id)
+    requested_stream = db.get(TelemetryStream, source_id)
+    if requested_stream is None and data_source_id == logical_source_id:
+        data_source_id = resolve_active_stream_id(db, logical_source_id)
+    return data_source_id, logical_source_id
+
+
 def _source_to_dict(src: TelemetrySource) -> dict:
     return {
         "id": src.id,
@@ -1157,10 +1171,7 @@ def get_realtime_snapshot_for_channels(
     """Get current values from telemetry_current for given channels and source."""
     if not channel_names:
         return []
-    data_source_id = normalize_source_id(source_id)
-    logical_source_id = _resolve_stream_vehicle_id(db, source_id)
-    if data_source_id == logical_source_id:
-        data_source_id = resolve_active_stream_id(db, logical_source_id)
+    data_source_id, logical_source_id = _resolve_realtime_stream_scope(db, source_id)
 
     stmt = (
         select(TelemetryMetadata, TelemetryCurrent)
@@ -1230,10 +1241,7 @@ def get_active_alerts(
     severities: list[str] | None = None,
 ) -> list[TelemetryAlertSchema]:
     """Get active (non-resolved, non-cleared) alerts for a source."""
-    data_source_id = normalize_source_id(source_id)
-    logical_source_id = _resolve_stream_vehicle_id(db, source_id)
-    if data_source_id == logical_source_id:
-        data_source_id = resolve_active_stream_id(db, logical_source_id)
+    data_source_id, logical_source_id = _resolve_realtime_stream_scope(db, source_id)
     stmt = (
         select(TelemetryAlert, TelemetryMetadata)
         .join(TelemetryMetadata, TelemetryAlert.telemetry_id == TelemetryMetadata.id)

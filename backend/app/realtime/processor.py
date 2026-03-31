@@ -279,16 +279,6 @@ class RealtimeProcessor:
             if discovery_namespace and not meta.discovery_namespace:
                 meta.discovery_namespace = discovery_namespace
 
-        register_stream(
-            db,
-            vehicle_id=vehicle_id,
-            stream_id=stream_id,
-            packet_source=event.packet_source,
-            receiver_id=event.receiver_id,
-            seen_at=recv_time,
-        )
-        get_feed_health_tracker().record_reception(vehicle_id)
-
         # Persist to Timescale. Use a savepoint so duplicate sample retries do not
         # roll back a newly discovered metadata row created earlier in this transaction.
         savepoint = db.begin_nested()
@@ -310,6 +300,16 @@ class RealtimeProcessor:
             # Continue to update current/state without losing discovery metadata.
         else:
             savepoint.commit()
+            # Promote stream state only after the sample insert is accepted.
+            register_stream(
+                db,
+                vehicle_id=vehicle_id,
+                stream_id=stream_id,
+                packet_source=event.packet_source,
+                receiver_id=event.receiver_id,
+                seen_at=recv_time,
+            )
+            get_feed_health_tracker().record_reception(vehicle_id)
 
         # Out-of-order: only update current if generation_time is newer
         current = db.get(TelemetryCurrent, (stream_id, meta.id))
