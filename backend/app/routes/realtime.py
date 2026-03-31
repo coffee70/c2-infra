@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
@@ -66,6 +66,21 @@ def _normalize_event_times(events: list[MeasurementEvent]) -> list[MeasurementEv
 def _resolve_stream_vehicle_id(db: Session, stream_id: str) -> str:
     """Resolve a stream id to its owning vehicle, falling back to legacy ids."""
     return get_stream_vehicle_id(db, stream_id) or run_id_to_source_id(stream_id)
+
+
+def _resolve_requested_stream_id(
+    session_factory: Callable[[], Session],
+    vehicle_id: str,
+    stream_id: str | None,
+) -> str:
+    """Resolve a concrete stream id for websocket snapshots and scoped queries."""
+    if stream_id:
+        return stream_id
+    session = session_factory()
+    try:
+        return resolve_active_stream_id(session, vehicle_id)
+    finally:
+        session.close()
 
 
 def _validate_stream_batch_identities(db: Session, events: list[MeasurementEvent]) -> None:
@@ -237,7 +252,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                 channels = msg.get("channels", [])
                 vehicle_id = msg.get("vehicle_id", "default")
                 stream_id = msg.get("stream_id")
-                resolved_stream_id = stream_id or resolve_active_stream_id(session, vehicle_id)
+                resolved_stream_id = _resolve_requested_stream_id(session_factory, vehicle_id, stream_id)
                 if not channels:
                     # Default to watchlist
                     session = session_factory()
@@ -302,7 +317,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                 name = msg.get("name", "")
                 vehicle_id = msg.get("vehicle_id", "default")
                 stream_id = msg.get("stream_id")
-                resolved_stream_id = stream_id or resolve_active_stream_id(session, vehicle_id)
+                resolved_stream_id = _resolve_requested_stream_id(session_factory, vehicle_id, stream_id)
                 if name:
                     await hub.subscribe_channel(
                         websocket,
@@ -329,7 +344,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
             elif msg_type == "subscribe_alerts":
                 vehicle_id = msg.get("vehicle_id", "default")
                 stream_id = msg.get("stream_id")
-                resolved_stream_id = stream_id or resolve_active_stream_id(session, vehicle_id)
+                resolved_stream_id = _resolve_requested_stream_id(session_factory, vehicle_id, stream_id)
                 await hub.subscribe_alerts(
                     websocket,
                     vehicle_id=vehicle_id,

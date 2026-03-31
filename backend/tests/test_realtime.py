@@ -1,6 +1,7 @@
 """Tests for realtime telemetry processing."""
 
 import asyncio
+import json
 import time
 from decimal import Decimal
 from datetime import datetime, timezone
@@ -11,8 +12,9 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
+from starlette.websockets import WebSocketDisconnect
 
-from app.models.schemas import MeasurementEvent
+from app.models.schemas import MeasurementEvent, RealtimeChannelUpdate
 from app.models.telemetry import TelemetryMetadata, TelemetrySource
 from app.realtime.bus import InProcessEventBus
 from app.realtime.processor import (
@@ -20,7 +22,7 @@ from app.realtime.processor import (
     _build_channel_name_from_tags,
     _resolve_measurement_channel,
 )
-from app.routes.realtime import _normalize_event_times, _validate_stream_batch_identities
+from app.routes.realtime import _normalize_event_times, _validate_stream_batch_identities, websocket_realtime
 from app.services.source_run_service import StreamIdConflictError
 from app.services.telemetry_service import _compute_state
 
@@ -256,6 +258,112 @@ def test_validate_stream_batch_identities_allows_reserved_vehicle_id(
     )
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize("message_type", ["subscribe_watchlist", "subscribe_channel", "subscribe_alerts"])
+async def test_websocket_realtime_resolves_active_stream_without_explicit_stream_id(
+    monkeypatch: pytest.MonkeyPatch,
+    message_type: str,
+) -> None:
+    resolve_calls: list[tuple[object, str]] = []
+    created_sessions: list[object] = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.close = MagicMock()
+
+    def session_factory() -> FakeSession:
+        session = FakeSession()
+        created_sessions.append(session)
+        return session
+
+    class FakeHub:
+        def __init__(self) -> None:
+            self.subscriptions: list[tuple[object, ...]] = []
+            self.disconnected = False
+
+        async def connect(self, websocket) -> None:
+            await websocket.accept()
+
+        async def disconnect(self, websocket) -> None:
+            self.disconnected = True
+
+        async def subscribe_watchlist(self, websocket, channels, vehicle_id="default", stream_id=None) -> None:
+            self.subscriptions.append(("watchlist", list(channels), vehicle_id, stream_id))
+
+        async def subscribe_channel(self, websocket, name, vehicle_id="default", stream_id=None) -> None:
+            self.subscriptions.append(("channel", name, vehicle_id, stream_id))
+
+        async def subscribe_alerts(self, websocket, vehicle_id="default", stream_id=None) -> None:
+            self.subscriptions.append(("alerts", vehicle_id, stream_id))
+
+    class FakeWebSocket:
+        def __init__(self, messages: list[str]) -> None:
+            self._messages = list(messages)
+            self.sent_texts: list[str] = []
+
+        async def accept(self) -> None:
+            return None
+
+        async def receive_text(self) -> str:
+            if self._messages:
+                return self._messages.pop(0)
+            raise WebSocketDisconnect(code=1000)
+
+        async def send_text(self, text: str) -> None:
+            self.sent_texts.append(text)
+
+    fake_hub = FakeHub()
+    snapshot_update = RealtimeChannelUpdate(
+        vehicle_id="vehicle-a",
+        stream_id="stream-1",
+        name="VBAT",
+        subsystem_tag="power",
+        current_value=28.4,
+        generation_time="2026-03-26T12:00:00+00:00",
+        reception_time="2026-03-26T12:00:01+00:00",
+        state="normal",
+    )
+
+    def fake_resolve_active_stream_id(session, vehicle_id: str) -> str:
+        resolve_calls.append((session, vehicle_id))
+        return "stream-1"
+
+    monkeypatch.setattr("app.routes.realtime.get_ws_hub", lambda: fake_hub)
+    monkeypatch.setattr("app.routes.realtime.get_session_factory", lambda: session_factory)
+    monkeypatch.setattr("app.routes.realtime.resolve_active_stream_id", fake_resolve_active_stream_id)
+    monkeypatch.setattr("app.routes.realtime.get_watchlist_channel_names", lambda *args, **kwargs: ["VBAT"])
+    monkeypatch.setattr(
+        "app.routes.realtime.get_realtime_snapshot_for_channels",
+        lambda *args, **kwargs: [snapshot_update],
+    )
+    monkeypatch.setattr("app.routes.realtime.get_active_alerts", lambda *args, **kwargs: [])
+
+    message_by_type = {
+        "subscribe_watchlist": {"type": "subscribe_watchlist", "vehicle_id": "vehicle-a"},
+        "subscribe_channel": {"type": "subscribe_channel", "vehicle_id": "vehicle-a", "name": "VBAT"},
+        "subscribe_alerts": {"type": "subscribe_alerts", "vehicle_id": "vehicle-a"},
+    }
+    expected_subscription = {
+        "subscribe_watchlist": ("watchlist", ["VBAT"], "vehicle-a", None),
+        "subscribe_channel": ("channel", "VBAT", "vehicle-a", None),
+        "subscribe_alerts": ("alerts", "vehicle-a", None),
+    }
+
+    ws = FakeWebSocket([json.dumps(message_by_type[message_type])])
+
+    await websocket_realtime(ws)
+
+    assert resolve_calls == [(created_sessions[0], "vehicle-a")]
+    created_sessions[0].close.assert_called_once()
+    assert fake_hub.subscriptions == [expected_subscription[message_type]]
+    assert fake_hub.disconnected is True
+    assert ws.sent_texts
+    if message_type == "subscribe_alerts":
+        assert "snapshot_alerts" in ws.sent_texts[0]
+    else:
+        assert "stream-1" in ws.sent_texts[0]
+
+
 def test_process_measurement_creates_discovered_channel_for_unknown_input(monkeypatch) -> None:
     monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
     monkeypatch.setattr("app.realtime.processor.register_stream", lambda *args, **kwargs: None)
@@ -442,7 +550,7 @@ def test_process_measurement_does_not_record_feed_health_for_rejected_stream(mon
     assert recorded == []
 
 
-def test_process_measurement_does_not_register_stream_for_rejected_sample(monkeypatch) -> None:
+def test_process_measurement_duplicate_insert_refreshes_stream_and_feed_health(monkeypatch) -> None:
     monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
     processor = RealtimeProcessor()
     db = MagicMock()
@@ -475,10 +583,28 @@ def test_process_measurement_does_not_register_stream_for_rejected_sample(monkey
         discovered_at=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
         last_seen_at=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
     )
+    current = SimpleNamespace(
+        generation_time=datetime(2026, 3, 26, 12, 0, 1, tzinfo=timezone.utc),
+        reception_time=datetime(2026, 3, 26, 12, 0, 2, tzinfo=timezone.utc),
+        value=Decimal("28.1"),
+        state="normal",
+        state_reason=None,
+        z_score=None,
+        quality="valid",
+        sequence=1,
+        packet_source="old-source",
+        receiver_id="old-receiver",
+    )
     savepoint = MagicMock()
 
     db.execute.return_value = _ScalarResult(meta)
-    db.get.return_value = None
+    db.get.side_effect = lambda model, key: (
+        current
+        if model.__name__ == "TelemetryCurrent"
+        else None
+        if model.__name__ == "TelemetryStatistics"
+        else None
+    )
     db.begin_nested.return_value = savepoint
     db.flush.side_effect = IntegrityError("insert", {}, Exception("duplicate key"))
 
@@ -517,8 +643,9 @@ def test_process_measurement_does_not_register_stream_for_rejected_sample(monkey
     )
 
     savepoint.rollback.assert_called_once()
-    assert registered == []
-    assert recorded == []
+    assert registered == [("vehicle-a", "vehicle-a-2026-03-26T12-00-00Z")]
+    assert recorded == ["vehicle-a"]
+    assert current.generation_time == datetime(2026, 3, 26, 12, 0, 1, tzinfo=timezone.utc)
 
 
 def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkeypatch) -> None:
