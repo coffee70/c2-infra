@@ -1232,6 +1232,8 @@ def get_active_alerts(
     """Get active (non-resolved, non-cleared) alerts for a source."""
     data_source_id = normalize_source_id(source_id)
     logical_source_id = _resolve_stream_vehicle_id(db, source_id)
+    if data_source_id == logical_source_id:
+        data_source_id = resolve_active_stream_id(db, logical_source_id)
     stmt = (
         select(TelemetryAlert, TelemetryMetadata)
         .join(TelemetryMetadata, TelemetryAlert.telemetry_id == TelemetryMetadata.id)

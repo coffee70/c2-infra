@@ -701,6 +701,47 @@ def test_realtime_helpers_resolve_active_stream_for_vehicle_scope(monkeypatch) -
     assert active_stream_id in snapshot_params
     snapshot_db.get.assert_not_called()
 
+    alerts_db = MagicMock()
+    alerts_db.execute.return_value = _FetchAllResult(
+        [
+            (
+                SimpleNamespace(
+                    id=uuid4(),
+                    source_id=active_stream_id,
+                    severity="warning",
+                    reason="out_of_limits",
+                    status="new",
+                    opened_at=now,
+                    opened_reception_at=now,
+                    last_update_at=now,
+                    current_value_at_open=4.2,
+                    acked_at=None,
+                    acked_by=None,
+                ),
+                SimpleNamespace(
+                    id=uuid4(),
+                    name="VBAT",
+                    units="V",
+                    vehicle_id=vehicle_id,
+                    subsystem_tag="power",
+                    red_low=None,
+                    red_high=4.8,
+                ),
+            )
+        ]
+    )
+
+    alerts = realtime_service.get_active_alerts(
+        alerts_db,
+        source_id=vehicle_id,
+    )
+
+    assert alerts[0].vehicle_id == vehicle_id
+    assert alerts[0].stream_id == active_stream_id
+    alert_params = alerts_db.execute.call_args.args[0].compile().params.values()
+    assert active_stream_id in alert_params
+    assert vehicle_id in alert_params
+
 
 @pytest.mark.anyio
 async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(monkeypatch) -> None:

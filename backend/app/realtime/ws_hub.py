@@ -204,6 +204,7 @@ class RealtimeWsHub:
         targets = self._get_subscribed_connections(
             channel_name=update.name,
             source_id=update.stream_id,
+            vehicle_id=update.vehicle_id,
         )
         if not targets:
             return

@@ -665,6 +665,92 @@ def test_resolve_active_run_id_ignores_stale_active_row_without_current_rows() -
     clear_active_run(DROGONSAT_SOURCE_ID)
 
 
+def test_resolve_active_run_id_ignores_stale_current_rows_without_freshness(monkeypatch) -> None:
+    clear_active_run(DROGONSAT_SOURCE_ID)
+    db = MagicMock()
+    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    stale_stream = SimpleNamespace(
+        id=stream_id,
+        vehicle_id=DROGONSAT_SOURCE_ID,
+        status="idle",
+        packet_source=None,
+        receiver_id=None,
+        last_seen_at=None,
+    )
+    stale_current = SimpleNamespace(
+        stream_id=stream_id,
+        reception_time=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
+        generation_time=datetime(2026, 3, 13, 16, 17, 51, tzinfo=timezone.utc),
+        packet_source="ground-station-a",
+        receiver_id="rx-7",
+    )
+    source = TelemetrySource(
+        id=DROGONSAT_SOURCE_ID,
+        name="DrogonSat",
+        source_type="ground_station",
+        base_url=None,
+    )
+
+    def fake_get(model, key):
+        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
+            return source
+        return None
+
+    class _EmptyResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return None
+
+    class _CurrentResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return stale_current
+
+    db.get.side_effect = fake_get
+
+    seen: list[str] = []
+    register_calls: list[dict[str, object]] = []
+
+    def fake_execute(statement):
+        sql = str(statement)
+        seen.append(sql)
+        if "telemetry_streams.status" in sql and "last_seen_at >=" in sql:
+            return _EmptyResult()
+        if "telemetry_streams" in sql and "ORDER BY telemetry_streams.last_seen_at" in sql:
+            return _EmptyResult()
+        if "JOIN telemetry_metadata" in sql:
+            if "reception_time >=" in sql:
+                return _EmptyResult()
+            return _CurrentResult()
+        raise AssertionError(f"Unexpected query: {sql}")
+
+    db.execute.side_effect = fake_execute
+
+    def fake_register_stream(_db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None):
+        register_calls.append(
+            {
+                "vehicle_id": vehicle_id,
+                "stream_id": stream_id,
+                "packet_source": packet_source,
+                "receiver_id": receiver_id,
+                "seen_at": seen_at,
+            }
+        )
+        return stale_stream
+
+    monkeypatch.setattr("app.services.source_run_service.register_stream", fake_register_stream)
+    try:
+        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
+        assert register_calls == []
+        assert any("reception_time >=" in sql for sql in seen)
+    finally:
+        clear_active_run(DROGONSAT_SOURCE_ID)
+
+
 def test_resolve_active_run_id_falls_back_to_logical_vehicle_when_simulator_status_is_unavailable(
     monkeypatch,
 ) -> None:
