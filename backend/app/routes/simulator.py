@@ -1,5 +1,6 @@
 """Proxy routes for the telemetry simulator service."""
 
+import logging
 from typing import Any
 
 import httpx
@@ -20,6 +21,7 @@ from app.services.source_run_service import (
 from telemetry_catalog.definitions import resolve_source_id_alias
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _resolve_simulator_url(db: Session, source_id: str) -> str:
@@ -85,6 +87,23 @@ async def _proxy_post(base_url: str, path: str, json: dict[str, Any] | None = No
                 pass
             raise HTTPException(status_code=r.status_code, detail=detail)
         return r.json()
+
+
+async def _rollback_simulator_start(base_url: str, source_id: str) -> None:
+    """Try to stop a simulator after a start-side bookkeeping failure."""
+    try:
+        await _proxy_post(base_url, "/stop")
+    except Exception:
+        logger.exception(
+            "Failed to roll back simulator start after stream registration failure",
+            extra={
+                "event": {
+                    "action": "simulator.start.rollback_failed",
+                    "component": "backend",
+                    "destination": source_id,
+                }
+            },
+        )
 
 
 def _resolve_with_audit(db: Session, source_id: str, action: str) -> str:
@@ -189,8 +208,10 @@ async def simulator_start(
                     receiver_id=body.get("receiver_id"),
                 )
             except StreamIdConflictError as e:
+                await _rollback_simulator_start(base_url, resolved_source_id)
                 raise HTTPException(status_code=400, detail=str(e))
             except SourceNotFoundError as e:
+                await _rollback_simulator_start(base_url, resolved_source_id)
                 raise HTTPException(status_code=404, detail=str(e))
         audit_log(
             "simulator.start.proxied",

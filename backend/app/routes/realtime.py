@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from app.database import get_db, get_session_factory
@@ -20,7 +19,6 @@ from app.models.schemas import (
     WsSnapshotWatchlist,
 )
 from app.models.telemetry import TelemetryAlert, TelemetryMetadata, TelemetrySource
-from app.models.telemetry import TelemetryStream
 from app.realtime.bus import get_realtime_bus
 from app.realtime.ws_hub import get_ws_hub
 from app.services.ops_events_service import write_event as write_ops_event
@@ -34,7 +32,6 @@ from app.services.source_run_service import (
     SourceNotFoundError,
     get_stream_vehicle_id,
     normalize_vehicle_id,
-    register_stream,
     run_id_to_source_id,
 )
 from app.lib.audit import audit_log
@@ -112,45 +109,9 @@ async def ingest_realtime(
     session = get_session_factory()()
     bus = get_realtime_bus()
     raw_events = body.events
-    reserved_streams: set[tuple[str, str]] = set()
-    accepted_streams: set[tuple[str, str]] = set()
-
-    def cleanup_unused_reserved_streams() -> None:
-        unused_reserved_stream_ids = [
-            stream_id
-            for vehicle_id, stream_id in reserved_streams
-            if (vehicle_id, stream_id) not in accepted_streams
-        ]
-        if not unused_reserved_stream_ids:
-            return
-        session.execute(
-            delete(TelemetryStream).where(
-                TelemetryStream.id.in_(unused_reserved_stream_ids),
-                TelemetryStream.status == "idle",
-            )
-        )
-        session.commit()
 
     try:
         _validate_stream_batch_identities(session, raw_events)
-        for event in raw_events:
-            logical_vehicle_id = normalize_vehicle_id(event.vehicle_id)
-            stream_key = (logical_vehicle_id, event.stream_id)
-            if stream_key in reserved_streams:
-                continue
-            if get_stream_vehicle_id(session, event.stream_id) is not None:
-                continue
-            register_stream(
-                session,
-                vehicle_id=logical_vehicle_id,
-                stream_id=event.stream_id,
-                packet_source=event.packet_source if isinstance(event.packet_source, str) else None,
-                receiver_id=event.receiver_id if isinstance(event.receiver_id, str) else None,
-                activate=False,
-            )
-            reserved_streams.add(stream_key)
-        if reserved_streams:
-            session.commit()
         vehicle_ids = sorted({e.vehicle_id for e in raw_events})
         filled_reception = sum(1 for e in raw_events if not e.reception_time)
         synthesized_generation = sum(1 for e in raw_events if not e.generation_time and e.reception_time)
@@ -184,7 +145,6 @@ async def ingest_realtime(
         for e in events:
             if bus.publish_measurement(e):
                 accepted += 1
-                accepted_streams.add((normalize_vehicle_id(e.vehicle_id), e.stream_id))
             else:
                 dropped += 1
 
@@ -230,8 +190,6 @@ async def ingest_realtime(
                 }
             },
         )
-        if reserved_streams:
-            cleanup_unused_reserved_streams()
         return {"accepted": accepted}
     except StreamIdConflictError as e:
         session.rollback()
@@ -243,20 +201,6 @@ async def ingest_realtime(
         raise
     except Exception:
         session.rollback()
-        try:
-            if reserved_streams:
-                cleanup_unused_reserved_streams()
-        except Exception:
-            logger.exception(
-                "Failed to clean up unused reserved telemetry streams after ingest failure",
-                extra={
-                    "event": {
-                        "action": "ingest.cleanup_failed",
-                        "component": "backend",
-                        "request_id": request_id,
-                    }
-                },
-            )
         raise
     finally:
         session.close()
