@@ -226,8 +226,9 @@ def register_stream(
     receiver_id: str | None = None,
     started_at: datetime | None = None,
     seen_at: datetime | None = None,
+    activate: bool = True,
 ) -> TelemetryStream:
-    """Create or update a telemetry stream row and mark it active in cache."""
+    """Create or update a telemetry stream row and optionally mark it active in cache."""
     logical_vehicle_id = normalize_vehicle_id(vehicle_id)
     reserved_vehicle_id = normalize_vehicle_id(stream_id)
     existing_vehicle = db.get(TelemetrySource, reserved_vehicle_id)
@@ -245,7 +246,7 @@ def register_stream(
                 vehicle_id=logical_vehicle_id,
                 packet_source=packet_source,
                 receiver_id=receiver_id,
-                status="active",
+                status="active" if activate else "idle",
                 started_at=started_at,
                 last_seen_at=observed_at,
             )
@@ -257,7 +258,10 @@ def register_stream(
     if stream.vehicle_id != logical_vehicle_id:
         raise StreamIdConflictError("stream_id does not belong to vehicle")
     stream.vehicle_id = logical_vehicle_id
-    stream.status = "active"
+    if activate:
+        stream.status = "active"
+    elif getattr(stream, "status", None) is None:
+        stream.status = "idle"
     if getattr(stream, "started_at", None) is None:
         stream.started_at = started_at
     stream.last_seen_at = observed_at
@@ -267,7 +271,8 @@ def register_stream(
         stream.receiver_id = receiver_id
 
     _cache_stream_owner(stream_id, logical_vehicle_id)
-    _active_stream_by_vehicle[logical_vehicle_id] = (stream_id, time.time())
+    if activate:
+        _active_stream_by_vehicle[logical_vehicle_id] = (stream_id, time.time())
     return stream
 
 

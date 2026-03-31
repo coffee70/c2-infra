@@ -106,6 +106,7 @@ async def ingest_realtime(
     try:
         _validate_stream_batch_identities(session, raw_events)
         reserved_streams: set[tuple[str, str]] = set()
+        # Reserve ownership in-band, but do not mark the stream active until telemetry lands.
         for event in raw_events:
             stream_key = (normalize_vehicle_id(event.vehicle_id), event.stream_id)
             if stream_key in reserved_streams:
@@ -117,6 +118,7 @@ async def ingest_realtime(
                 stream_id=event.stream_id,
                 packet_source=event.packet_source if isinstance(event.packet_source, str) else None,
                 receiver_id=event.receiver_id if isinstance(event.receiver_id, str) else None,
+                activate=False,
             )
         session.commit()
     except StreamIdConflictError as e:

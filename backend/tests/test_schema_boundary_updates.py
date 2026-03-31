@@ -704,7 +704,7 @@ async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(mo
     monkeypatch.setattr(
         realtime_routes,
         "register_stream",
-        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: registered.append(
+        lambda db_arg, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None, activate=True: registered.append(
             {
                 "db": db_arg,
                 "vehicle_id": vehicle_id,
@@ -713,6 +713,7 @@ async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(mo
                 "receiver_id": receiver_id,
                 "started_at": started_at,
                 "seen_at": seen_at,
+                "activate": activate,
             }
         ),
     )
@@ -745,6 +746,7 @@ async def test_realtime_ingest_allows_same_vehicle_stream_ids_before_queueing(mo
             "receiver_id": None,
             "started_at": None,
             "seen_at": None,
+            "activate": False,
         }
     ]
     db.get.assert_called_once()
@@ -1266,7 +1268,7 @@ async def test_simulator_status_registers_stream_id_from_config(monkeypatch) -> 
 
 
 @pytest.mark.anyio
-async def test_simulator_status_returns_disconnected_on_stream_conflict(monkeypatch) -> None:
+async def test_simulator_status_rejects_stream_conflict(monkeypatch) -> None:
     db = MagicMock()
 
     monkeypatch.setattr(
@@ -1293,9 +1295,11 @@ async def test_simulator_status_returns_disconnected_on_stream_conflict(monkeypa
         ),
     )
 
-    payload = await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
+    with pytest.raises(HTTPException) as exc_info:
+        await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
 
-    assert payload == {"connected": False, "supported_scenarios": []}
+    assert exc_info.value.status_code == 400
+    assert "does not belong to vehicle" in str(exc_info.value.detail)
 
 
 @pytest.mark.anyio
