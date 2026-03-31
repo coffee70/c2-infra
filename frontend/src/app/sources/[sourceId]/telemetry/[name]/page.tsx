@@ -92,6 +92,26 @@ async function fetchRecent(
   }
 }
 
+async function fetchLatestChannelRunId(
+  name: string,
+  sourceId: string,
+): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/runs`,
+      { cache: "no-store" },
+    );
+    if (!res.ok) return null;
+    const data = await res.json() as { sources?: Array<{ stream_id?: string }> };
+    const latestRun = Array.isArray(data.sources) ? data.sources[0] : null;
+    return typeof latestRun?.stream_id === "string" && latestRun.stream_id
+      ? latestRun.stream_id
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchLatestStreamId(sourceId: string): Promise<string | null> {
   try {
     const res = await fetch(
@@ -127,7 +147,10 @@ export default async function TelemetryDetailPage({
       : null;
   const sourceId = requestedSourceId;
 
-  const currentRunId = requestedRunId ?? (await fetchLatestStreamId(sourceId));
+  const currentRunId =
+    requestedRunId ??
+    (await fetchLatestChannelRunId(decodedName, sourceId)) ??
+    (await fetchLatestStreamId(sourceId));
 
   const [explain, recentData] = await Promise.all([
     fetchSummary(decodedName, sourceId, currentRunId),

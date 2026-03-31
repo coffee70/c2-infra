@@ -163,3 +163,109 @@ test("telemetry history run dropdown preserves backend ordering for opaque ids",
   await expect(options.nth(1)).toContainText(newerRunId);
   await expect(options.nth(2)).toContainText(olderRunId);
 });
+
+test("telemetry detail defaults to the latest stream that contains the channel", async ({
+  page,
+  request,
+}) => {
+  const sourcesResponse = await request.get(`${API_URL}/telemetry/sources`);
+  expect(sourcesResponse.ok()).toBeTruthy();
+
+  const sources = (await sourcesResponse.json()) as Array<{ id: string }>;
+  let selected:
+    | {
+        sourceId: string;
+        channelName: string;
+        fallbackChannelName: string;
+        runId: string;
+      }
+    | null = null;
+
+  for (const source of sources) {
+    const channelsResponse = await request.get(
+      `${API_URL}/telemetry/list?source_id=${encodeURIComponent(source.id)}`,
+    );
+    if (!channelsResponse.ok()) continue;
+    const channelsPayload = (await channelsResponse.json()) as {
+      channels?: Array<{ name?: string }>;
+    };
+    const channelNames = (channelsPayload.channels ?? [])
+      .map((channel) => channel.name)
+      .filter((channelName): channelName is string => typeof channelName === "string" && channelName.length > 0);
+    if (channelNames.length < 2) continue;
+
+    for (let channelIndex = 0; channelIndex < channelNames.length; channelIndex += 1) {
+      const channelName = channelNames[channelIndex];
+      const runsResponse = await request.get(
+        `${API_URL}/telemetry/sources/${encodeURIComponent(source.id)}/channels/${encodeURIComponent(channelName)}/runs`,
+      );
+      if (!runsResponse.ok()) continue;
+      const runsPayload = (await runsResponse.json()) as {
+        sources?: Array<{ stream_id?: string }>;
+      };
+      const runIds = (runsPayload.sources ?? [])
+        .map((run) => run.stream_id)
+        .filter((runId): runId is string => typeof runId === "string" && runId.length > 0);
+      if (runIds.length === 0) continue;
+
+      const fallbackChannelName = channelNames.find((name) => name !== channelName);
+      if (!fallbackChannelName) continue;
+
+      selected = {
+        sourceId: source.id,
+        channelName,
+        fallbackChannelName,
+        runId: runIds[0],
+      };
+      break;
+    }
+
+    if (selected) break;
+  }
+
+  expect(selected).toBeTruthy();
+  if (!selected) return;
+
+  const newerRunId = "mixed-new-9999-01-01T00-05-00Z";
+  await ingestRealtimeSample(
+    request,
+    selected.sourceId,
+    newerRunId,
+    selected.fallbackChannelName,
+    4.56,
+    "9999-01-01T00:05:00Z",
+  );
+
+  await expect
+    .poll(
+      async () => {
+        const runsResponse = await request.get(
+          `${API_URL}/telemetry/sources/${encodeURIComponent(selected.sourceId)}/runs`,
+        );
+        expect(runsResponse.ok()).toBeTruthy();
+        const runsPayload = (await runsResponse.json()) as {
+          sources?: Array<{ stream_id?: string }>;
+        };
+        return (runsPayload.sources ?? [])
+          .map((run) => run.stream_id)
+          .filter((runId): runId is string => typeof runId === "string" && runId.length > 0)
+          .includes(newerRunId);
+      },
+      { timeout: 45_000 },
+    )
+    .toBeTruthy();
+
+  await page.goto(
+    `/sources/${encodeURIComponent(selected.sourceId)}/telemetry/${encodeURIComponent(selected.channelName)}`,
+  );
+
+  await expect(page).toHaveURL(
+    new RegExp(
+      `${escapeRegExp(`/sources/${selected.sourceId}/telemetry/${selected.channelName}`)}$`,
+    ),
+  );
+
+  await page.getByRole("tab", { name: "History" }).click();
+  await expect(page.locator("#history-run")).toContainText(formatRunLabel(selected.runId));
+  await expect(page.locator("#history-run")).not.toContainText(formatRunLabel(newerRunId));
+});
