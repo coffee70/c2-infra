@@ -818,6 +818,75 @@ async def test_realtime_ingest_does_not_persist_streams_when_publish_drops(monke
 
 
 @pytest.mark.anyio
+async def test_realtime_ingest_cleans_unused_reservations_on_unexpected_failure(monkeypatch) -> None:
+    db = MagicMock()
+    source = TelemetrySource(
+        id="vehicle-a",
+        name="Vehicle A",
+        source_type="vehicle",
+        telemetry_definition_path="defs/vehicle-a.yaml",
+    )
+    db.get.side_effect = lambda model, key: source if model is TelemetrySource and key == "vehicle-a" else None
+
+    reserved: list[tuple[str, str, bool]] = []
+
+    class FakeBus:
+        def publish_measurement(self, *_args, **_kwargs):
+            raise RuntimeError("queue failure")
+
+        def measurement_queue_size(self):
+            return 0
+
+        def measurement_queue_maxsize(self):
+            return 1
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(request_id="req-1"),
+        headers={"X-Request-ID": "req-1"},
+        method="POST",
+        url=SimpleNamespace(path="/realtime/ingest"),
+    )
+
+    monkeypatch.setattr(realtime_routes, "get_session_factory", lambda: lambda: db)
+    monkeypatch.setattr(realtime_routes, "get_realtime_bus", lambda: FakeBus())
+    monkeypatch.setattr(realtime_routes, "get_stream_vehicle_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        realtime_routes,
+        "register_stream",
+        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None, activate=True: reserved.append(
+            (vehicle_id, stream_id, activate)
+        ),
+    )
+    monkeypatch.setattr(realtime_routes, "audit_log", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="queue failure"):
+        await realtime_routes.ingest_realtime(
+            body=MeasurementEventBatch.model_validate(
+                {
+                    "events": [
+                        {
+                            "vehicle_id": "vehicle-a",
+                            "stream_id": "vehicle-a",
+                            "channel_name": "VBAT",
+                            "value": 4.2,
+                            "reception_time": "2026-03-28T12:00:00Z",
+                        }
+                    ]
+                }
+            ),
+            request=request,
+        )
+
+    assert reserved == [("vehicle-a", "vehicle-a", False)]
+    assert db.commit.call_count == 2
+    assert db.execute.call_count == 1
+    stmt = db.execute.call_args.args[0]
+    assert "delete" in str(stmt).lower()
+    assert "telemetry_streams" in str(stmt).lower()
+    db.rollback.assert_called_once()
+
+
+@pytest.mark.anyio
 async def test_realtime_ingest_rejects_conflicting_stream_before_queueing(monkeypatch) -> None:
     db = MagicMock()
     sources = {

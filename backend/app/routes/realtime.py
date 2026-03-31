@@ -113,6 +113,24 @@ async def ingest_realtime(
     bus = get_realtime_bus()
     raw_events = body.events
     reserved_streams: set[tuple[str, str]] = set()
+    accepted_streams: set[tuple[str, str]] = set()
+
+    def cleanup_unused_reserved_streams() -> None:
+        unused_reserved_stream_ids = [
+            stream_id
+            for vehicle_id, stream_id in reserved_streams
+            if (vehicle_id, stream_id) not in accepted_streams
+        ]
+        if not unused_reserved_stream_ids:
+            return
+        session.execute(
+            delete(TelemetryStream).where(
+                TelemetryStream.id.in_(unused_reserved_stream_ids),
+                TelemetryStream.status == "idle",
+            )
+        )
+        session.commit()
+
     try:
         _validate_stream_batch_identities(session, raw_events)
         for event in raw_events:
@@ -163,7 +181,6 @@ async def ingest_realtime(
         enqueue_started = time.perf_counter()
         accepted = 0
         dropped = 0
-        accepted_streams: set[tuple[str, str]] = set()
         for e in events:
             if bus.publish_measurement(e):
                 accepted += 1
@@ -214,19 +231,7 @@ async def ingest_realtime(
             },
         )
         if reserved_streams:
-            unused_reserved_stream_ids = [
-                stream_id
-                for vehicle_id, stream_id in reserved_streams
-                if (vehicle_id, stream_id) not in accepted_streams
-            ]
-            if unused_reserved_stream_ids:
-                session.execute(
-                    delete(TelemetryStream).where(
-                        TelemetryStream.id.in_(unused_reserved_stream_ids),
-                        TelemetryStream.status == "idle",
-                    )
-                )
-                session.commit()
+            cleanup_unused_reserved_streams()
         return {"accepted": accepted}
     except StreamIdConflictError as e:
         session.rollback()
@@ -234,6 +239,25 @@ async def ingest_realtime(
     except SourceNotFoundError as e:
         session.rollback()
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        session.rollback()
+        try:
+            if reserved_streams:
+                cleanup_unused_reserved_streams()
+        except Exception:
+            logger.exception(
+                "Failed to clean up unused reserved telemetry streams after ingest failure",
+                extra={
+                    "event": {
+                        "action": "ingest.cleanup_failed",
+                        "component": "backend",
+                        "request_id": request_id,
+                    }
+                },
+            )
+        raise
     finally:
         session.close()
 
