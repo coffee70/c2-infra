@@ -460,6 +460,11 @@ def test_resolve_scoped_run_id_defaults_to_active_stream(monkeypatch) -> None:
 
     monkeypatch.setattr(
         telemetry_routes,
+        "resolve_logical_vehicle_id",
+        lambda _db, source_id: source_id,
+    )
+    monkeypatch.setattr(
+        telemetry_routes,
         "ensure_run_belongs_to_source",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected explicit run lookup")),
     )
@@ -470,6 +475,34 @@ def test_resolve_scoped_run_id_defaults_to_active_stream(monkeypatch) -> None:
     )
 
     assert telemetry_routes._resolve_scoped_run_id(db, "vehicle-a") == "vehicle-a-active-stream"
+
+
+def test_resolve_scoped_run_id_falls_back_to_latest_run(monkeypatch) -> None:
+    db = MagicMock()
+
+    class _ScalarResult:
+        def __init__(self, row: object):
+            self._row = row
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._row
+
+    monkeypatch.setattr(
+        telemetry_routes,
+        "resolve_logical_vehicle_id",
+        lambda _db, source_id: source_id,
+    )
+    monkeypatch.setattr(
+        telemetry_routes,
+        "resolve_active_stream_id",
+        lambda _db, source_id: source_id,
+    )
+    db.execute.return_value = _ScalarResult("vehicle-a-2026-03-28T12-00-00Z")
+
+    assert telemetry_routes._resolve_scoped_run_id(db, "vehicle-a") == "vehicle-a-2026-03-28T12-00-00Z"
 
 
 def test_realtime_stream_vehicle_resolution_prefers_registry(monkeypatch) -> None:

@@ -15,7 +15,7 @@ def _make_ws(active_source_id: str) -> MagicMock:
 
 
 @pytest.mark.anyio
-async def test_broadcast_telemetry_update_matches_vehicle_and_stream_scope() -> None:
+async def test_broadcast_telemetry_update_is_stream_scoped() -> None:
     hub = RealtimeWsHub()
     vehicle_ws = _make_ws("vehicle-a")
     stream_ws = _make_ws("stream-1")
@@ -54,7 +54,7 @@ async def test_broadcast_telemetry_update_matches_vehicle_and_stream_scope() -> 
         )
     )
 
-    assert vehicle_ws.send_text.await_count == 1
+    assert vehicle_ws.send_text.await_count == 0
     assert stream_ws.send_text.await_count == 1
     assert other_ws.send_text.await_count == 0
 

@@ -95,7 +95,21 @@ def _get_channel_meta(db: Session, source_id: str, name: str) -> TelemetryMetada
 def _resolve_scoped_run_id(db: Session, source_id: str, run_id: Optional[str] = None) -> str:
     """Return the active stream id or validate an explicit stream id for a source."""
     if run_id is None:
-        return resolve_active_stream_id(db, source_id)
+        logical_source_id = resolve_logical_vehicle_id(db, source_id)
+        resolved_run_id = resolve_active_stream_id(db, logical_source_id)
+        if resolved_run_id == logical_source_id:
+            latest_run_id = (
+                db.execute(
+                    select(TelemetryStream.id)
+                    .where(TelemetryStream.vehicle_id == logical_source_id)
+                    .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            if isinstance(latest_run_id, str) and latest_run_id:
+                return latest_run_id
+        return resolved_run_id
     try:
         return ensure_run_belongs_to_source(db, source_id, run_id)
     except ValueError:
