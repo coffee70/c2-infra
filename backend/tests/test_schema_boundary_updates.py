@@ -1657,6 +1657,52 @@ async def test_simulator_start_rejects_stream_conflict(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
+async def test_simulator_start_rolls_back_on_unexpected_bookkeeping_failure(monkeypatch) -> None:
+    db = MagicMock()
+    calls: list[str] = []
+
+    mock_src = SimpleNamespace(telemetry_definition_path=None)
+
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_simulator_source",
+        lambda _db, _source_id: mock_src,
+    )
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_with_audit",
+        lambda _db, _source_id, _action: "http://simulator:8010",
+    )
+
+    async def fake_proxy_post(_base_url, _path, body=None):
+        calls.append(_path)
+        if _path == "/start":
+            return {"stream_id": "a6107734-80af-4f61-8c69-d53ab64dd13a"}
+        if _path == "/stop":
+            return {"stopped": True}
+        raise AssertionError(f"unexpected path: {_path}")
+
+    monkeypatch.setattr(simulator_routes, "_proxy_post", fake_proxy_post)
+    monkeypatch.setattr(simulator_routes, "clear_active_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(simulator_routes, "reset_orbit_source", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        simulator_routes,
+        "register_stream",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await simulator_routes.simulator_start(
+            config=simulator_routes.StartConfig(vehicle_id="vehicle-a"),
+            db=db,
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "backend stream registration failed" in str(exc_info.value.detail)
+    assert calls == ["/start", "/stop"]
+
+
+@pytest.mark.anyio
 async def test_simulator_start_rejects_missing_source(monkeypatch) -> None:
     db = MagicMock()
     calls: list[str] = []

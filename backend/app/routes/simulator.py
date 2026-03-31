@@ -195,11 +195,11 @@ async def simulator_start(
         if src.telemetry_definition_path:
             body["telemetry_definition_path"] = src.telemetry_definition_path
         result = await _proxy_post(base_url, "/start", body)
-        clear_active_run(resolved_source_id, db=db)
-        reset_orbit_source(resolved_source_id)
         stream_id = result.get("stream_id")
-        if isinstance(stream_id, str) and stream_id:
-            try:
+        try:
+            clear_active_run(resolved_source_id, db=db)
+            reset_orbit_source(resolved_source_id)
+            if isinstance(stream_id, str) and stream_id:
                 register_stream(
                     db,
                     vehicle_id=resolved_source_id,
@@ -207,12 +207,29 @@ async def simulator_start(
                     packet_source=body.get("packet_source"),
                     receiver_id=body.get("receiver_id"),
                 )
-            except StreamIdConflictError as e:
-                await _rollback_simulator_start(base_url, resolved_source_id)
-                raise HTTPException(status_code=400, detail=str(e))
-            except SourceNotFoundError as e:
-                await _rollback_simulator_start(base_url, resolved_source_id)
-                raise HTTPException(status_code=404, detail=str(e))
+        except StreamIdConflictError as e:
+            await _rollback_simulator_start(base_url, resolved_source_id)
+            raise HTTPException(status_code=400, detail=str(e))
+        except SourceNotFoundError as e:
+            await _rollback_simulator_start(base_url, resolved_source_id)
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception:
+            await _rollback_simulator_start(base_url, resolved_source_id)
+            logger.exception(
+                "Simulator start bookkeeping failed after remote start",
+                extra={
+                    "event": {
+                        "action": "simulator.start.bookkeeping_failed",
+                        "component": "backend",
+                        "destination": resolved_source_id,
+                        "stream_id": stream_id,
+                    }
+                },
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Simulator started remotely, but backend stream registration failed",
+            )
         audit_log(
             "simulator.start.proxied",
             origin="frontend",
