@@ -1401,7 +1401,7 @@ def test_ingest_data_rejects_vehicle_id_collision(monkeypatch) -> None:
     assert exc_info.value.status_code == 400
 
 
-def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
+def test_insert_data_raises_stream_conflict_for_vehicle_mismatch(monkeypatch) -> None:
     service = TelemetryService(MagicMock(), object(), object())
     calls: list[str] = []
 
@@ -1419,7 +1419,7 @@ def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
     )
     monkeypatch.setattr(service, "get_by_name", lambda _source_id, _name: SimpleNamespace(id=uuid4()))
 
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(StreamIdConflictError) as exc_info:
         service.insert_data(
             "vehicle-b-2026-03-28T12-00-00Z",
             "VBAT",
@@ -1427,7 +1427,7 @@ def test_insert_data_rejects_stream_vehicle_mismatch(monkeypatch) -> None:
             vehicle_id="vehicle-a",
         )
 
-    assert "Run not found for source" in str(exc_info.value)
+    assert "does not belong to vehicle" in str(exc_info.value)
     assert calls == []
 
 
@@ -1592,7 +1592,7 @@ async def test_simulator_status_registers_stream_id_from_config(monkeypatch) -> 
 
 
 @pytest.mark.anyio
-async def test_simulator_status_rejects_stream_conflict(monkeypatch) -> None:
+async def test_simulator_status_ignores_stream_conflict(monkeypatch) -> None:
     db = MagicMock()
 
     monkeypatch.setattr(
@@ -1619,15 +1619,20 @@ async def test_simulator_status_rejects_stream_conflict(monkeypatch) -> None:
         ),
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
+    response = await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
 
-    assert exc_info.value.status_code == 400
-    assert "does not belong to vehicle" in str(exc_info.value.detail)
+    assert response == {
+        "connected": True,
+        "state": "active",
+        "config": {
+            "stream_id": "vehicle-b-2026-03-28T12-00-00Z",
+        },
+        "supported_scenarios": ["nominal"],
+    }
 
 
 @pytest.mark.anyio
-async def test_simulator_status_rejects_missing_source(monkeypatch) -> None:
+async def test_simulator_status_ignores_missing_source(monkeypatch) -> None:
     db = MagicMock()
     db.get.return_value = None
 
@@ -1648,11 +1653,16 @@ async def test_simulator_status_rejects_missing_source(monkeypatch) -> None:
 
     monkeypatch.setattr(simulator_routes, "_proxy_get", fake_proxy_get)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
+    response = await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
 
-    assert exc_info.value.status_code == 404
-    assert "Source not found: vehicle-a" in str(exc_info.value.detail)
+    assert response == {
+        "connected": True,
+        "state": "active",
+        "config": {
+            "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
+        },
+        "supported_scenarios": ["nominal"],
+    }
 
 
 @pytest.mark.anyio

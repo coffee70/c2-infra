@@ -132,7 +132,6 @@ async def simulator_status(
     if vehicle_id is None:
         raise HTTPException(status_code=400, detail="vehicle_id is required")
     resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
-    conflict_exc: HTTPException | None = None
     try:
         base_url = _resolve_with_audit(db, resolved_source_id, "status")
         payload = await _proxy_get(base_url, "/status")
@@ -150,10 +149,15 @@ async def simulator_status(
                     packet_source=packet_source if isinstance(packet_source, str) else None,
                     receiver_id=receiver_id if isinstance(receiver_id, str) else None,
                 )
-            except StreamIdConflictError as e:
-                conflict_exc = HTTPException(status_code=400, detail=str(e))
-            except SourceNotFoundError as e:
-                conflict_exc = HTTPException(status_code=404, detail=str(e))
+            except (StreamIdConflictError, SourceNotFoundError) as e:
+                audit_log(
+                    "simulator.status.stream_registration_failed",
+                    origin="frontend",
+                    destination=resolved_source_id,
+                    stream_id=active_stream_id,
+                    error=str(e),
+                    level="warning",
+                )
         elif state == "idle":
             clear_active_run(resolved_source_id, db=db)
     except (httpx.ConnectError, httpx.TimeoutException, HTTPException) as e:
@@ -165,8 +169,6 @@ async def simulator_status(
             level="error",
         )
         return {"connected": False, "supported_scenarios": []}
-    if conflict_exc is not None:
-        raise conflict_exc
     if not isinstance(payload.get("supported_scenarios"), list):
         payload["supported_scenarios"] = []
     return {"connected": True, **payload}

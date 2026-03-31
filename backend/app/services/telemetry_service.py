@@ -20,6 +20,7 @@ from app.models.schemas import (
     SearchResult,
 )
 from app.services.source_run_service import (
+    StreamIdConflictError,
     get_stream_vehicle_id,
     normalize_vehicle_id,
     normalize_source_id,
@@ -143,7 +144,7 @@ class TelemetryService:
         logical_vehicle_id = normalize_vehicle_id(metadata_vehicle_id)
         existing_owner = get_stream_vehicle_id(self._db, stream_id)
         if existing_owner is not None and normalize_vehicle_id(existing_owner) != logical_vehicle_id:
-            raise ValueError("Run not found for source")
+            raise StreamIdConflictError("stream_id does not belong to vehicle")
         meta = self.get_by_name(logical_vehicle_id, telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")
