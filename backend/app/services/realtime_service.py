@@ -26,7 +26,7 @@ from app.services.channel_alias_service import get_aliases_by_telemetry_ids
 from app.services.source_run_service import (
     get_stream_vehicle_id,
     normalize_source_id,
-    resolve_active_stream_id,
+    resolve_latest_stream_id,
     run_id_to_source_id,
 )
 from app.utils.subsystem import infer_subsystem
@@ -60,7 +60,7 @@ def _resolve_realtime_stream_scope(
     logical_source_id = _resolve_stream_vehicle_id(db, vehicle_id)
     if stream_id is not None:
         return normalize_source_id(stream_id), logical_source_id
-    return resolve_active_stream_id(db, logical_source_id), logical_source_id
+    return resolve_latest_stream_id(db, logical_source_id), logical_source_id
 
 
 def _source_to_dict(src: TelemetrySource) -> dict:

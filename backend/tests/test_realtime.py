@@ -260,7 +260,7 @@ def test_validate_stream_batch_identities_allows_reserved_vehicle_id(
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("message_type", ["subscribe_watchlist", "subscribe_channel", "subscribe_alerts"])
-async def test_websocket_realtime_resolves_active_stream_without_explicit_stream_id(
+async def test_websocket_realtime_resolves_latest_stream_without_explicit_stream_id(
     monkeypatch: pytest.MonkeyPatch,
     message_type: str,
 ) -> None:
@@ -324,13 +324,13 @@ async def test_websocket_realtime_resolves_active_stream_without_explicit_stream
         state="normal",
     )
 
-    def fake_resolve_active_stream_id(session, vehicle_id: str) -> str:
+    def fake_resolve_latest_stream_id(session, vehicle_id: str) -> str:
         resolve_calls.append((session, vehicle_id))
         return "stream-1"
 
     monkeypatch.setattr("app.routes.realtime.get_ws_hub", lambda: fake_hub)
     monkeypatch.setattr("app.routes.realtime.get_session_factory", lambda: session_factory)
-    monkeypatch.setattr("app.routes.realtime.resolve_active_stream_id", fake_resolve_active_stream_id)
+    monkeypatch.setattr("app.routes.realtime.resolve_latest_stream_id", fake_resolve_latest_stream_id)
     monkeypatch.setattr("app.routes.realtime.get_watchlist_channel_names", lambda *args, **kwargs: ["VBAT"])
     monkeypatch.setattr(
         "app.routes.realtime.get_realtime_snapshot_for_channels",
@@ -344,9 +344,9 @@ async def test_websocket_realtime_resolves_active_stream_without_explicit_stream
         "subscribe_alerts": {"type": "subscribe_alerts", "vehicle_id": "vehicle-a"},
     }
     expected_subscription = {
-        "subscribe_watchlist": ("watchlist", ["VBAT"], "vehicle-a", None),
-        "subscribe_channel": ("channel", "VBAT", "vehicle-a", None),
-        "subscribe_alerts": ("alerts", "vehicle-a", None),
+        "subscribe_watchlist": ("watchlist", ["VBAT"], "vehicle-a", "stream-1"),
+        "subscribe_channel": ("channel", "VBAT", "vehicle-a", "stream-1"),
+        "subscribe_alerts": ("alerts", "vehicle-a", "stream-1"),
     }
 
     ws = FakeWebSocket([json.dumps(message_by_type[message_type])])
