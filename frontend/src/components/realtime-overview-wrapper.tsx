@@ -242,8 +242,8 @@ export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
   return (
     <RealtimeTelemetryProvider
       channelNames={channelNames}
-      sourceId={effectiveRunId}
       vehicleId={sourceId}
+      streamId={feedSourceId ?? null}
       initialChannels={initialChannelsForProvider}
     >
       <RealtimeOverviewContent {...props} />
@@ -404,7 +404,7 @@ function RealtimeOverviewContent({
   useEffect(() => {
     if (!client) return;
     const unsub = client.subscribe(handleAlertsAndOrbit);
-    client.subscribeAlerts(feedSourceId ?? sourceId);
+    client.subscribeAlerts(sourceId, feedSourceId ?? null);
     return () => {
       unsub();
     };

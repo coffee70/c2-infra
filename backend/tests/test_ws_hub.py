@@ -18,23 +18,34 @@ def _make_ws(active_source_id: str) -> MagicMock:
 async def test_broadcast_telemetry_update_matches_vehicle_and_stream_scope() -> None:
     hub = RealtimeWsHub()
     vehicle_ws = _make_ws("vehicle-a")
+    base_ws = _make_ws("vehicle-a")
     stream_ws = _make_ws("stream-1")
     other_ws = _make_ws("vehicle-b")
     hub._connections = {
         vehicle_ws: {
-            "active_source_id": "vehicle-a",
+            "active_vehicle_id": "vehicle-a",
+            "active_stream_id": None,
+            "watchlist_channels": {"VBAT"},
+            "channel_detail": set(),
+            "alerts_subscribed": True,
+        },
+        base_ws: {
+            "active_vehicle_id": "vehicle-a",
+            "active_stream_id": "vehicle-a",
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
         },
         stream_ws: {
-            "active_source_id": "stream-1",
+            "active_vehicle_id": "vehicle-a",
+            "active_stream_id": "stream-1",
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
         },
         other_ws: {
-            "active_source_id": "vehicle-b",
+            "active_vehicle_id": "vehicle-b",
+            "active_stream_id": None,
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -55,6 +66,7 @@ async def test_broadcast_telemetry_update_matches_vehicle_and_stream_scope() -> 
     )
 
     assert vehicle_ws.send_text.await_count == 1
+    assert base_ws.send_text.await_count == 0
     assert stream_ws.send_text.await_count == 1
     assert other_ws.send_text.await_count == 0
 
@@ -63,23 +75,34 @@ async def test_broadcast_telemetry_update_matches_vehicle_and_stream_scope() -> 
 async def test_broadcast_alert_event_matches_vehicle_and_stream_scope() -> None:
     hub = RealtimeWsHub()
     vehicle_ws = _make_ws("vehicle-a")
+    base_ws = _make_ws("vehicle-a")
     stream_ws = _make_ws("stream-1")
     other_ws = _make_ws("vehicle-b")
     hub._connections = {
         vehicle_ws: {
-            "active_source_id": "vehicle-a",
+            "active_vehicle_id": "vehicle-a",
+            "active_stream_id": None,
+            "watchlist_channels": set(),
+            "channel_detail": set(),
+            "alerts_subscribed": True,
+        },
+        base_ws: {
+            "active_vehicle_id": "vehicle-a",
+            "active_stream_id": "vehicle-a",
             "watchlist_channels": set(),
             "channel_detail": set(),
             "alerts_subscribed": True,
         },
         stream_ws: {
-            "active_source_id": "stream-1",
+            "active_vehicle_id": "vehicle-a",
+            "active_stream_id": "stream-1",
             "watchlist_channels": set(),
             "channel_detail": set(),
             "alerts_subscribed": True,
         },
         other_ws: {
-            "active_source_id": "vehicle-b",
+            "active_vehicle_id": "vehicle-b",
+            "active_stream_id": None,
             "watchlist_channels": set(),
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -105,5 +128,6 @@ async def test_broadcast_alert_event_matches_vehicle_and_stream_scope() -> None:
     )
 
     assert vehicle_ws.send_text.await_count == 1
+    assert base_ws.send_text.await_count == 0
     assert stream_ws.send_text.await_count == 1
     assert other_ws.send_text.await_count == 0

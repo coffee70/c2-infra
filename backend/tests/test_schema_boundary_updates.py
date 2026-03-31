@@ -589,7 +589,8 @@ def test_realtime_helpers_use_registry_for_opaque_stream_ids(monkeypatch) -> Non
     snapshot = realtime_service.get_realtime_snapshot_for_channels(
         snapshot_db,
         ["VBAT"],
-        source_id=opaque_stream_id,
+        vehicle_id=vehicle_id,
+        stream_id=opaque_stream_id,
     )
 
     assert snapshot[0].vehicle_id == vehicle_id
@@ -638,7 +639,11 @@ def test_realtime_helpers_use_registry_for_opaque_stream_ids(monkeypatch) -> Non
         ]
     )
 
-    alerts = realtime_service.get_active_alerts(alerts_db, source_id=opaque_stream_id)
+    alerts = realtime_service.get_active_alerts(
+        alerts_db,
+        vehicle_id=vehicle_id,
+        stream_id=opaque_stream_id,
+    )
 
     assert alerts[0].vehicle_id == vehicle_id
     assert alerts[0].stream_id == opaque_stream_id
@@ -694,15 +699,15 @@ def test_realtime_helpers_resolve_active_stream_for_vehicle_scope(monkeypatch) -
     snapshot = realtime_service.get_realtime_snapshot_for_channels(
         snapshot_db,
         ["VBAT"],
-        source_id=vehicle_id,
+        vehicle_id=vehicle_id,
+        stream_id=None,
     )
 
     assert snapshot[0].vehicle_id == vehicle_id
     assert snapshot[0].stream_id == active_stream_id
     snapshot_params = snapshot_db.execute.call_args_list[0].args[0].compile().params.values()
     assert active_stream_id in snapshot_params
-    assert snapshot_db.get.call_count == 1
-    assert snapshot_db.get.call_args.args[1] == vehicle_id
+    snapshot_db.get.assert_not_called()
 
     alerts_db = MagicMock()
     alerts_db.get.return_value = None
@@ -737,7 +742,8 @@ def test_realtime_helpers_resolve_active_stream_for_vehicle_scope(monkeypatch) -
 
     alerts = realtime_service.get_active_alerts(
         alerts_db,
-        source_id=vehicle_id,
+        vehicle_id=vehicle_id,
+        stream_id=None,
     )
 
     assert alerts[0].vehicle_id == vehicle_id
@@ -745,8 +751,7 @@ def test_realtime_helpers_resolve_active_stream_for_vehicle_scope(monkeypatch) -
     alert_params = alerts_db.execute.call_args.args[0].compile().params.values()
     assert active_stream_id in alert_params
     assert vehicle_id in alert_params
-    assert alerts_db.get.call_count == 1
-    assert alerts_db.get.call_args.args[1] == vehicle_id
+    alerts_db.get.assert_not_called()
 
 
 def test_realtime_helpers_preserve_explicit_base_stream_selection(monkeypatch) -> None:
@@ -800,11 +805,12 @@ def test_realtime_helpers_preserve_explicit_base_stream_selection(monkeypatch) -
     snapshot = realtime_service.get_realtime_snapshot_for_channels(
         snapshot_db,
         ["VBAT"],
-        source_id=base_stream_id,
+        vehicle_id=vehicle_id,
+        stream_id=base_stream_id,
     )
 
     assert snapshot[0].stream_id == base_stream_id
-    snapshot_db.get.assert_called_once()
+    snapshot_db.get.assert_not_called()
 
     alerts_db = MagicMock()
     alerts_db.get.return_value = SimpleNamespace(
@@ -841,10 +847,14 @@ def test_realtime_helpers_preserve_explicit_base_stream_selection(monkeypatch) -
         ]
     )
 
-    alerts = realtime_service.get_active_alerts(alerts_db, source_id=base_stream_id)
+    alerts = realtime_service.get_active_alerts(
+        alerts_db,
+        vehicle_id=vehicle_id,
+        stream_id=base_stream_id,
+    )
 
     assert alerts[0].stream_id == base_stream_id
-    alerts_db.get.assert_called_once()
+    alerts_db.get.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -1913,7 +1923,8 @@ def test_realtime_and_ops_responses_emit_vehicle_and_stream_ids(monkeypatch) -> 
     snapshot = realtime_service.get_realtime_snapshot_for_channels(
         snapshot_db,
         ["VBAT"],
-        source_id="vehicle-a-2026-03-28T12-00-00Z",
+        vehicle_id="vehicle-a",
+        stream_id="vehicle-a-2026-03-28T12-00-00Z",
     )
 
     assert snapshot[0].vehicle_id == "vehicle-a"
@@ -1951,7 +1962,8 @@ def test_realtime_and_ops_responses_emit_vehicle_and_stream_ids(monkeypatch) -> 
 
     alerts = realtime_service.get_active_alerts(
         alerts_db,
-        source_id="vehicle-a-2026-03-28T12-00-00Z",
+        vehicle_id="vehicle-a",
+        stream_id="vehicle-a-2026-03-28T12-00-00Z",
     )
 
     assert alerts[0].vehicle_id == "vehicle-a"

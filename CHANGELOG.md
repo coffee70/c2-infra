@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Realtime ingest phantom runs** — `POST /telemetry/realtime/ingest` no longer reserves `telemetry_streams` rows before a batch is accepted, so dropped or rejected realtime traffic does not leave behind user-visible empty runs.
-- **Explicit base-stream realtime selection** — realtime snapshots and alerts now keep an explicitly selected base stream stable instead of silently rewiring it to the currently active stream when the stream id matches the vehicle id.
+- **Explicit base-stream realtime selection** — realtime snapshots, alerts, and live websocket updates now keep an explicitly selected base stream stable instead of silently rewiring it to the currently active stream when the stream id matches the vehicle id.
 - **History run ordering** — the history run dropdown now preserves the backend ordering for opaque `stream_id` values instead of re-sorting them lexicographically on the client.
 - **Stream resolution freshness** — `resolve_active_stream_id()` now prefers live simulator `/status` data before trusting persisted active stream rows, and ignores stale active rows when runtime state is unavailable.
 - **Historical stream backfill** — migration `015` now seeds discovered telemetry streams as `idle` so old runs do not become current immediately after upgrade.

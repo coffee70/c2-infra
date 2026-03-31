@@ -106,8 +106,9 @@ export class RealtimeWsClient {
   private subscriptions: {
     watchlist: string[];
     alerts: boolean;
-    sourceId: string;
-  } = { watchlist: [], alerts: true, sourceId: "default" };
+    vehicleId: string;
+    streamId: string | null;
+  } = { watchlist: [], alerts: true, vehicleId: "default", streamId: null };
 
   constructor(url?: string) {
     this.url = url || getWsUrl();
@@ -124,12 +125,18 @@ export class RealtimeWsClient {
         this.send({
           type: "subscribe_watchlist",
           channels: this.subscriptions.watchlist,
-          stream_id: this.subscriptions.sourceId,
+          vehicle_id: this.subscriptions.vehicleId,
+          ...(this.subscriptions.streamId
+            ? { stream_id: this.subscriptions.streamId }
+            : {}),
         });
         if (this.subscriptions.alerts) {
           this.send({
             type: "subscribe_alerts",
-            stream_id: this.subscriptions.sourceId,
+            vehicle_id: this.subscriptions.vehicleId,
+            ...(this.subscriptions.streamId
+              ? { stream_id: this.subscriptions.streamId }
+              : {}),
           });
         }
       };
@@ -189,20 +196,34 @@ export class RealtimeWsClient {
     return () => this.handlers.delete(handler);
   }
 
-  subscribeWatchlist(channels: string[], sourceId: string = "default"): void {
+  subscribeWatchlist(
+    channels: string[],
+    vehicleId: string = "default",
+    streamId: string | null = null
+  ): void {
     this.subscriptions.watchlist = channels;
-    this.subscriptions.sourceId = sourceId;
+    this.subscriptions.vehicleId = vehicleId;
+    this.subscriptions.streamId = streamId;
     this.send({
       type: "subscribe_watchlist",
       channels,
-      stream_id: sourceId,
+      vehicle_id: vehicleId,
+      ...(streamId ? { stream_id: streamId } : {}),
     });
   }
 
-  subscribeAlerts(sourceId: string = "default"): void {
+  subscribeAlerts(
+    vehicleId: string = "default",
+    streamId: string | null = null
+  ): void {
     this.subscriptions.alerts = true;
-    this.subscriptions.sourceId = sourceId;
-    this.send({ type: "subscribe_alerts", stream_id: sourceId });
+    this.subscriptions.vehicleId = vehicleId;
+    this.subscriptions.streamId = streamId;
+    this.send({
+      type: "subscribe_alerts",
+      vehicle_id: vehicleId,
+      ...(streamId ? { stream_id: streamId } : {}),
+    });
   }
 
   ackAlert(alertId: string): void {

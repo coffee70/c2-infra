@@ -44,7 +44,8 @@ class RealtimeWsHub:
         await ws.accept()
         async with self._lock:
             self._connections[ws] = {
-                "active_source_id": "default",
+                "active_vehicle_id": "default",
+                "active_stream_id": None,
                 "watchlist_channels": set(),
                 "channel_detail": set(),
                 "alerts_subscribed": True,
@@ -65,25 +66,25 @@ class RealtimeWsHub:
         self,
         channel_name: str | None = None,
         for_alerts: bool = False,
-        source_id: str | None = None,
         vehicle_id: str | None = None,
-        alert_source_id: str | None = None,
-        alert_vehicle_id: str | None = None,
+        stream_id: str | None = None,
     ) -> list[WebSocket]:
         """Get connections that should receive this update."""
         result = []
-        channel_scope_ids = {value for value in (source_id, vehicle_id) if value is not None}
-        alert_scope_ids = {value for value in (alert_source_id, alert_vehicle_id) if value is not None}
         for ws, subs in self._connections.items():
-            conn_source = subs.get("active_source_id", "default")
+            conn_vehicle_id = subs.get("active_vehicle_id", "default")
+            conn_stream_id = subs.get("active_stream_id")
+            scope_matches = (
+                conn_stream_id == stream_id if conn_stream_id is not None else conn_vehicle_id == vehicle_id
+            )
             if for_alerts and subs.get("alerts_subscribed"):
-                if not alert_scope_ids or conn_source in alert_scope_ids:
+                if scope_matches:
                     result.append(ws)
             elif channel_name and channel_name in subs.get("watchlist_channels", set()):
-                if not channel_scope_ids or conn_source in channel_scope_ids:
+                if scope_matches:
                     result.append(ws)
             elif channel_name and channel_name in subs.get("channel_detail", set()):
-                if not channel_scope_ids or conn_source in channel_scope_ids:
+                if scope_matches:
                     result.append(ws)
         return result
 
@@ -203,8 +204,8 @@ class RealtimeWsHub:
         """Broadcast to clients subscribed to this channel and source."""
         targets = self._get_subscribed_connections(
             channel_name=update.name,
-            source_id=update.stream_id,
             vehicle_id=update.vehicle_id,
+            stream_id=update.stream_id,
         )
         if not targets:
             return
@@ -235,8 +236,8 @@ class RealtimeWsHub:
             alert_obj = alert
         targets = self._get_subscribed_connections(
             for_alerts=True,
-            alert_source_id=alert_obj.stream_id,
-            alert_vehicle_id=alert_obj.vehicle_id,
+            vehicle_id=alert_obj.vehicle_id,
+            stream_id=alert_obj.stream_id,
         )
         if not targets:
             return
@@ -255,35 +256,41 @@ class RealtimeWsHub:
         self,
         ws: WebSocket,
         channels: list[str],
-        source_id: str = "default",
+        vehicle_id: str = "default",
+        stream_id: str | None = None,
     ) -> None:
         """Subscribe client to watchlist channels for a source."""
         async with self._lock:
             if ws in self._connections:
-                self._connections[ws]["active_source_id"] = source_id
+                self._connections[ws]["active_vehicle_id"] = vehicle_id
+                self._connections[ws]["active_stream_id"] = stream_id
                 self._connections[ws]["watchlist_channels"] = set(channels)
 
     async def subscribe_alerts(
         self,
         ws: WebSocket,
-        source_id: str = "default",
+        vehicle_id: str = "default",
+        stream_id: str | None = None,
     ) -> None:
         """Subscribe client to alert stream for a source."""
         async with self._lock:
             if ws in self._connections:
-                self._connections[ws]["active_source_id"] = source_id
+                self._connections[ws]["active_vehicle_id"] = vehicle_id
+                self._connections[ws]["active_stream_id"] = stream_id
                 self._connections[ws]["alerts_subscribed"] = True
 
     async def subscribe_channel(
         self,
         ws: WebSocket,
         name: str,
-        source_id: str = "default",
+        vehicle_id: str = "default",
+        stream_id: str | None = None,
     ) -> None:
         """Subscribe client to single channel detail for a source."""
         async with self._lock:
             if ws in self._connections:
-                self._connections[ws]["active_source_id"] = source_id
+                self._connections[ws]["active_vehicle_id"] = vehicle_id
+                self._connections[ws]["active_stream_id"] = stream_id
                 self._connections[ws]["channel_detail"].add(name)
 
     async def unsubscribe_channel(self, ws: WebSocket, name: str) -> None:

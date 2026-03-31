@@ -92,7 +92,6 @@ export function TelemetryDetailTabs({
   currentRunId,
   decodedName,
 }: TelemetryDetailTabsProps) {
-  const effectiveRealtimeSourceId = currentRunId ?? sourceId;
   const initialChannels = [
     {
       name: decodedName,
@@ -110,10 +109,10 @@ export function TelemetryDetailTabs({
 
   return (
     <RealtimeTelemetryProvider
-      key={effectiveRealtimeSourceId}
+      key={`${sourceId}:${currentRunId ?? ""}`}
       channelNames={[decodedName]}
-      sourceId={effectiveRealtimeSourceId}
       vehicleId={sourceId}
+      streamId={currentRunId ?? null}
       initialChannels={initialChannels}
     >
       <TelemetryDetailTabsContent
@@ -403,7 +402,8 @@ function TelemetryDetailTabsContent({
                   <CardContent>
                     <TrendChartAnalysis
                       channelName={decodedName}
-                      sourceId={currentRunId ?? sourceId}
+                      vehicleId={sourceId}
+                      streamId={currentRunId ?? null}
                       units={explain.units}
                       bounds={{
                         p5: explain.statistics.p5,

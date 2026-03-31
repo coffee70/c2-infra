@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 import { buildTelemetryApiBase } from "@/lib/telemetry-routes";
-import { runIdToSourceId } from "@/lib/source-ids";
 import {
   Line,
   XAxis,
@@ -136,13 +135,15 @@ function downsampleByWidth<T extends { timestamp: string; value: number }>(
 
 export function TrendChartAnalysis({
   channelName,
-  sourceId = "default",
+  vehicleId = "default",
+  streamId = null,
   units,
   bounds,
   lastTimestamp,
 }: {
   channelName: string;
-  sourceId?: string;
+  vehicleId?: string;
+  streamId?: string | null;
   units?: string | null;
   bounds?: Bounds;
   lastTimestamp?: string | null;
@@ -206,28 +207,21 @@ export function TrendChartAnalysis({
     return 1000;
   }, [zoomRefetch, useCustomRange, rangeMinutes]);
 
-  const canonicalSourceId = useMemo(
-    () => runIdToSourceId(sourceId),
-    [sourceId]
-  );
-
   const fetchData = useCallback(
     async (name: string, since: string, until: string | null) => {
-      const runIdParam =
-        canonicalSourceId === sourceId ? undefined : sourceId;
       const params = new URLSearchParams({
         limit: `${fetchLimit}`,
         since,
       });
       if (until) params.set("until", until);
-      if (runIdParam) params.set("run_id", runIdParam);
-      const url = `${API_URL}${buildTelemetryApiBase(canonicalSourceId, name)}/recent?${params.toString()}`;
+      if (streamId) params.set("run_id", streamId);
+      const url = `${API_URL}${buildTelemetryApiBase(vehicleId, name)}/recent?${params.toString()}`;
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`Failed to fetch ${name}`);
       const json = await res.json();
       return (json.data || []) as DataPoint[];
     },
-    [fetchLimit, sourceId, canonicalSourceId]
+    [fetchLimit, streamId, vehicleId]
   );
 
   useEffect(() => {
@@ -270,11 +264,11 @@ export function TrendChartAnalysis({
   }, []);
 
   useEffect(() => {
-    fetch(`${API_URL}/telemetry/list?source_id=${encodeURIComponent(canonicalSourceId)}`, { cache: "no-store" })
+    fetch(`${API_URL}/telemetry/list?source_id=${encodeURIComponent(vehicleId)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => setChannelList(json.names || []))
       .catch(() => setChannelList([]));
-  }, [canonicalSourceId]);
+  }, [vehicleId]);
 
   useEffect(() => {
     const client = new RealtimeWsClient();
@@ -306,9 +300,9 @@ export function TrendChartAnalysis({
       }
     });
     client.connect();
-    client.subscribeWatchlist([channelName], sourceId);
+    client.subscribeWatchlist([channelName], vehicleId, streamId);
     return () => client.disconnect();
-  }, [channelName, sourceId, fetchLimit]);
+  }, [channelName, fetchLimit, streamId, vehicleId]);
 
   useEffect(() => {
     const id = setInterval(() => setNowTs(Date.now()), 1000);

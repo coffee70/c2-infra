@@ -32,6 +32,7 @@ from app.services.source_run_service import (
     SourceNotFoundError,
     get_stream_vehicle_id,
     normalize_vehicle_id,
+    resolve_active_stream_id,
     run_id_to_source_id,
 )
 from app.lib.audit import audit_log
@@ -234,27 +235,37 @@ async def websocket_realtime(websocket: WebSocket) -> None:
 
             elif msg_type == "subscribe_watchlist":
                 channels = msg.get("channels", [])
-                stream_id = msg.get("stream_id", "default")
+                vehicle_id = msg.get("vehicle_id", "default")
+                stream_id = msg.get("stream_id")
+                resolved_stream_id = stream_id or resolve_active_stream_id(session, vehicle_id)
                 if not channels:
                     # Default to watchlist
                     session = session_factory()
                     try:
-                        channels = get_watchlist_channel_names(session, stream_id)
+                        channels = get_watchlist_channel_names(session, vehicle_id)
                     finally:
                         session.close()
-                await hub.subscribe_watchlist(websocket, channels, source_id=stream_id)
+                await hub.subscribe_watchlist(
+                    websocket,
+                    channels,
+                    vehicle_id=vehicle_id,
+                    stream_id=resolved_stream_id,
+                )
 
                 # Send snapshot
                 session = session_factory()
                 try:
                     snapshot = get_realtime_snapshot_for_channels(
-                        session, channels, source_id=stream_id
+                        session,
+                        channels,
+                        vehicle_id=vehicle_id,
+                        stream_id=resolved_stream_id,
                     )
                     # Fallback: if telemetry_current is empty, channels may be empty
                     # Use overview-style fallback from telemetry_data
                     if len(snapshot) < len(channels):
                         from app.services.overview_service import get_overview
-                        overview = get_overview(session, source_id=stream_id)
+                        overview = get_overview(session, source_id=resolved_stream_id)
                         overview_by_name = {c["name"]: c for c in overview}
                         for name in channels:
                             if name not in [s.name for s in snapshot] and name in overview_by_name:
@@ -262,8 +273,8 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                                 from app.models.schemas import RecentDataPoint
                                 snapshot.append(
                                     RealtimeChannelUpdate(
-                                        vehicle_id=_resolve_stream_vehicle_id(session, stream_id),
-                                        stream_id=stream_id,
+                                        vehicle_id=vehicle_id,
+                                        stream_id=resolved_stream_id,
                                         name=o["name"],
                                         units=o.get("units"),
                                         description=o.get("description"),
@@ -289,13 +300,23 @@ async def websocket_realtime(websocket: WebSocket) -> None:
 
             elif msg_type == "subscribe_channel":
                 name = msg.get("name", "")
-                stream_id = msg.get("stream_id", "default")
+                vehicle_id = msg.get("vehicle_id", "default")
+                stream_id = msg.get("stream_id")
+                resolved_stream_id = stream_id or resolve_active_stream_id(session, vehicle_id)
                 if name:
-                    await hub.subscribe_channel(websocket, name, source_id=stream_id)
+                    await hub.subscribe_channel(
+                        websocket,
+                        name,
+                        vehicle_id=vehicle_id,
+                        stream_id=resolved_stream_id,
+                    )
                     session = session_factory()
                     try:
                         snapshot = get_realtime_snapshot_for_channels(
-                            session, [name], source_id=stream_id
+                            session,
+                            [name],
+                            vehicle_id=vehicle_id,
+                            stream_id=resolved_stream_id,
                         )
                         if snapshot:
                             from app.models.schemas import WsTelemetryUpdate
@@ -306,13 +327,20 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         session.close()
 
             elif msg_type == "subscribe_alerts":
-                stream_id = msg.get("stream_id", "default")
-                await hub.subscribe_alerts(websocket, source_id=stream_id)
+                vehicle_id = msg.get("vehicle_id", "default")
+                stream_id = msg.get("stream_id")
+                resolved_stream_id = stream_id or resolve_active_stream_id(session, vehicle_id)
+                await hub.subscribe_alerts(
+                    websocket,
+                    vehicle_id=vehicle_id,
+                    stream_id=resolved_stream_id,
+                )
                 session = session_factory()
                 try:
                     active = get_active_alerts(
                         session,
-                        source_id=stream_id,
+                        vehicle_id=vehicle_id,
+                        stream_id=resolved_stream_id,
                         subsystems=msg.get("subsystems"),
                         severities=msg.get("severities"),
                     )
