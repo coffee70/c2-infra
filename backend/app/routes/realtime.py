@@ -249,7 +249,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                     websocket,
                     channels,
                     vehicle_id=vehicle_id,
-                    stream_id=resolved_stream_id,
+                    stream_id=stream_id,
                 )
 
                 # Send snapshot
@@ -308,7 +308,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         websocket,
                         name,
                         vehicle_id=vehicle_id,
-                        stream_id=resolved_stream_id,
+                        stream_id=stream_id,
                     )
                     session = session_factory()
                     try:
@@ -333,7 +333,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                 await hub.subscribe_alerts(
                     websocket,
                     vehicle_id=vehicle_id,
-                    stream_id=resolved_stream_id,
+                    stream_id=stream_id,
                 )
                 session = session_factory()
                 try:
