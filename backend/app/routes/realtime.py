@@ -252,7 +252,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                 channels = msg.get("channels", [])
                 vehicle_id = msg.get("vehicle_id", "default")
                 stream_id = msg.get("stream_id")
-                resolved_stream_id = _resolve_requested_stream_id(session_factory, vehicle_id, stream_id)
+                snapshot_stream_id = _resolve_requested_stream_id(session_factory, vehicle_id, stream_id)
                 if not channels:
                     # Default to watchlist
                     session = session_factory()
@@ -264,7 +264,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                     websocket,
                     channels,
                     vehicle_id=vehicle_id,
-                    stream_id=resolved_stream_id,
+                    stream_id=stream_id,
                 )
 
                 # Send snapshot
@@ -274,13 +274,13 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         session,
                         channels,
                         vehicle_id=vehicle_id,
-                        stream_id=resolved_stream_id,
+                        stream_id=snapshot_stream_id,
                     )
                     # Fallback: if telemetry_current is empty, channels may be empty
                     # Use overview-style fallback from telemetry_data
                     if len(snapshot) < len(channels):
                         from app.services.overview_service import get_overview
-                        overview = get_overview(session, source_id=resolved_stream_id)
+                        overview = get_overview(session, source_id=snapshot_stream_id)
                         overview_by_name = {c["name"]: c for c in overview}
                         for name in channels:
                             if name not in [s.name for s in snapshot] and name in overview_by_name:
@@ -289,7 +289,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                                 snapshot.append(
                                     RealtimeChannelUpdate(
                                         vehicle_id=vehicle_id,
-                                        stream_id=resolved_stream_id,
+                                        stream_id=snapshot_stream_id,
                                         name=o["name"],
                                         units=o.get("units"),
                                         description=o.get("description"),
@@ -317,13 +317,13 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                 name = msg.get("name", "")
                 vehicle_id = msg.get("vehicle_id", "default")
                 stream_id = msg.get("stream_id")
-                resolved_stream_id = _resolve_requested_stream_id(session_factory, vehicle_id, stream_id)
+                snapshot_stream_id = _resolve_requested_stream_id(session_factory, vehicle_id, stream_id)
                 if name:
                     await hub.subscribe_channel(
                         websocket,
                         name,
                         vehicle_id=vehicle_id,
-                        stream_id=resolved_stream_id,
+                        stream_id=stream_id,
                     )
                     session = session_factory()
                     try:
@@ -331,7 +331,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                             session,
                             [name],
                             vehicle_id=vehicle_id,
-                            stream_id=resolved_stream_id,
+                            stream_id=snapshot_stream_id,
                         )
                         if snapshot:
                             from app.models.schemas import WsTelemetryUpdate
@@ -344,18 +344,18 @@ async def websocket_realtime(websocket: WebSocket) -> None:
             elif msg_type == "subscribe_alerts":
                 vehicle_id = msg.get("vehicle_id", "default")
                 stream_id = msg.get("stream_id")
-                resolved_stream_id = _resolve_requested_stream_id(session_factory, vehicle_id, stream_id)
+                snapshot_stream_id = _resolve_requested_stream_id(session_factory, vehicle_id, stream_id)
                 await hub.subscribe_alerts(
                     websocket,
                     vehicle_id=vehicle_id,
-                    stream_id=resolved_stream_id,
+                    stream_id=stream_id,
                 )
                 session = session_factory()
                 try:
                     active = get_active_alerts(
                         session,
                         vehicle_id=vehicle_id,
-                        stream_id=resolved_stream_id,
+                        stream_id=snapshot_stream_id,
                         subsystems=msg.get("subsystems"),
                         severities=msg.get("severities"),
                     )
