@@ -41,3 +41,20 @@ def test_baseline_migration_is_static_and_does_not_import_live_metadata() -> Non
     assert "Base.metadata.drop_all" not in contents
     assert "import app.models.telemetry" not in contents
     assert "from app.database import Base" not in contents
+
+
+def test_alert_table_is_stream_scoped_not_source_fk_scoped() -> None:
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "app"
+        / "migrations"
+        / "versions"
+        / "001_initial_schema.py"
+    )
+    contents = migration_path.read_text(encoding="utf-8")
+    start = contents.index('    op.create_table(\n        "telemetry_alerts",')
+    end = contents.index('    op.create_index(\n        op.f("ix_telemetry_alerts_source_id"),', start)
+    alert_block = contents[start:end]
+
+    assert 'sa.Column("source_id", sa.Text(), nullable=False)' in alert_block
+    assert 'sa.ForeignKey("telemetry_sources.id", ondelete="CASCADE")' not in alert_block

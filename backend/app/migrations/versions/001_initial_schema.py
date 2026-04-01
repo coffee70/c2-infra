@@ -197,12 +197,7 @@ def upgrade() -> None:
     op.create_table(
         "telemetry_alerts",
         sa.Column("id", UUID(as_uuid=True), primary_key=True, nullable=False),
-        sa.Column(
-            "source_id",
-            sa.Text(),
-            sa.ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
-            nullable=False,
-        ),
+        sa.Column("source_id", sa.Text(), nullable=False),
         sa.Column(
             "telemetry_id",
             UUID(as_uuid=True),
