@@ -298,8 +298,8 @@ def update_source_route(
     return result
 
 
-@router.get("/sources/{source_id}/runs", response_model=ChannelSourcesResponse)
-def get_source_runs(
+@router.get("/sources/{source_id}/streams", response_model=ChannelSourcesResponse)
+def get_source_streams(
     source_id: str,
     db: Session = Depends(get_db),
 ):
@@ -615,8 +615,8 @@ def _format_source_label(source_id: str, registered_name: Optional[str] = None) 
     return source_id
 
 
-@router.get("/{name}/runs", response_model=ChannelSourcesResponse)
-def get_channel_runs(
+@router.get("/{name}/streams", response_model=ChannelSourcesResponse)
+def get_channel_streams(
     name: str,
     source_id: str,
     db: Session = Depends(get_db),
@@ -790,14 +790,14 @@ def get_recent_for_source(
     )
 
 
-@router.get("/sources/{source_id}/channels/{name}/runs", response_model=ChannelSourcesResponse)
-def get_channel_runs_for_source(
+@router.get("/sources/{source_id}/channels/{name}/streams", response_model=ChannelSourcesResponse)
+def get_channel_streams_for_source(
     source_id: str,
     name: str,
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    return get_channel_runs(name=name, source_id=source_id, db=db)
+    return get_channel_streams(name=name, source_id=source_id, db=db)
 
 
 @router.post("/sources/active-stream")

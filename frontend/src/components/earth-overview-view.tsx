@@ -183,18 +183,18 @@ export function EarthOverviewView({
     };
   }, [selectedIds, sources]);
 
-  const effectiveRunIdBySource = useMemo(() => {
+  const effectiveStreamIdBySource = useMemo(() => {
     const next: Record<string, string> = {};
     for (const source of sources) {
       const runtime = simulatorRuntimeBySource[source.id];
-      const activeRunId =
+      const activeStreamId =
         source.source_type === "simulator" &&
         runtime?.connected === true &&
         runtime.state != null &&
         runtime.state !== "idle"
           ? runtime.config?.stream_id ?? null
           : null;
-      next[source.id] = activeRunId ?? source.id;
+      next[source.id] = activeStreamId ?? source.id;
     }
     return next;
   }, [sources, simulatorRuntimeBySource]);
@@ -203,11 +203,11 @@ export function EarthOverviewView({
     const next: Record<string, string> = {};
     for (const sourceId of selectedIds) {
       next[sourceId] = sourceId;
-      const effectiveRunId = effectiveRunIdBySource[sourceId] ?? sourceId;
-      next[effectiveRunId] = sourceId;
+      const effectiveStreamId = effectiveStreamIdBySource[sourceId] ?? sourceId;
+      next[effectiveStreamId] = sourceId;
     }
     return next;
-  }, [effectiveRunIdBySource, selectedIds]);
+  }, [effectiveStreamIdBySource, selectedIds]);
 
   useEffect(() => {
     let cancelled = false;

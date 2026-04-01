@@ -431,7 +431,7 @@ function TelemetryDetailTabsContent({
                 <TelemetryHistoryTable
                   channelName={decodedName}
                   sourceId={sourceId}
-                  defaultRunId={currentStreamId ?? undefined}
+                  defaultStreamId={currentStreamId ?? undefined}
                   units={explain.units}
                 />
                 </div>
@@ -446,7 +446,7 @@ function TelemetryDetailTabsContent({
                 <ExplanationBlock
                   channelName={decodedName}
                   sourceId={sourceId}
-                  runId={currentStreamId ?? undefined}
+                  streamId={currentStreamId ?? undefined}
                 />
                 <ChannelRecentEvents
                   channelName={decodedName}

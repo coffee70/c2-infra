@@ -148,16 +148,16 @@ function mergeWatchlistChannels(
 }
 
 async function fetchOverviewSnapshot(
-  runId: string
+  streamId: string
 ): Promise<OverviewSnapshot> {
   const [overviewRes, anomaliesRes, watchlistRes] = await Promise.all([
     fetchWithTimeoutAndFallback(
-      `/telemetry/overview?source_id=${encodeURIComponent(runId)}`
+      `/telemetry/overview?source_id=${encodeURIComponent(streamId)}`
     ),
     fetchWithTimeoutAndFallback(
-      `/telemetry/anomalies?source_id=${encodeURIComponent(runId)}`
+      `/telemetry/anomalies?source_id=${encodeURIComponent(streamId)}`
     ),
-    fetchWithTimeoutAndFallback(`/telemetry/watchlist?source_id=${encodeURIComponent(runId)}`),
+    fetchWithTimeoutAndFallback(`/telemetry/watchlist?source_id=${encodeURIComponent(streamId)}`),
   ]);
 
   const overviewData = overviewRes.ok
@@ -217,11 +217,11 @@ export function OverviewContent() {
   const [initialSimulatorStatus, setInitialSimulatorStatus] = useState<
     SimulatorRuntimeStatus | null
   >(null);
-  const [latestSimulatorRunId, setLatestSimulatorRunId] = useState<string | null>(
+  const [latestSimulatorStreamId, setLatestSimulatorStreamId] = useState<string | null>(
     null
   );
-  const [committedRunId, setCommittedRunId] = useState<string | null>(null);
-  const [desiredRunId, setDesiredRunId] = useState<string | null>(null);
+  const [committedStreamId, setCommittedStreamId] = useState<string | null>(null);
+  const [desiredStreamId, setDesiredStreamId] = useState<string | null>(null);
   const [showSwitchingIndicator, setShowSwitchingIndicator] = useState(false);
   const [watchlistVersion, setWatchlistVersion] = useState(0);
 
@@ -245,18 +245,18 @@ export function OverviewContent() {
     initialStatus:
       initialSimulatorSourceId === effectiveSource ? initialSimulatorStatus : null,
   });
-  const isSwitchingRuns =
+  const isSwitchingStreams =
     !bootstrapLoading &&
-    desiredRunId != null &&
-    committedRunId != null &&
-    desiredRunId !== committedRunId;
+    desiredStreamId != null &&
+    committedStreamId != null &&
+    desiredStreamId !== committedStreamId;
 
   const refreshCommittedSnapshot = useCallback(async () => {
-    if (!committedRunId) return;
+    if (!committedStreamId) return;
 
     try {
       setError(unavailableMessage);
-      const snapshot = await fetchOverviewSnapshot(committedRunId);
+      const snapshot = await fetchOverviewSnapshot(committedStreamId);
       setChannels(snapshot.channels);
       setAnomalies(snapshot.anomalies);
       if (snapshot.hasPartialFailure) {
@@ -266,7 +266,7 @@ export function OverviewContent() {
       console.error("[Overview] refresh committed snapshot failed", e);
       setError("Failed to load overview");
     }
-  }, [committedRunId, unavailableMessage]);
+  }, [committedStreamId, unavailableMessage]);
 
   const handleWatchlistChanged = useCallback(async () => {
     try {
@@ -295,16 +295,16 @@ export function OverviewContent() {
       try {
         setBootstrapLoading(true);
         setError(unavailableMessage);
-        setCommittedRunId(null);
-        setDesiredRunId(null);
+        setCommittedStreamId(null);
+        setDesiredStreamId(null);
         setShowSwitchingIndicator(false);
-        setLatestSimulatorRunId(null);
+        setLatestSimulatorStreamId(null);
 
         const sourcesPromise = fetchWithTimeoutAndFallback(
           "/telemetry/sources"
         );
         const runsPromise = fetchWithTimeoutAndFallback(
-          `/telemetry/sources/${encodeURIComponent(effectiveSource)}/runs`
+          `/telemetry/sources/${encodeURIComponent(effectiveSource)}/streams`
         );
 
         const [sourcesRes, runsRes] = await Promise.all([
@@ -320,14 +320,14 @@ export function OverviewContent() {
               "/telemetry/sources"
             )
           : [];
-        const runsData = runsRes.ok
+        const streamsData = runsRes.ok
           ? await readJsonResponse<{ sources?: Array<{ stream_id?: string }> }>(
               runsRes,
-              `/telemetry/sources/${encodeURIComponent(effectiveSource)}/runs`
+              `/telemetry/sources/${encodeURIComponent(effectiveSource)}/streams`
             )
           : { sources: [] };
-        const runsList = Array.isArray(runsData.sources)
-          ? runsData.sources
+        const streamsList = Array.isArray(streamsData.sources)
+          ? streamsData.sources
           : [];
 
         const isSimulatorSource = Array.isArray(sourcesList)
@@ -356,26 +356,26 @@ export function OverviewContent() {
           }
         }
 
-        const runtimeRunId =
+        const runtimeStreamId =
           simStatus?.connected && simStatus.state !== "idle"
             ? simStatus.config?.stream_id ?? null
             : null;
-        const effectiveRunId = isSimulatorSource
-          ? runtimeRunId ?? runsList[0]?.stream_id ?? effectiveSource
-          : runsList[0]?.stream_id ?? effectiveSource;
-        const snapshot = await fetchOverviewSnapshot(effectiveRunId);
+        const effectiveStreamId = isSimulatorSource
+          ? runtimeStreamId ?? streamsList[0]?.stream_id ?? effectiveSource
+          : streamsList[0]?.stream_id ?? effectiveSource;
+        const snapshot = await fetchOverviewSnapshot(effectiveStreamId);
 
         if (cancelled) return;
 
         setSources(Array.isArray(sourcesList) ? sourcesList : []);
         setChannels(snapshot.channels);
         setAnomalies(snapshot.anomalies);
-        setCommittedRunId(effectiveRunId);
-        setDesiredRunId(effectiveRunId);
+        setCommittedStreamId(effectiveStreamId);
+        setDesiredStreamId(effectiveStreamId);
         setInitialSimulatorSourceId(simSourceId);
         setInitialSimulatorStatus(simStatus);
-        setLatestSimulatorRunId(
-          isSimulatorSource ? runtimeRunId ?? runsList[0]?.stream_id ?? null : null
+        setLatestSimulatorStreamId(
+          isSimulatorSource ? runtimeStreamId ?? streamsList[0]?.stream_id ?? null : null
         );
         if (snapshot.hasPartialFailure) {
           setError("Some data failed to load");
@@ -399,26 +399,26 @@ export function OverviewContent() {
   }, [effectiveSource, sourceReady, unavailableMessage]);
 
   useEffect(() => {
-    if (!isSimulatorSource || !simulatorRuntime.activeRunId) return;
-    setLatestSimulatorRunId((current) =>
-      current === simulatorRuntime.activeRunId ? current : simulatorRuntime.activeRunId
+    if (!isSimulatorSource || !simulatorRuntime.activeStreamId) return;
+    setLatestSimulatorStreamId((current) =>
+      current === simulatorRuntime.activeStreamId ? current : simulatorRuntime.activeStreamId
     );
-  }, [isSimulatorSource, simulatorRuntime.activeRunId]);
+  }, [isSimulatorSource, simulatorRuntime.activeStreamId]);
 
   useEffect(() => {
     if (!sourceReady || !isSimulatorSource) return;
 
-    const nextRunId = simulatorRuntime.isActive
-      ? simulatorRuntime.activeRunId ?? desiredRunId ?? effectiveSource
-      : latestSimulatorRunId ?? effectiveSource;
-    if (!nextRunId || nextRunId === desiredRunId) return;
-    setDesiredRunId(nextRunId);
+    const nextStreamId = simulatorRuntime.isActive
+      ? simulatorRuntime.activeStreamId ?? desiredStreamId ?? effectiveSource
+      : latestSimulatorStreamId ?? effectiveSource;
+    if (!nextStreamId || nextStreamId === desiredStreamId) return;
+    setDesiredStreamId(nextStreamId);
   }, [
-    desiredRunId,
+    desiredStreamId,
     effectiveSource,
     isSimulatorSource,
-    latestSimulatorRunId,
-    simulatorRuntime.activeRunId,
+    latestSimulatorStreamId,
+    simulatorRuntime.activeStreamId,
     simulatorRuntime.isActive,
     sourceReady,
   ]);
@@ -427,28 +427,28 @@ export function OverviewContent() {
     if (
       !sourceReady ||
       bootstrapLoading ||
-      !committedRunId ||
-      !desiredRunId ||
-      desiredRunId === committedRunId
+      !committedStreamId ||
+      !desiredStreamId ||
+      desiredStreamId === committedStreamId
     ) {
       return;
     }
 
     let cancelled = false;
-    const runId = desiredRunId;
+    const streamId = desiredStreamId;
 
     async function switchSnapshot() {
       try {
         setShowSwitchingIndicator(true);
         setError(unavailableMessage);
 
-        const snapshot = await fetchOverviewSnapshot(runId);
+        const snapshot = await fetchOverviewSnapshot(streamId);
 
         if (cancelled) return;
 
         setChannels(snapshot.channels);
         setAnomalies(snapshot.anomalies);
-        setCommittedRunId(runId);
+        setCommittedStreamId(streamId);
         if (snapshot.hasPartialFailure) {
           setError("Some data failed to load");
         }
@@ -464,10 +464,10 @@ export function OverviewContent() {
     return () => {
       cancelled = true;
     };
-  }, [bootstrapLoading, committedRunId, desiredRunId, sourceReady, unavailableMessage]);
+  }, [bootstrapLoading, committedStreamId, desiredStreamId, sourceReady, unavailableMessage]);
 
   useEffect(() => {
-    if (isSwitchingRuns || !showSwitchingIndicator) return;
+    if (isSwitchingStreams || !showSwitchingIndicator) return;
 
     const timeoutId = window.setTimeout(() => {
       setShowSwitchingIndicator(false);
@@ -476,9 +476,9 @@ export function OverviewContent() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [isSwitchingRuns, showSwitchingIndicator]);
+  }, [isSwitchingStreams, showSwitchingIndicator]);
 
-  const bootstrapFailed = !bootstrapLoading && !committedRunId;
+  const bootstrapFailed = !bootstrapLoading && !committedStreamId;
 
   if (!sourceReady || bootstrapLoading) {
     return (
@@ -552,13 +552,13 @@ export function OverviewContent() {
           hasError={!!error}
           sources={sources}
           sourceId={effectiveSource || DEFAULT_SOURCE_ID}
-          feedSourceId={committedRunId ?? undefined}
+          feedSourceId={committedStreamId ?? undefined}
           defaultSourceId={DEFAULT_SOURCE_ID}
           initialSimulatorSourceId={initialSimulatorSourceId}
           initialSimulatorStatus={initialSimulatorStatus}
           simulatorStatus={simulatorRuntime.status}
-          isSwitchingRuns={isSwitchingRuns}
-          showSwitchingIndicator={showSwitchingIndicator || isSwitchingRuns}
+          isSwitchingStreams={isSwitchingStreams}
+          showSwitchingIndicator={showSwitchingIndicator || isSwitchingStreams}
           onWatchlistChanged={handleWatchlistChanged}
           watchlistVersion={watchlistVersion}
         />

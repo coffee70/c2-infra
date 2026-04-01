@@ -15,11 +15,11 @@ import { useTelemetryExplanationQuery } from "@/lib/query-hooks";
 interface ExplanationBlockProps {
   channelName: string;
   sourceId: string;
-  runId?: string;
+  streamId?: string;
 }
 
-export function ExplanationBlock({ channelName, sourceId, runId }: ExplanationBlockProps) {
-  const explanationQuery = useTelemetryExplanationQuery(channelName, sourceId, runId);
+export function ExplanationBlock({ channelName, sourceId, streamId }: ExplanationBlockProps) {
+  const explanationQuery = useTelemetryExplanationQuery(channelName, sourceId, streamId);
   const loading = explanationQuery.isLoading;
   const data = explanationQuery.data ?? null;
   const error = explanationQuery.isError;
@@ -93,7 +93,7 @@ export function ExplanationBlock({ channelName, sourceId, runId }: ExplanationBl
         </CardContent>
       </Card>
 
-      <SimilarTelemetryCard detailSourceId={runId ?? sourceId} channels={data.what_to_check_next ?? []} />
+      <SimilarTelemetryCard detailSourceId={streamId ?? sourceId} channels={data.what_to_check_next ?? []} />
     </>
   );
 }

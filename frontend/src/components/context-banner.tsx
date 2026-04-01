@@ -53,7 +53,7 @@ interface ContextBannerProps {
   initialSimulatorSourceId?: string;
   initialSimulatorStatus?: SimulatorRuntimeStatus | null;
   simulatorStatus?: SimulatorRuntimeStatus | null;
-  isSwitchingRuns?: boolean;
+  isSwitchingStreams?: boolean;
 }
 
 function scrollToAlerts(id: string) {
@@ -77,7 +77,7 @@ export function ContextBanner({
   initialSimulatorSourceId,
   initialSimulatorStatus,
   simulatorStatus,
-  isSwitchingRuns = false,
+  isSwitchingStreams = false,
 }: ContextBannerProps) {
   const feedStatus = useRealtimeFeedStatus();
   const isSimulator =
@@ -187,7 +187,7 @@ export function ContextBanner({
             ~{feedStatus.approx_rate_hz.toFixed(1)} Hz
           </span>
         )}
-        {isSwitchingRuns && (
+        {isSwitchingStreams && (
           <Badge variant="outline" className="text-xs">
             Switching stream…
           </Badge>

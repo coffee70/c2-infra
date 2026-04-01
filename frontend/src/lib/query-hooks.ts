@@ -365,14 +365,14 @@ export function useTelemetrySearchQuery(params: SearchParams, enabled: boolean) 
   });
 }
 
-export function useTelemetryChannelRunsQuery(channelName: string, sourceId: string, enabled = true) {
+export function useTelemetryChannelStreamsQuery(channelName: string, sourceId: string, enabled = true) {
   return useQuery<ChannelSource[]>({
     queryKey: queryKeys.telemetryChannelRuns(channelName, sourceId),
     enabled,
     staleTime: 5 * 60 * 1000,
     queryFn: async ({ signal }) => {
       const data = await fetchJson<{ sources?: ChannelSource[] }>(
-        `${buildTelemetryApiBase(sourceId, channelName)}/runs`,
+        `${buildTelemetryApiBase(sourceId, channelName)}/streams`,
         { signal }
       );
       return Array.isArray(data.sources) ? data.sources : [];

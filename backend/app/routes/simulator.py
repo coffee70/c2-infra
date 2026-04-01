@@ -140,6 +140,7 @@ async def simulator_status(
         active_stream_id = config.get("stream_id")
         packet_source = config.get("packet_source")
         receiver_id = config.get("receiver_id")
+        registration_failed = False
         if state and state != "idle" and isinstance(active_stream_id, str) and active_stream_id:
             try:
                 register_stream(
@@ -169,6 +170,7 @@ async def simulator_status(
                     error=str(e),
                     level="warning",
                 )
+                registration_failed = True
         elif state == "idle":
             clear_active_stream(resolved_source_id, db=db)
     except (httpx.ConnectError, httpx.TimeoutException, HTTPException) as e:
@@ -182,6 +184,12 @@ async def simulator_status(
         return {"connected": False, "supported_scenarios": []}
     if not isinstance(payload.get("supported_scenarios"), list):
         payload["supported_scenarios"] = []
+    if registration_failed:
+        payload = {
+            **payload,
+            "state": "degraded",
+            "error": "backend stream registration failed",
+        }
     return {"connected": True, **payload}
 
 

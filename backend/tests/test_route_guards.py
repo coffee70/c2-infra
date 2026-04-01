@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -167,6 +168,37 @@ async def test_simulator_status_uses_runtime_supported_scenarios(monkeypatch) ->
 
 
 @pytest.mark.anyio
+async def test_simulator_status_degrades_when_stream_registration_fails(monkeypatch) -> None:
+    db = MagicMock()
+    monkeypatch.setattr(
+        "app.routes.simulator._resolve_with_audit",
+        lambda _db, _source_id, _action: "http://simulator:8010",
+    )
+
+    async def fake_proxy_get(_base_url, _path):
+        return {
+            "state": "running",
+            "config": {"stream_id": "stream-1", "packet_source": "simulator-link", "receiver_id": "rx-1"},
+            "sim_elapsed": 12,
+            "supported_scenarios": [],
+        }
+
+    monkeypatch.setattr("app.routes.simulator._proxy_get", fake_proxy_get)
+    monkeypatch.setattr(
+        "app.routes.simulator.register_stream",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("duplicate stream")),
+    )
+    monkeypatch.setattr("app.routes.simulator.audit_log", lambda *_args, **_kwargs: None)
+
+    payload = await simulator_status(vehicle_id="simulator", db=db)
+
+    assert payload["connected"] is True
+    assert payload["state"] == "degraded"
+    assert payload["error"] == "backend stream registration failed"
+    assert payload["sim_elapsed"] == 12
+
+
+@pytest.mark.anyio
 async def test_simulator_status_returns_disconnected_on_missing_source(monkeypatch) -> None:
     db = MagicMock()
 
@@ -235,3 +267,15 @@ def test_orbit_status_rejects_legacy_source_id_query_param() -> None:
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "Use vehicle_id"
+
+
+def test_telemetry_routes_expose_stream_paths_not_run_paths() -> None:
+    source = Path("backend/app/routes/telemetry.py").read_text()
+
+    assert '@router.get("/sources/{source_id}/streams"' in source
+    assert '@router.get("/{name}/streams"' in source
+    assert '@router.get("/sources/{source_id}/channels/{name}/streams"' in source
+
+    assert '@router.get("/sources/{source_id}/runs"' not in source
+    assert '@router.get("/{name}/runs"' not in source
+    assert '@router.get("/sources/{source_id}/channels/{name}/runs"' not in source

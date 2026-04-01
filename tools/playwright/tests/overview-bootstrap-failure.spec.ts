@@ -17,7 +17,7 @@ test("overview bootstrap failures surface an error instead of a loading spinner"
     });
   });
 
-  await page.route("**/telemetry/sources/test-source/runs", async (route) => {
+  await page.route("**/telemetry/sources/test-source/streams", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -75,7 +75,7 @@ test("overview bootstrap HTML responses surface a JSON parsing error instead of 
     });
   });
 
-  await page.route("**/telemetry/sources/test-source/runs", async (route) => {
+  await page.route("**/telemetry/sources/test-source/streams", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",

@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from starlette.websockets import WebSocketDisconnect
 
 from app.models.schemas import MeasurementEvent, RealtimeChannelUpdate
-from app.models.telemetry import TelemetryMetadata, TelemetrySource
+from app.models.telemetry import TelemetryAlert, TelemetryMetadata, TelemetrySource
 from app.realtime.bus import InProcessEventBus
 from app.realtime.processor import (
     RealtimeProcessor,
@@ -344,9 +344,9 @@ async def test_websocket_realtime_resolves_latest_stream_without_explicit_stream
         "subscribe_alerts": {"type": "subscribe_alerts", "source_id": "vehicle-a"},
     }
     expected_subscription = {
-        "subscribe_watchlist": ("watchlist", ["VBAT"], "vehicle-a", None),
-        "subscribe_channel": ("channel", "VBAT", "vehicle-a", None),
-        "subscribe_alerts": ("alerts", "vehicle-a", None),
+        "subscribe_watchlist": ("watchlist", ["VBAT"], "vehicle-a", "stream-1"),
+        "subscribe_channel": ("channel", "VBAT", "vehicle-a", "stream-1"),
+        "subscribe_alerts": ("alerts", "vehicle-a", "stream-1"),
     }
 
     ws = FakeWebSocket([json.dumps(message_by_type[message_type])])
@@ -362,6 +362,132 @@ async def test_websocket_realtime_resolves_latest_stream_without_explicit_stream
         assert "snapshot_alerts" in ws.sent_texts[0]
     else:
         assert "stream-1" in ws.sent_texts[0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "message_type",
+    ["ack_alert", "resolve_alert"],
+)
+async def test_websocket_realtime_audit_logs_logical_source_id_for_alert_actions(
+    monkeypatch: pytest.MonkeyPatch,
+    message_type: str,
+) -> None:
+    audit_calls: list[tuple[str, dict[str, object]]] = []
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.close = MagicMock()
+            self.commit = MagicMock()
+            self.rollback = MagicMock()
+            telemetry_id = uuid4()
+            self._alert = SimpleNamespace(
+                id=uuid4(),
+                telemetry_id=telemetry_id,
+                stream_id="stream-1",
+                status="new",
+                severity="warning",
+                reason="out_of_family",
+                current_value_at_open=Decimal("4.2"),
+                opened_at=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+                opened_reception_at=datetime(2026, 3, 26, 12, 0, 1, tzinfo=timezone.utc),
+                cleared_at=None,
+                resolved_at=None,
+                acked_at=None,
+                acked_by=None,
+                resolved_by=None,
+                resolution_text=None,
+                resolution_code=None,
+            )
+            self._meta = TelemetryMetadata(
+                id=telemetry_id,
+                source_id="vehicle-a",
+                name="VBAT",
+                units="V",
+                description=None,
+                subsystem_tag="power",
+                channel_origin="catalog",
+                discovery_namespace=None,
+                discovered_at=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+                last_seen_at=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+            )
+
+        def get(self, model, key):
+            if model is TelemetryAlert:
+                return self._alert
+            if model is TelemetryMetadata:
+                return self._meta
+            return None
+
+    def session_factory() -> FakeSession:
+        return FakeSession()
+
+    class FakeHub:
+        async def connect(self, websocket) -> None:
+            await websocket.accept()
+
+        async def disconnect(self, websocket) -> None:
+            return None
+
+        async def subscribe_watchlist(self, *args, **kwargs) -> None:
+            return None
+
+        async def subscribe_channel(self, *args, **kwargs) -> None:
+            return None
+
+        async def subscribe_alerts(self, *args, **kwargs) -> None:
+            return None
+
+        async def broadcast_alert_event(self, *args, **kwargs) -> None:
+            return None
+
+    class FakeWebSocket:
+        def __init__(self, messages: list[str]) -> None:
+            self._messages = list(messages)
+            self.sent_texts: list[str] = []
+
+        async def accept(self) -> None:
+            return None
+
+        async def receive_text(self) -> str:
+            if self._messages:
+                return self._messages.pop(0)
+            raise WebSocketDisconnect(code=1000)
+
+        async def send_text(self, text: str) -> None:
+            self.sent_texts.append(text)
+
+    def fake_write_ops_event(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr("app.routes.realtime.get_ws_hub", lambda: FakeHub())
+    monkeypatch.setattr("app.routes.realtime.get_session_factory", lambda: session_factory)
+    monkeypatch.setattr("app.routes.realtime.audit_log", lambda event, **kwargs: audit_calls.append((event, kwargs)))
+    monkeypatch.setattr("app.routes.realtime.write_ops_event", fake_write_ops_event)
+
+    if message_type == "ack_alert":
+        ws = FakeWebSocket([json.dumps({"type": "ack_alert", "alert_id": "00000000-0000-0000-0000-000000000001"})])
+    else:
+        ws = FakeWebSocket(
+            [
+                json.dumps(
+                    {
+                        "type": "resolve_alert",
+                        "alert_id": "00000000-0000-0000-0000-000000000001",
+                        "resolution_text": "fixed",
+                        "resolution_code": "manual",
+                    }
+                )
+            ]
+        )
+
+    await websocket_realtime(ws)
+
+    audit_event = "alert.acked" if message_type == "ack_alert" else "alert.resolved"
+    matching = [kwargs for event, kwargs in audit_calls if event == audit_event]
+    assert matching
+    assert matching[0]["source_id"] == "vehicle-a"
+    assert matching[0]["channel_name"] == "VBAT"
 
 
 def test_process_measurement_creates_discovered_channel_for_unknown_input(monkeypatch) -> None:

@@ -29,7 +29,7 @@ export interface SimulatorRuntimeStatus {
 
 export interface SimulatorRuntimeState {
   status: SimulatorRuntimeStatus | null;
-  activeRunId: string | null;
+  activeStreamId: string | null;
   isActive: boolean;
 }
 
@@ -47,10 +47,10 @@ function toRuntimeState(
     status?.connected === true &&
     status.state != null &&
     status.state !== "idle";
-  const activeRunId = isActive ? status?.config?.stream_id ?? null : null;
+  const activeStreamId = isActive ? status?.config?.stream_id ?? null : null;
   return {
     status,
-    activeRunId,
+    activeStreamId,
     isActive,
   };
 }

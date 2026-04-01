@@ -24,7 +24,7 @@ import { CustomTimestampPicker } from "@/components/custom-timestamp-picker";
 import { CheckIcon, CopyIcon, FlagIcon, FlagOffIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  useTelemetryChannelRunsQuery,
+  useTelemetryChannelStreamsQuery,
   useTelemetryRecentQuery,
   type HistoryPoint,
 } from "@/lib/query-hooks";
@@ -42,10 +42,10 @@ const ACTIVE_LATEST_VALUE = "__active_latest__";
 
 interface TelemetryHistoryTableProps {
   channelName: string;
-  /** Source (banner source id); runs dropdown is scoped to this source. */
+  /** Source (banner source id); streams dropdown is scoped to this source. */
   sourceId: string;
-  /** Default run to select (e.g. current run for Summary/Live); table and exports use selected run. */
-  defaultRunId?: string;
+  /** Default stream to select (e.g. current stream for Summary/Live); table and exports use selected stream. */
+  defaultStreamId?: string;
   units?: string | null;
 }
 
@@ -111,7 +111,7 @@ function triggerDownload(filename: string, mime: string, data: BlobPart) {
 export function TelemetryHistoryTable({
   channelName,
   sourceId,
-  defaultRunId,
+  defaultStreamId,
   units,
 }: TelemetryHistoryTableProps) {
   const [rangeMinutes, setRangeMinutes] = useState<TimePreset>(60);
@@ -122,14 +122,14 @@ export function TelemetryHistoryTable({
   const [downloadMeta, setDownloadMeta] = useState<DownloadMeta>({});
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<string>(defaultRunId ?? "");
+  const [selectedStreamId, setSelectedStreamId] = useState<string>(defaultStreamId ?? "");
 
   useEffect(() => {
-    setSelectedRunId(defaultRunId ?? "");
-  }, [defaultRunId]);
+    setSelectedStreamId(defaultStreamId ?? "");
+  }, [defaultStreamId]);
 
-  const runsQuery = useTelemetryChannelRunsQuery(channelName, sourceId);
-  const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
+  const streamsQuery = useTelemetryChannelStreamsQuery(channelName, sourceId);
+  const streams = useMemo(() => streamsQuery.data ?? [], [streamsQuery.data]);
 
   const sinceIso = useMemo(
     () => (useCustom && customSince ? customSince : toIsoMinutesAgo(rangeMinutes)),
@@ -155,7 +155,7 @@ export function TelemetryHistoryTable({
     catalogSourceId: sourceId,
     limit: String(limit),
     since: sinceIso,
-    ...(selectedRunId ? { source_id: selectedRunId } : {}),
+    ...(selectedStreamId ? { source_id: selectedStreamId } : {}),
   });
   const rows = useMemo(() => historyQuery.data?.data ?? [], [historyQuery.data]);
   const loading = historyQuery.isLoading || historyQuery.isFetching;
@@ -224,7 +224,7 @@ export function TelemetryHistoryTable({
 
   const handleExportCsv = () => {
     if (!filteredRows.length) return;
-    const exportSourceId = selectedRunId || sourceId;
+    const exportSourceId = selectedStreamId || sourceId;
     const csv = buildCsv(filteredRows, channelName, exportSourceId);
     const { sinceIso, untilIso } = downloadMeta;
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
@@ -241,7 +241,7 @@ export function TelemetryHistoryTable({
 
   const handleExportJson = () => {
     if (!filteredRows.length) return;
-    const exportSourceId = selectedRunId || sourceId;
+    const exportSourceId = selectedStreamId || sourceId;
     const payload = {
       channel_name: channelName,
       source_id: exportSourceId,
@@ -259,7 +259,7 @@ export function TelemetryHistoryTable({
 
   const handleExportParquet = () => {
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = (selectedRunId || sourceId).replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = (selectedStreamId || sourceId).replace(/[^a-zA-Z0-9_-]+/g, "_");
     const filename = `${safeChannel}_${safeSource}_history.parquet.txt`;
     const note =
       "# Parquet export\n" +
@@ -275,36 +275,36 @@ export function TelemetryHistoryTable({
   const visible = filteredRows.length;
   const fallbackToRecent = downloadMeta.fallbackToRecent ?? false;
 
-  const runOptions = useMemo(() => {
-    const getRunKey = (run: { stream_id?: string }) => run.stream_id ?? "";
+  const streamOptions = useMemo(() => {
+    const getStreamKey = (stream: { stream_id?: string }) => stream.stream_id ?? "";
     const byId = new Map<string, { stream_id?: string; label: string }>();
-    for (const run of runs) {
-      const key = getRunKey(run);
+    for (const stream of streams) {
+      const key = getStreamKey(stream);
       if (!byId.has(key)) {
-        byId.set(key, run);
+        byId.set(key, stream);
       }
     }
-    if (selectedRunId && !byId.has(selectedRunId)) {
-      byId.set(selectedRunId, {
-        stream_id: selectedRunId,
+    if (selectedStreamId && !byId.has(selectedStreamId)) {
+      byId.set(selectedStreamId, {
+        stream_id: selectedStreamId,
         label:
-          /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/.test(selectedRunId)
+          /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/.test(selectedStreamId)
             ? (() => {
-                const m = selectedRunId.match(
+                const m = selectedStreamId.match(
                   /-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/,
                 );
                 return m
-                  ? `Run started at ${m[1]} ${m[2]}:${m[3]} UTC`
-                  : selectedRunId;
+                  ? `Stream started at ${m[1]} ${m[2]}:${m[3]} UTC`
+                  : selectedStreamId;
               })()
-            : selectedRunId,
+            : selectedStreamId,
       });
     }
     return Array.from(byId.values());
-  }, [runs, selectedRunId]);
+  }, [selectedStreamId, streams]);
 
   const handleCopyRow = async (point: HistoryPoint) => {
-    const exportSourceId = selectedRunId || sourceId;
+    const exportSourceId = selectedStreamId || sourceId;
     const line = `channel=${channelName} source=${exportSourceId} timestamp=${point.timestamp} value=${point.value}`;
     await navigator.clipboard.writeText(line);
     setCopiedKey(point.timestamp);
@@ -396,21 +396,21 @@ export function TelemetryHistoryTable({
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <div className="flex flex-col gap-1">
-            <Label htmlFor="history-run" className="text-[11px] text-muted-foreground">
-              Run
+            <Label htmlFor="history-stream" className="text-[11px] text-muted-foreground">
+              Stream
             </Label>
             <Select
-              value={selectedRunId || ACTIVE_LATEST_VALUE}
+              value={selectedStreamId || ACTIVE_LATEST_VALUE}
               onValueChange={(value) => {
-                setSelectedRunId(value === ACTIVE_LATEST_VALUE ? "" : value);
+                setSelectedStreamId(value === ACTIVE_LATEST_VALUE ? "" : value);
               }}
             >
-              <SelectTrigger id="history-run" className="h-8 w-[200px] text-xs">
-                <SelectValue placeholder="Run" />
+              <SelectTrigger id="history-stream" className="h-8 w-[200px] text-xs">
+                <SelectValue placeholder="Stream" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ACTIVE_LATEST_VALUE}>Active / latest</SelectItem>
-                {runOptions.map((s) => (
+                {streamOptions.map((s) => (
                   <SelectItem key={s.stream_id ?? ""} value={s.stream_id ?? ""}>
                     {s.label || s.stream_id}
                   </SelectItem>

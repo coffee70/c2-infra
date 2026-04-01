@@ -98,7 +98,7 @@ async function fetchLatestChannelStreamId(
 ): Promise<string | null> {
   try {
     const res = await fetch(
-      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/runs`,
+      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/streams`,
       { cache: "no-store" },
     );
     if (!res.ok) return null;
@@ -115,7 +115,7 @@ async function fetchLatestChannelStreamId(
 async function fetchLatestStreamId(sourceId: string): Promise<string | null> {
   try {
     const res = await fetch(
-      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/runs`,
+      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/streams`,
       { cache: "no-store" },
     );
     if (!res.ok) return null;

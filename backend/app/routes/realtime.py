@@ -274,7 +274,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                     websocket,
                     channels,
                     source_id=source_id,
-                    stream_id=stream_id,
+                    stream_id=snapshot_stream_id,
                 )
 
                 # Send snapshot
@@ -333,7 +333,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         websocket,
                         name,
                         source_id=source_id,
-                        stream_id=stream_id,
+                        stream_id=snapshot_stream_id,
                     )
                     session = session_factory()
                     try:
@@ -358,7 +358,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                 await hub.subscribe_alerts(
                     websocket,
                     source_id=source_id,
-                    stream_id=stream_id,
+                    stream_id=snapshot_stream_id,
                 )
                 session = session_factory()
                 try:
@@ -404,7 +404,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                             "alert.acked",
                             alert_id=alert_id,
                             channel_name=meta.name if meta else None,
-                            source_id=alert.stream_id,
+                            source_id=meta.source_id if meta else _resolve_stream_source_id(session, alert.stream_id),
                         )
                         from app.utils.subsystem import infer_subsystem
                         subsys = infer_subsystem(meta.name, meta) if meta else "other"
@@ -469,7 +469,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                             "alert.resolved",
                             alert_id=alert_id,
                             channel_name=meta.name if meta else None,
-                            source_id=alert.stream_id,
+                            source_id=meta.source_id if meta else _resolve_stream_source_id(session, alert.stream_id),
                             resolution_code=resolution_code,
                         )
                         from app.utils.subsystem import infer_subsystem
