@@ -149,7 +149,18 @@ async def simulator_status(
                     packet_source=packet_source if isinstance(packet_source, str) else None,
                     receiver_id=receiver_id if isinstance(receiver_id, str) else None,
                 )
-            except (StreamIdConflictError, SourceNotFoundError) as e:
+            except Exception as e:
+                logger.exception(
+                    "Simulator status stream registration failed",
+                    extra={
+                        "event": {
+                            "action": "simulator.status.stream_registration_failed",
+                            "component": "backend",
+                            "destination": resolved_source_id,
+                            "stream_id": active_stream_id,
+                        }
+                    },
+                )
                 audit_log(
                     "simulator.status.stream_registration_failed",
                     origin="frontend",

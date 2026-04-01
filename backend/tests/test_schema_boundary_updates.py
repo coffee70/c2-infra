@@ -1666,6 +1666,44 @@ async def test_simulator_status_ignores_missing_source(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
+async def test_simulator_status_ignores_unexpected_stream_registration_failure(monkeypatch) -> None:
+    db = MagicMock()
+
+    monkeypatch.setattr(
+        simulator_routes,
+        "_resolve_with_audit",
+        lambda _db, _source_id, _action: "http://simulator:8010",
+    )
+
+    async def fake_proxy_get(_base_url, _path):
+        return {
+            "state": "active",
+            "config": {
+                "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
+            },
+            "supported_scenarios": ["nominal"],
+        }
+
+    monkeypatch.setattr(simulator_routes, "_proxy_get", fake_proxy_get)
+    monkeypatch.setattr(
+        simulator_routes,
+        "register_stream",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+
+    response = await simulator_routes.simulator_status(vehicle_id="vehicle-a", db=db)
+
+    assert response == {
+        "connected": True,
+        "state": "active",
+        "config": {
+            "stream_id": "vehicle-a-2026-03-28T12-00-00Z",
+        },
+        "supported_scenarios": ["nominal"],
+    }
+
+
+@pytest.mark.anyio
 async def test_simulator_start_registers_stream_id_from_response(monkeypatch) -> None:
     db = MagicMock()
     registered: dict[str, object] = {}
