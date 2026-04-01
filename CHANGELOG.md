@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Overview source resolution crash** — The overview service now imports `normalize_source_id` correctly, so `/telemetry/overview` returns data instead of throwing a `NameError` on the local stack.
+- **Overview bootstrap failure handling** — When the initial overview snapshot request fails, the page now shows an error state with a retry action instead of staying on the loading spinner forever.
 - **Realtime ingest phantom runs** — `POST /telemetry/realtime/ingest` no longer reserves `telemetry_streams` rows before a batch is accepted, so dropped or rejected realtime traffic does not leave behind user-visible empty runs.
 - **Explicit base-stream realtime selection** — realtime snapshots, alerts, and live websocket updates now keep an explicitly selected base stream stable instead of silently rewiring it to the currently active stream when the stream id matches the vehicle id.
 - **History run ordering** — the history run dropdown now preserves the backend ordering for opaque `stream_id` values instead of re-sorting them lexicographically on the client.

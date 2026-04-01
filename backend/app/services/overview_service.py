@@ -21,7 +21,11 @@ from app.services.channel_alias_service import (
     resolve_channel_metadata,
     resolve_channel_name,
 )
-from app.services.source_run_service import resolve_latest_stream_id, resolve_logical_vehicle_id
+from app.services.source_run_service import (
+    normalize_source_id,
+    resolve_latest_stream_id,
+    resolve_logical_vehicle_id,
+)
 from app.services.telemetry_service import _compute_state
 from app.utils.subsystem import infer_subsystem
 

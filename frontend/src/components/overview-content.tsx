@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { WatchlistConfig } from "@/components/watchlist-config";
 import { RealtimeOverviewWrapper } from "@/components/realtime-overview-wrapper";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import {
   useSimulatorRuntime,
@@ -14,6 +15,7 @@ import { DEFAULT_SOURCE_ID, resolveSourceAlias, runIdToSourceId } from "@/lib/so
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
+const BOOTSTRAP_REQUEST_TIMEOUT_MS = 10_000;
 
 async function fetchWithTimeoutAndFallback(path: string): Promise<Response> {
   const bases = [API_URL, API_FALLBACK_URL].filter(
@@ -21,16 +23,26 @@ async function fetchWithTimeoutAndFallback(path: string): Promise<Response> {
   );
   let lastError: unknown = null;
   for (const base of bases) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, BOOTSTRAP_REQUEST_TIMEOUT_MS);
     try {
       const res = await fetch(`${base}${path}`, {
         cache: "no-store",
+        signal: controller.signal,
       });
       if (res.ok) {
         return res;
       }
       lastError = new Error(`HTTP ${res.status} from ${base}${path}`);
     } catch (e) {
-      lastError = e;
+      lastError =
+        controller.signal.aborted && e instanceof DOMException && e.name === "AbortError"
+          ? new Error(`Request timed out after ${BOOTSTRAP_REQUEST_TIMEOUT_MS}ms for ${base}${path}`)
+          : e;
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }
   throw lastError ?? new Error("All API paths failed");
@@ -73,6 +85,34 @@ interface OverviewSnapshot {
   channels: OverviewChannel[];
   anomalies: AnomaliesData;
   hasPartialFailure: boolean;
+}
+
+async function readJsonResponse<T>(
+  response: Response,
+  label: string
+): Promise<T> {
+  const contentType = response.headers.get("content-type") ?? "unknown content type";
+  const body = await response.text();
+
+  if (!contentType.includes("application/json")) {
+    const snippet = body.slice(0, 120).replace(/\s+/g, " ").trim();
+    throw new Error(
+      `Expected JSON from ${label}, got ${contentType}${snippet ? ` (${snippet})` : ""}`
+    );
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    const snippet = body.slice(0, 120).replace(/\s+/g, " ").trim();
+    console.error(`[Overview] Invalid JSON from ${label}`, {
+      contentType,
+      snippet,
+    });
+    throw new Error(
+      `Invalid JSON from ${label}${snippet ? ` (${snippet})` : ""}`
+    );
+  }
 }
 
 const OVERVIEW_SOURCE_STORAGE_KEY = "overviewSourceId";
@@ -120,11 +160,21 @@ async function fetchOverviewSnapshot(
     fetchWithTimeoutAndFallback(`/telemetry/watchlist?source_id=${encodeURIComponent(runId)}`),
   ]);
 
-  const overviewData = overviewRes.ok ? await overviewRes.json() : { channels: [] };
+  const overviewData = overviewRes.ok
+    ? await readJsonResponse<{ channels?: OverviewChannel[] }>(
+        overviewRes,
+        "/telemetry/overview"
+      )
+    : { channels: [] };
   const anomaliesData = anomaliesRes.ok
-    ? await anomaliesRes.json()
+    ? await readJsonResponse<AnomaliesData>(anomaliesRes, "/telemetry/anomalies")
     : EMPTY_ANOMALIES;
-  const watchlistData = watchlistRes.ok ? await watchlistRes.json() : { entries: [] };
+  const watchlistData = watchlistRes.ok
+    ? await readJsonResponse<{ entries?: WatchlistEntry[] }>(
+        watchlistRes,
+        "/telemetry/watchlist"
+      )
+    : { entries: [] };
   const watchlistEntries = Array.isArray(watchlistData.entries)
     ? watchlistData.entries
     : [];
@@ -225,7 +275,8 @@ export function OverviewContent() {
         setError("Some data failed to load");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load overview");
+      console.error("[Overview] refresh committed snapshot failed", e);
+      setError("Failed to load overview");
     }
   }, [committedRunId, unavailableMessage]);
 
@@ -275,8 +326,18 @@ export function OverviewContent() {
 
         if (cancelled) return;
 
-        const sourcesList = sourcesRes.ok ? await sourcesRes.json() : [];
-        const runsData = runsRes.ok ? await runsRes.json() : { sources: [] };
+        const sourcesList = sourcesRes.ok
+          ? await readJsonResponse<TelemetrySource[]>(
+              sourcesRes,
+              "/telemetry/sources"
+            )
+          : [];
+        const runsData = runsRes.ok
+          ? await readJsonResponse<{ sources?: Array<{ stream_id?: string }> }>(
+              runsRes,
+              `/telemetry/sources/${encodeURIComponent(effectiveSource)}/runs`
+            )
+          : { sources: [] };
         const runsList = Array.isArray(runsData.sources)
           ? runsData.sources
           : [];
@@ -294,7 +355,12 @@ export function OverviewContent() {
             const simRes = await fetchWithTimeoutAndFallback(
               `/simulator/status?vehicle_id=${encodeURIComponent(effectiveSource)}`
             );
-            simStatus = simRes.ok ? await simRes.json() : { connected: false };
+            simStatus = simRes.ok
+              ? await readJsonResponse<SimulatorRuntimeStatus>(
+                  simRes,
+                  `/simulator/status?vehicle_id=${encodeURIComponent(effectiveSource)}`
+                )
+              : { connected: false };
             simSourceId = effectiveSource;
           } catch {
             simStatus = { connected: false };
@@ -328,7 +394,8 @@ export function OverviewContent() {
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load overview");
+          console.error("[Overview] bootstrap load failed", e);
+          setError("Failed to load overview");
         }
       } finally {
         if (!cancelled) {
@@ -399,7 +466,8 @@ export function OverviewContent() {
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load overview");
+          console.error("[Overview] snapshot switch failed", e);
+          setError("Failed to load overview");
         }
       }
     }
@@ -422,7 +490,9 @@ export function OverviewContent() {
     };
   }, [isSwitchingRuns, showSwitchingIndicator]);
 
-  if (!sourceReady || bootstrapLoading || !committedRunId) {
+  const bootstrapFailed = !bootstrapLoading && !committedRunId;
+
+  if (!sourceReady || bootstrapLoading) {
     return (
       <div className="min-h-full p-4 sm:p-6 lg:p-8">
         <div className="max-w-6xl mx-auto space-y-8">
@@ -437,6 +507,34 @@ export function OverviewContent() {
               <p className="text-sm text-muted-foreground">Loading overview…</p>
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (bootstrapFailed) {
+    return (
+      <div className="min-h-full p-4 sm:p-6 lg:p-8">
+        <div className="max-w-6xl mx-auto space-y-8">
+          <div className="space-y-1">
+            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+              Operator Overview
+            </h1>
+          </div>
+          <Alert variant="destructive">
+            <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>{error ?? "Failed to load overview"} — Check your connection and try again.</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="sm:self-start"
+                onClick={() => window.location.reload()}
+              >
+                Retry loading overview
+              </Button>
+            </AlertDescription>
+          </Alert>
         </div>
       </div>
     );
