@@ -147,17 +147,17 @@ function mergeWatchlistChannels(
   return entries.map((entry) => channelsByName.get(entry.name) ?? buildPlaceholderChannel(entry.name));
 }
 
-async function fetchOverviewSnapshot(
-  streamId: string
-): Promise<OverviewSnapshot> {
+async function fetchOverviewSnapshot(sourceId: string): Promise<OverviewSnapshot> {
   const [overviewRes, anomaliesRes, watchlistRes] = await Promise.all([
     fetchWithTimeoutAndFallback(
-      `/telemetry/overview?source_id=${encodeURIComponent(streamId)}`
+      `/telemetry/overview?source_id=${encodeURIComponent(sourceId)}`
     ),
     fetchWithTimeoutAndFallback(
-      `/telemetry/anomalies?source_id=${encodeURIComponent(streamId)}`
+      `/telemetry/anomalies?source_id=${encodeURIComponent(sourceId)}`
     ),
-    fetchWithTimeoutAndFallback(`/telemetry/watchlist?source_id=${encodeURIComponent(streamId)}`),
+    fetchWithTimeoutAndFallback(
+      `/telemetry/watchlist?source_id=${encodeURIComponent(sourceId)}`
+    ),
   ]);
 
   const overviewData = overviewRes.ok
@@ -256,7 +256,7 @@ export function OverviewContent() {
 
     try {
       setError(unavailableMessage);
-      const snapshot = await fetchOverviewSnapshot(committedStreamId);
+      const snapshot = await fetchOverviewSnapshot(effectiveSource);
       setChannels(snapshot.channels);
       setAnomalies(snapshot.anomalies);
       if (snapshot.hasPartialFailure) {
@@ -266,7 +266,7 @@ export function OverviewContent() {
       console.error("[Overview] refresh committed snapshot failed", e);
       setError("Failed to load overview");
     }
-  }, [committedStreamId, unavailableMessage]);
+  }, [committedStreamId, effectiveSource, unavailableMessage]);
 
   const handleWatchlistChanged = useCallback(async () => {
     try {
@@ -363,7 +363,7 @@ export function OverviewContent() {
         const effectiveStreamId = isSimulatorSource
           ? runtimeStreamId ?? streamsList[0]?.stream_id ?? effectiveSource
           : streamsList[0]?.stream_id ?? effectiveSource;
-        const snapshot = await fetchOverviewSnapshot(effectiveStreamId);
+        const snapshot = await fetchOverviewSnapshot(effectiveSource);
 
         if (cancelled) return;
 
@@ -442,7 +442,7 @@ export function OverviewContent() {
         setShowSwitchingIndicator(true);
         setError(unavailableMessage);
 
-        const snapshot = await fetchOverviewSnapshot(streamId);
+        const snapshot = await fetchOverviewSnapshot(effectiveSource);
 
         if (cancelled) return;
 

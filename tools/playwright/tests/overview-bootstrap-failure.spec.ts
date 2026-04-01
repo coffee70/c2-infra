@@ -3,6 +3,8 @@ import { expect, test } from "@playwright/test";
 test("overview bootstrap failures surface an error instead of a loading spinner", async ({
   page,
 }) => {
+  const capturedSourceIds: string[] = [];
+
   await page.route("**/telemetry/sources", async (route) => {
     await route.fulfill({
       status: 200,
@@ -26,6 +28,7 @@ test("overview bootstrap failures surface an error instead of a loading spinner"
   });
 
   await page.route("**/telemetry/overview*", async (route) => {
+    capturedSourceIds.push(new URL(route.request().url()).searchParams.get("source_id") ?? "");
     await route.fulfill({
       status: 500,
       contentType: "application/json",
@@ -34,6 +37,7 @@ test("overview bootstrap failures surface an error instead of a loading spinner"
   });
 
   await page.route("**/telemetry/anomalies*", async (route) => {
+    capturedSourceIds.push(new URL(route.request().url()).searchParams.get("source_id") ?? "");
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -48,6 +52,7 @@ test("overview bootstrap failures surface an error instead of a loading spinner"
   });
 
   await page.route("**/telemetry/watchlist*", async (route) => {
+    capturedSourceIds.push(new URL(route.request().url()).searchParams.get("source_id") ?? "");
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -62,6 +67,8 @@ test("overview bootstrap failures surface an error instead of a loading spinner"
   await expect(alert).toContainText("Failed to load overview");
   await expect(alert).toContainText("Retry loading overview");
   await expect(page.getByText("Loading overview…")).toHaveCount(0);
+  await expect(capturedSourceIds.length).toBeGreaterThanOrEqual(3);
+  await expect(capturedSourceIds.every((sourceId) => sourceId === "test-source")).toBe(true);
 });
 
 test("overview bootstrap HTML responses surface a JSON parsing error instead of raw syntax noise", async ({
