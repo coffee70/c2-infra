@@ -21,7 +21,7 @@ class TestSourceAwareOverview:
         )
         monkeypatch.setattr(
             overview_service_module,
-            "resolve_logical_vehicle_id",
+            "_resolve_logical_source_id",
             lambda _db, source_id: source_id,
         )
         monkeypatch.setattr(overview_service_module, "get_watchlist", lambda *_args, **_kwargs: [])
@@ -83,7 +83,7 @@ class TestSourceAwareOverview:
         )
         monkeypatch.setattr(
             overview_service_module,
-            "resolve_logical_vehicle_id",
+            "_resolve_logical_source_id",
             lambda _db, source_id: logical_source_id,
         )
         monkeypatch.setattr(
@@ -120,7 +120,7 @@ class TestSourceAwareOverview:
         )
         monkeypatch.setattr(
             overview_service_module,
-            "resolve_logical_vehicle_id",
+            "_resolve_logical_source_id",
             lambda _db, source_id: source_id,
         )
         db.execute = MagicMock(return_value=MagicMock(fetchall=MagicMock(return_value=[])))

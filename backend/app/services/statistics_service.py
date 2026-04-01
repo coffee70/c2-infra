@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.telemetry import TelemetryData, TelemetryMetadata, TelemetryStatistics
-from app.services.source_run_service import normalize_source_id, run_id_to_source_id
+from app.services.source_stream_service import get_stream_source_id, normalize_source_id, resolve_latest_stream_id
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +29,14 @@ class StatisticsService:
         """Recompute statistics. source_id filters to one source; all_sources recomputes per source when source-aware. Default: single source 'default'."""
         sources_to_process: list[str] = []
         if all_sources:
-            stmt = select(TelemetryData.source_id).distinct()
+            stmt = select(TelemetryData.stream_id).distinct()
             sources_to_process = [r[0] for r in self._db.execute(stmt).fetchall()]
         else:
-            sources_to_process = [normalize_source_id(source_id or "default")]
+            sources_to_process = [resolve_latest_stream_id(self._db, source_id or "default")]
 
         count = 0
         for sid in sources_to_process:
-            logical_source_id = run_id_to_source_id(sid)
+            logical_source_id = get_stream_source_id(self._db, sid) or normalize_source_id(source_id or sid)
             meta_ids = [
                 row[0]
                 for row in self._db.execute(
@@ -59,9 +59,10 @@ class StatisticsService:
     ) -> None:
         """Compute and upsert statistics for a single telemetry point. source_id filters when telemetry_data is source-aware."""
         data_source_id = normalize_source_id(source_id)
+        data_source_id = resolve_latest_stream_id(self._db, data_source_id)
         stmt = select(TelemetryData.value).where(
             TelemetryData.telemetry_id == telemetry_id,
-            TelemetryData.source_id == data_source_id,
+            TelemetryData.stream_id == data_source_id,
         )
         rows = self._db.execute(stmt).fetchall()
         values = np.array([float(r[0]) for r in rows])
@@ -96,7 +97,7 @@ class StatisticsService:
             existing.last_computed_at = now
         else:
             stats = TelemetryStatistics(
-                source_id=data_source_id,
+                stream_id=data_source_id,
                 telemetry_id=telemetry_id,
                 mean=Decimal(str(mean)),
                 std_dev=Decimal(str(std_dev)),

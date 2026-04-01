@@ -21,10 +21,10 @@ from app.services.channel_alias_service import (
     resolve_channel_metadata,
     resolve_channel_name,
 )
-from app.services.source_run_service import (
+from app.services.source_stream_service import (
+    get_stream_source_id,
     normalize_source_id,
     resolve_latest_stream_id,
-    resolve_logical_vehicle_id,
 )
 from app.services.telemetry_service import _compute_state
 from app.utils.subsystem import infer_subsystem
@@ -32,6 +32,10 @@ from app.utils.subsystem import infer_subsystem
 logger = logging.getLogger(__name__)
 
 SPARKLINE_POINTS = 30
+
+
+def _resolve_logical_source_id(db: Session, source_id: str) -> str:
+    return get_stream_source_id(db, source_id) or normalize_source_id(source_id)
 
 
 def get_all_telemetry_names(db: Session) -> list[str]:
@@ -42,7 +46,7 @@ def get_all_telemetry_names(db: Session) -> list[str]:
 
 def get_all_telemetry_channels_for_source(db: Session, source_id: str) -> list[dict]:
     """Get source-scoped telemetry channel metadata for picker/search UIs."""
-    logical_source_id = resolve_logical_vehicle_id(db, source_id)
+    logical_source_id = _resolve_logical_source_id(db, source_id)
     stmt = (
         select(
             TelemetryMetadata.id,
@@ -56,7 +60,7 @@ def get_all_telemetry_channels_for_source(db: Session, source_id: str) -> list[d
     rows = db.execute(stmt).fetchall()
     aliases_by_id = get_aliases_by_telemetry_ids(
         db,
-        vehicle_id=logical_source_id,
+        source_id=logical_source_id,
         telemetry_ids=[row[0] for row in rows],
     )
     return [
@@ -77,7 +81,7 @@ def get_all_telemetry_names_for_source(db: Session, source_id: str) -> list[str]
 
 def get_watchlist(db: Session, source_id: str) -> list[dict]:
     """Get watchlist entries ordered by display_order."""
-    logical_source_id = resolve_logical_vehicle_id(db, source_id)
+    logical_source_id = _resolve_logical_source_id(db, source_id)
     stmt = (
         select(
             WatchlistEntry.source_id,
@@ -99,7 +103,7 @@ def get_watchlist(db: Session, source_id: str) -> list[dict]:
     rows = db.execute(stmt).fetchall()
     aliases_by_id = get_aliases_by_telemetry_ids(
         db,
-        vehicle_id=logical_source_id,
+        source_id=logical_source_id,
         telemetry_ids=[r[3] for r in rows if r[3] is not None],
     )
     return [
@@ -117,9 +121,9 @@ def get_watchlist(db: Session, source_id: str) -> list[dict]:
 
 def add_to_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
     """Add a channel to the watchlist."""
-    logical_source_id = resolve_logical_vehicle_id(db, source_id)
+    logical_source_id = _resolve_logical_source_id(db, source_id)
     # Verify telemetry exists
-    meta = resolve_channel_metadata(db, vehicle_id=logical_source_id, channel_name=telemetry_name)
+    meta = resolve_channel_metadata(db, source_id=logical_source_id, channel_name=telemetry_name)
     if not meta:
         raise ValueError(f"Telemetry not found: {telemetry_name}")
 
@@ -147,9 +151,9 @@ def add_to_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
 
 def remove_from_watchlist(db: Session, source_id: str, telemetry_name: str) -> None:
     """Remove a channel from the watchlist."""
-    logical_source_id = resolve_logical_vehicle_id(db, source_id)
+    logical_source_id = _resolve_logical_source_id(db, source_id)
     canonical_name = (
-        resolve_channel_name(db, vehicle_id=logical_source_id, channel_name=telemetry_name)
+        resolve_channel_name(db, source_id=logical_source_id, channel_name=telemetry_name)
         or telemetry_name
     )
     entry = db.execute(
@@ -171,7 +175,7 @@ def _get_latest_value_and_ts(
         select(TelemetryData.timestamp, TelemetryData.value)
         .where(
             TelemetryData.telemetry_id == telemetry_id,
-            TelemetryData.source_id == data_source_id,
+            TelemetryData.stream_id == data_source_id,
         )
         .order_by(desc(TelemetryData.timestamp))
         .limit(1)
@@ -191,7 +195,7 @@ def _get_recent_for_sparkline(
         select(TelemetryData.timestamp, TelemetryData.value)
         .where(
             TelemetryData.telemetry_id == telemetry_id,
-            TelemetryData.source_id == data_source_id,
+            TelemetryData.stream_id == data_source_id,
         )
         .order_by(desc(TelemetryData.timestamp))
         .limit(limit)
@@ -207,7 +211,7 @@ def _get_recent_for_sparkline(
 def get_overview(db: Session, source_id: str = "default") -> list[dict]:
     """Get overview data for all watchlist channels, optionally filtered by source."""
     data_source_id = resolve_latest_stream_id(db, source_id)
-    logical_source_id = resolve_logical_vehicle_id(db, source_id)
+    logical_source_id = _resolve_logical_source_id(db, source_id)
     watchlist = get_watchlist(db, source_id)
     if not watchlist:
         return []
@@ -279,13 +283,13 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
 def get_anomalies(db: Session, source_id: str = "default") -> dict[str, list[dict]]:
     """Get anomalous channels grouped by subsystem, optionally filtered by source."""
     data_source_id = resolve_latest_stream_id(db, source_id)
-    logical_source_id = resolve_logical_vehicle_id(db, source_id)
+    logical_source_id = _resolve_logical_source_id(db, source_id)
     stmt = (
         select(TelemetryMetadata, TelemetryStatistics)
         .join(
             TelemetryStatistics,
             (TelemetryMetadata.id == TelemetryStatistics.telemetry_id)
-            & (TelemetryStatistics.source_id == data_source_id),
+            & (TelemetryStatistics.stream_id == data_source_id),
         )
         .where(TelemetryMetadata.source_id == logical_source_id)
     )

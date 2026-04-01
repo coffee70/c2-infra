@@ -11,7 +11,7 @@ import {
   useSimulatorRuntime,
   type SimulatorRuntimeStatus,
 } from "@/lib/simulator-runtime";
-import { DEFAULT_SOURCE_ID, resolveSourceAlias, runIdToSourceId } from "@/lib/source-ids";
+import { DEFAULT_SOURCE_ID, resolveSourceAlias } from "@/lib/source-ids";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
@@ -233,18 +233,6 @@ export function OverviewContent() {
   let effectiveSource = resolveSourceAlias(
     sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID
   );
-  if (effectiveSource && /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?$/.test(effectiveSource)) {
-    effectiveSource = runIdToSourceId(effectiveSource);
-    if (typeof window !== "undefined") {
-      try {
-        sessionStorage.setItem(OVERVIEW_SOURCE_STORAGE_KEY, effectiveSource);
-      } catch {}
-      const params = new URLSearchParams(window.location.search);
-      params.set("source", effectiveSource);
-      const next = params.toString();
-      router.replace(next ? `/overview?${next}` : "/overview");
-    }
-  }
   const sourceReady = sourceFromUrl !== null || storageChecked;
   const sourceType = useMemo(
     () => sources.find((s) => s.id === effectiveSource)?.source_type,

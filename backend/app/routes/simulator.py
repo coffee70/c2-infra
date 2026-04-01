@@ -12,10 +12,10 @@ from app.database import get_db
 from app.lib.audit import audit_log
 from app.models.telemetry import TelemetrySource
 from app.orbit import reset_source as reset_orbit_source
-from app.services.source_run_service import (
+from app.services.source_stream_service import (
     StreamIdConflictError,
     SourceNotFoundError,
-    clear_active_run,
+    clear_active_stream,
     register_stream,
 )
 from telemetry_catalog.definitions import resolve_source_id_alias
@@ -144,7 +144,7 @@ async def simulator_status(
             try:
                 register_stream(
                     db,
-                    vehicle_id=resolved_source_id,
+                    source_id=resolved_source_id,
                     stream_id=active_stream_id,
                     packet_source=packet_source if isinstance(packet_source, str) else None,
                     receiver_id=receiver_id if isinstance(receiver_id, str) else None,
@@ -170,7 +170,7 @@ async def simulator_status(
                     level="warning",
                 )
         elif state == "idle":
-            clear_active_run(resolved_source_id, db=db)
+            clear_active_stream(resolved_source_id, db=db)
     except (httpx.ConnectError, httpx.TimeoutException, HTTPException) as e:
         audit_log(
             "simulator.status.proxy_failed",
@@ -210,12 +210,12 @@ async def simulator_start(
         result = await _proxy_post(base_url, "/start", body)
         stream_id = result.get("stream_id")
         try:
-            clear_active_run(resolved_source_id, db=db)
+            clear_active_stream(resolved_source_id, db=db)
             reset_orbit_source(resolved_source_id)
             if isinstance(stream_id, str) and stream_id:
                 register_stream(
                     db,
-                    vehicle_id=resolved_source_id,
+                    source_id=resolved_source_id,
                     stream_id=stream_id,
                     packet_source=body.get("packet_source"),
                     receiver_id=body.get("receiver_id"),
@@ -347,7 +347,7 @@ async def simulator_stop(
     base_url = _resolve_with_audit(db, resolved_source_id, "stop")
     try:
         result = await _proxy_post(base_url, "/stop")
-        clear_active_run(resolved_source_id, db=db)
+        clear_active_stream(resolved_source_id, db=db)
         reset_orbit_source(resolved_source_id)
         audit_log("simulator.stop", destination=resolved_source_id)
         return result

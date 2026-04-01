@@ -214,7 +214,7 @@ export function TrendChartAnalysis({
         since,
       });
       if (until) params.set("until", until);
-      if (streamId) params.set("run_id", streamId);
+      if (streamId) params.set("stream_id", streamId);
       const url = `${API_URL}${buildTelemetryApiBase(vehicleId, name)}/recent?${params.toString()}`;
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`Failed to fetch ${name}`);

@@ -55,11 +55,11 @@ interface RecentPoint {
 async function fetchSummary(
   name: string,
   sourceId: string,
-  runId?: string | null,
+  streamId?: string | null,
 ): Promise<ExplainResponse | null> {
   try {
     const params = new URLSearchParams();
-    if (runId) params.set("run_id", runId);
+    if (streamId) params.set("stream_id", streamId);
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const res = await fetch(
       `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/summary${suffix}`,
@@ -75,11 +75,11 @@ async function fetchSummary(
 async function fetchRecent(
   name: string,
   sourceId: string,
-  runId?: string | null,
+  streamId?: string | null,
 ): Promise<RecentPoint[]> {
   try {
     const params = new URLSearchParams({ limit: "100" });
-    if (runId) params.set("run_id", runId);
+    if (streamId) params.set("stream_id", streamId);
     const res = await fetch(
       `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/recent?${params.toString()}`,
       { cache: "no-store" },
@@ -92,7 +92,7 @@ async function fetchRecent(
   }
 }
 
-async function fetchLatestChannelRunId(
+async function fetchLatestChannelStreamId(
   name: string,
   sourceId: string,
 ): Promise<string | null> {
@@ -103,9 +103,9 @@ async function fetchLatestChannelRunId(
     );
     if (!res.ok) return null;
     const data = await res.json() as { sources?: Array<{ stream_id?: string }> };
-    const latestRun = Array.isArray(data.sources) ? data.sources[0] : null;
-    return typeof latestRun?.stream_id === "string" && latestRun.stream_id
-      ? latestRun.stream_id
+    const latestStream = Array.isArray(data.sources) ? data.sources[0] : null;
+    return typeof latestStream?.stream_id === "string" && latestStream.stream_id
+      ? latestStream.stream_id
       : null;
   } catch {
     return null;
@@ -120,9 +120,9 @@ async function fetchLatestStreamId(sourceId: string): Promise<string | null> {
     );
     if (!res.ok) return null;
     const data = await res.json() as { sources?: Array<{ stream_id?: string }> };
-    const latestRun = Array.isArray(data.sources) ? data.sources[0] : null;
-    return typeof latestRun?.stream_id === "string" && latestRun.stream_id
-      ? latestRun.stream_id
+    const latestStream = Array.isArray(data.sources) ? data.sources[0] : null;
+    return typeof latestStream?.stream_id === "string" && latestStream.stream_id
+      ? latestStream.stream_id
       : null;
   } catch {
     return null;
@@ -140,21 +140,21 @@ export default async function TelemetryDetailPage({
   const resolvedSearchParams = await searchParams;
   const requestedSourceId = decodeURIComponent(rawSourceId);
   const decodedName = decodeURIComponent(name);
-  const requestedRunParam = resolvedSearchParams.run ?? resolvedSearchParams.run_id;
-  const requestedRunId =
-    typeof requestedRunParam === "string" && requestedRunParam
-      ? requestedRunParam
+  const requestedStreamParam = resolvedSearchParams.stream_id;
+  const requestedStreamId =
+    typeof requestedStreamParam === "string" && requestedStreamParam
+      ? requestedStreamParam
       : null;
   const sourceId = requestedSourceId;
 
-  const currentRunId =
-    requestedRunId ??
-    (await fetchLatestChannelRunId(decodedName, sourceId)) ??
+  const currentStreamId =
+    requestedStreamId ??
+    (await fetchLatestChannelStreamId(decodedName, sourceId)) ??
     (await fetchLatestStreamId(sourceId));
 
   const [explain, recentData] = await Promise.all([
-    fetchSummary(decodedName, sourceId, currentRunId),
-    fetchRecent(decodedName, sourceId, currentRunId),
+    fetchSummary(decodedName, sourceId, currentStreamId),
+    fetchRecent(decodedName, sourceId, currentStreamId),
   ]);
 
   if (!explain) {
@@ -163,11 +163,9 @@ export default async function TelemetryDetailPage({
   if (!explain) notFound();
   if (explain.name !== decodedName) {
     const redirectParams = new URLSearchParams();
-    const selectedRun =
-      resolvedSearchParams.run ??
-      resolvedSearchParams.run_id;
-    if (typeof selectedRun === "string" && selectedRun) {
-      redirectParams.set("run", selectedRun);
+    const selectedStream = resolvedSearchParams.stream_id;
+    if (typeof selectedStream === "string" && selectedStream) {
+      redirectParams.set("stream_id", selectedStream);
     }
     const suffix = redirectParams.toString();
     redirect(
@@ -180,7 +178,7 @@ export default async function TelemetryDetailPage({
       explain={explain}
       recentData={recentData}
       sourceId={sourceId}
-      currentRunId={currentRunId}
+      currentStreamId={currentStreamId}
       decodedName={decodedName}
     />
   );

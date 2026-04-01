@@ -35,7 +35,7 @@ export function ChannelRecentEvents({
   sinceMinutes = 60,
 }: ChannelRecentEventsProps) {
   const params = {
-    vehicle_id: vehicleId,
+    source_id: vehicleId,
     since_minutes: String(sinceMinutes),
     channel_name: channelName,
     limit: "20",

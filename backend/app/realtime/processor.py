@@ -35,12 +35,7 @@ from app.realtime.feed_health import get_feed_health_tracker
 from app.services.channel_alias_service import resolve_channel_name
 from app.services.ops_events_service import write_event as write_ops_event
 from app.services.realtime_service import create_discovered_channel_metadata
-from app.services.source_run_service import (
-    get_cached_active_run_id,
-    normalize_vehicle_id,
-    register_stream,
-    resolve_active_stream_id,
-)
+from app.services.source_stream_service import normalize_source_id, register_stream, resolve_active_stream_id
 from app.services.telemetry_service import _compute_state
 from app.utils.coordinates import ecef_to_lla, eci_to_lla
 from app.utils.subsystem import infer_subsystem
@@ -62,10 +57,10 @@ def _parse_time(s: str) -> datetime:
 
 
 def _get_orbit_mappings(db: Session) -> dict[str, dict[str, str]]:
-    """Return vehicle_id -> frame-aware channel mapping for orbit ingestion."""
+    """Return source_id -> frame-aware channel mapping for orbit ingestion."""
     stmt = (
         select(
-            PositionChannelMapping.vehicle_id,
+            PositionChannelMapping.source_id,
             PositionChannelMapping.frame_type,
             PositionChannelMapping.lat_channel_name,
             PositionChannelMapping.lon_channel_name,
@@ -238,7 +233,7 @@ class RealtimeProcessor:
         event: MeasurementEvent,
     ) -> None:
         """Process single measurement: validate, persist, update current, check alerts."""
-        vehicle_id = normalize_vehicle_id(event.vehicle_id)
+        source_id = normalize_source_id(event.source_id)
         stream_id = event.stream_id
         gen_time = _parse_time(event.generation_time)
         recv_time = (
@@ -253,13 +248,13 @@ class RealtimeProcessor:
         if not allow_dynamic_discovery:
             channel_name = resolve_channel_name(
                 db,
-                vehicle_id=vehicle_id,
+                source_id=source_id,
                 channel_name=channel_name,
             ) or channel_name
 
         meta = db.execute(
             select(TelemetryMetadata).where(
-                TelemetryMetadata.vehicle_id == vehicle_id,
+                TelemetryMetadata.source_id == source_id,
                 TelemetryMetadata.name == channel_name,
             )
         ).scalars().first()
@@ -269,7 +264,7 @@ class RealtimeProcessor:
                 return
             meta = create_discovered_channel_metadata(
                 db,
-                source_id=vehicle_id,
+                source_id=source_id,
                 channel_name=channel_name,
                 discovery_namespace=discovery_namespace,
                 observed_at=recv_time,
@@ -283,13 +278,13 @@ class RealtimeProcessor:
         # keep the active stream and feed-health state warm.
         register_stream(
             db,
-            vehicle_id=vehicle_id,
+            source_id=source_id,
             stream_id=stream_id,
             packet_source=event.packet_source,
             receiver_id=event.receiver_id,
             seen_at=recv_time,
         )
-        get_feed_health_tracker().record_reception(vehicle_id)
+        get_feed_health_tracker().record_reception(source_id)
 
         # Persist to Timescale. Use a savepoint so duplicate sample retries do not
         # roll back a newly discovered metadata row created earlier in this transaction.
@@ -384,7 +379,7 @@ class RealtimeProcessor:
 
         # Build update for UI
         update = RealtimeChannelUpdate(
-            vehicle_id=vehicle_id,
+            source_id=source_id,
             stream_id=stream_id,
             packet_source=event.packet_source,
             receiver_id=event.receiver_id,
@@ -434,7 +429,7 @@ class RealtimeProcessor:
                     "alert.opened",
                     alert_id=str(alert.id),
                     channel_name=meta.name,
-                    vehicle_id=vehicle_id,
+                    source_id=source_id,
                     stream_id=stream_id,
                     reason=reason,
                     z_score=z_score,
@@ -442,7 +437,7 @@ class RealtimeProcessor:
                 logger.info("Alert opened: channel=%s severity=%s", meta.name, "warning")
                 write_ops_event(
                     db,
-                    vehicle_id=vehicle_id,
+                    source_id=source_id,
                     stream_id=stream_id,
                     event_time=gen_time,
                     event_type="alert.opened",
@@ -488,13 +483,13 @@ class RealtimeProcessor:
                     "alert.cleared",
                     alert_id=str(open_alert.id),
                     channel_name=meta.name,
-                    vehicle_id=vehicle_id,
+                    source_id=source_id,
                     stream_id=stream_id,
                 )
                 logger.info("Alert cleared: channel=%s", meta.name)
                 write_ops_event(
                     db,
-                    vehicle_id=vehicle_id,
+                    source_id=source_id,
                     stream_id=stream_id,
                     event_time=recv_time,
                     event_type="alert.cleared",
@@ -524,7 +519,7 @@ class RealtimeProcessor:
         self._broadcast_telemetry_update(update)
 
         # Orbit: if this source has a position mapping and channel is lat/lon/alt, buffer and maybe push
-        self._maybe_submit_orbit_sample(db, vehicle_id, stream_id, channel_name, event.value, gen_time)
+        self._maybe_submit_orbit_sample(db, source_id, stream_id, channel_name, event.value, gen_time)
 
     def _publish_alert_event(
         self,
@@ -541,7 +536,7 @@ class RealtimeProcessor:
         """Publish alert event to bus."""
         schema = TelemetryAlertSchema(
             id=str(alert.id),
-            vehicle_id=meta.vehicle_id,
+            source_id=meta.source_id,
             stream_id=alert.stream_id,
             channel_name=meta.name,
             telemetry_id=str(meta.id),
@@ -570,38 +565,38 @@ class RealtimeProcessor:
     def _maybe_submit_orbit_sample(
         self,
         db: Session,
-        vehicle_id: str,
+        source_id: str,
         stream_id: str,
         channel_name: str,
         value: float,
         gen_time: datetime,
     ) -> None:
-        """If a vehicle has a position mapping and this is a position channel, buffer and maybe push to orbit."""
+        """If a source has a position mapping and this is a position channel, buffer and maybe push to orbit."""
         now = time.time()
         with self._orbit_mappings_lock:
             if now - self._orbit_mappings_at > ORBIT_MAPPINGS_CACHE_TTL_SEC:
                 self._orbit_mappings = _get_orbit_mappings(db)
                 self._orbit_mappings_at = now
             mappings = self._orbit_mappings
-        logical_vehicle_id = normalize_vehicle_id(vehicle_id)
-        active_stream_id = resolve_active_stream_id(db, logical_vehicle_id)
+        logical_source_id = normalize_source_id(source_id)
+        active_stream_id = resolve_active_stream_id(db, logical_source_id)
         if active_stream_id != stream_id:
             return
-        if logical_vehicle_id not in mappings:
+        if logical_source_id not in mappings:
             return
-        mapping = mappings[logical_vehicle_id]
+        mapping = mappings[logical_source_id]
         frame_type = mapping["frame_type"]
         should_reset_source = False
         with self._orbit_buffer_lock:
-            active_input_source = self._orbit_active_input_source.get(logical_vehicle_id)
+            active_input_source = self._orbit_active_input_source.get(logical_source_id)
             if active_input_source is not None and active_input_source != stream_id:
                 should_reset_source = True
-                self._orbit_position_buffer.pop(logical_vehicle_id, None)
-            self._orbit_active_input_source[logical_vehicle_id] = stream_id
+                self._orbit_position_buffer.pop(logical_source_id, None)
+            self._orbit_active_input_source[logical_source_id] = stream_id
         if should_reset_source:
             from app.orbit import reset_source as reset_orbit_source
 
-            reset_orbit_source(logical_vehicle_id)
+            reset_orbit_source(logical_source_id)
         slot: Optional[str] = None
         if frame_type == "gps_lla":
             lat_name = mapping["lat"]
@@ -624,12 +619,12 @@ class RealtimeProcessor:
             return
         ts_unix = gen_time.timestamp()
         with self._orbit_buffer_lock:
-            if logical_vehicle_id not in self._orbit_position_buffer:
-                self._orbit_position_buffer[logical_vehicle_id] = {
+            if logical_source_id not in self._orbit_position_buffer:
+                self._orbit_position_buffer[logical_source_id] = {
                     "samples": {},
                     "last_pushed_ts": 0.0,
                 }
-            buf = self._orbit_position_buffer[logical_vehicle_id]
+            buf = self._orbit_position_buffer[logical_source_id]
             last_pushed = buf["last_pushed_ts"]
             if ts_unix <= last_pushed:
                 return
@@ -660,14 +655,14 @@ class RealtimeProcessor:
         try:
             from app.orbit import submit_position_sample
 
-            submit_position_sample(logical_vehicle_id, ts_unix, lat, lon, alt_val)
+            submit_position_sample(logical_source_id, ts_unix, lat, lon, alt_val)
             with self._orbit_buffer_lock:
-                if logical_vehicle_id in self._orbit_position_buffer:
-                    buf = self._orbit_position_buffer[logical_vehicle_id]
+                if logical_source_id in self._orbit_position_buffer:
+                    buf = self._orbit_position_buffer[logical_source_id]
                     buf["last_pushed_ts"] = ts_unix
                     buf["samples"].pop(ts_unix, None)
         except Exception as e:
-            logger.exception("Orbit submit_position_sample error for %s: %s", logical_vehicle_id, e)
+            logger.exception("Orbit submit_position_sample error for %s: %s", logical_source_id, e)
 
     def _broadcast_telemetry_update(self, update: RealtimeChannelUpdate) -> None:
         """Broadcast to registered handlers (e.g. WebSocket hub)."""

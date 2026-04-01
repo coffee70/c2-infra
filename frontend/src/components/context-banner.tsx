@@ -3,7 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
 import { useRealtimeFeedStatus } from "@/lib/realtime-telemetry-context";
-import { runIdToSourceId } from "@/lib/source-ids";
+import { resolveSourceAlias } from "@/lib/source-ids";
 import {
   useSimulatorRuntime,
   type SimulatorRuntimeStatus,
@@ -60,10 +60,9 @@ function scrollToAlerts(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 }
 
-/** Label when sourceId is not in sources list (e.g. legacy run id); prefer resolving to source. */
+/** Label when sourceId is not in sources list; prefer resolving configured aliases. */
 function fallbackSourceLabel(sourceId: string): string {
-  const source = runIdToSourceId(sourceId);
-  return source !== sourceId ? `${source} (run)` : sourceId;
+  return resolveSourceAlias(sourceId);
 }
 
 export function ContextBanner({
@@ -115,7 +114,7 @@ export function ContextBanner({
         <span className="text-muted-foreground font-medium">Source:</span>
         {sources.length > 1 && onSourceChange ? (
           <Select
-            value={sources.some((s) => s.id === sourceId) ? sourceId : runIdToSourceId(sourceId)}
+            value={sources.some((s) => s.id === sourceId) ? sourceId : resolveSourceAlias(sourceId)}
             onValueChange={onSourceChange}
           >
             <SelectTrigger className="h-8 w-auto min-w-[120px] text-xs">
@@ -190,7 +189,7 @@ export function ContextBanner({
         )}
         {isSwitchingRuns && (
           <Badge variant="outline" className="text-xs">
-            Switching run…
+            Switching stream…
           </Badge>
         )}
       </div>

@@ -21,7 +21,6 @@ import app.orbit as orbit_module
 from app.orbit import submit_position_sample, get_status
 from app.orbit.state import get_orbit_state
 from app.realtime.processor import RealtimeProcessor
-from app.services.source_run_service import clear_active_run, register_active_run
 from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID, RHAEGALSAT_SOURCE_ID
 from telemetry_catalog.coordinates import ecef_to_eci_m
 
@@ -340,8 +339,6 @@ class TestRealtimeProcessorOrbitHandoff:
         self,
         monkeypatch,
     ) -> None:
-        clear_active_run(DROGONSAT_SOURCE_ID)
-        register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-26-42Z")
         monkeypatch.setattr(
             "app.realtime.processor.get_realtime_bus",
             lambda: MagicMock(),
@@ -388,7 +385,6 @@ class TestRealtimeProcessorOrbitHandoff:
             )
 
         assert submitted == []
-        clear_active_run(DROGONSAT_SOURCE_ID)
 
     def test_submit_orbit_sample_converts_ecef_mapping(
         self,

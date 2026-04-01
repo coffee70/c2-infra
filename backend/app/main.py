@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
         try:
             write_ops_event(
                 session,
-                vehicle_id=source_id,
+                source_id=source_id,
                 event_time=datetime.now(timezone.utc),
                 event_type="system.feed_status",
                 severity="info" if new_state == "connected" else "warning",

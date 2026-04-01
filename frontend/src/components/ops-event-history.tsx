@@ -43,7 +43,7 @@ export function OpsEventHistory({ vehicleId, streamId }: OpsEventHistoryProps) {
   const [rangeMinutes, setRangeMinutes] = useState(15);
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
   const params: Record<string, string> = {
-    vehicle_id: vehicleId,
+    source_id: vehicleId,
     since_minutes: String(rangeMinutes),
     limit: "100",
     offset: "0",

@@ -1,52 +1,65 @@
-"""Tests for source-aware position resolution."""
+"""Tests for source/stream helpers and position service boundaries."""
 
 from __future__ import annotations
 
-import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import uuid4
 
-from app.models.schemas import PositionSample
-from app.models.telemetry import TelemetrySource
+import pytest
+
+from app.models.schemas import PositionChannelMappingUpsert, PositionSample
+from app.models.telemetry import PositionChannelMapping, TelemetrySource, TelemetryStream
 from app.services import position_service
-from app.services import source_run_service as srs
-from app.services.source_run_service import (
-    clear_active_run,
-    get_cached_active_run_id,
-    register_active_run,
-    resolve_active_run_id,
-    run_id_to_source_id,
+from app.services.source_stream_service import (
+    StreamIdConflictError,
+    _get_cached_active_stream_entry,
+    clear_active_stream,
+    normalize_source_id,
+    register_stream,
+    resolve_active_stream_id,
+    resolve_latest_stream_id,
 )
-from telemetry_catalog.builtins import (
-    DEFAULT_SOURCE_ID,
-    DROGONSAT_SOURCE_ID,
-    RHAEGALSAT_SOURCE_ID,
-)
+from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID
 
 
-class _FakeScalarResult:
-    def __init__(self, rows):
-        self._rows = rows
+class _EmptyResult:
+    def scalars(self):
+        return self
+
+    def first(self):
+        return None
+
+    def all(self):
+        return []
+
+
+class _ScalarResult:
+    def __init__(self, value):
+        self._value = value
 
     def scalars(self):
         return self
 
+    def first(self):
+        return self._value
+
     def all(self):
-        return self._rows
+        return self._value
 
 
-class _FakeHttpxResponse:
-    def __init__(self, payload: dict, status_code: int = 200):
+class _HttpxResponse:
+    def __init__(self, payload: dict[str, object], status_code: int = 200):
         self._payload = payload
         self.status_code = status_code
 
-    def json(self) -> dict:
+    def json(self) -> dict[str, object]:
         return self._payload
 
 
-class _FakeHttpxClient:
-    def __init__(self, response: _FakeHttpxResponse):
+class _HttpxClient:
+    def __init__(self, response: _HttpxResponse):
         self._response = response
 
     def __enter__(self):
@@ -55,42 +68,34 @@ class _FakeHttpxClient:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def get(self, url: str):
+    def get(self, _url: str):
         return self._response
 
 
-def test_run_id_to_source_id_collapses_simulator_run() -> None:
-    assert run_id_to_source_id(f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z") == DROGONSAT_SOURCE_ID
-    assert (
-        run_id_to_source_id(f"{DROGONSAT_SOURCE_ID}-nominal-2026-03-13T17-12-34Z")
-        == DROGONSAT_SOURCE_ID
-    )
-    assert run_id_to_source_id(f"{RHAEGALSAT_SOURCE_ID}-2026-03-13T17-12-34Z") == RHAEGALSAT_SOURCE_ID
-    assert (
-        run_id_to_source_id(f"{RHAEGALSAT_SOURCE_ID}-orbit_decay-2026-03-13T17-12-34Z")
-        == RHAEGALSAT_SOURCE_ID
-    )
-    assert run_id_to_source_id("default") == DEFAULT_SOURCE_ID
+def test_normalize_source_id_resolves_known_alias() -> None:
+    assert normalize_source_id("simulator") == DROGONSAT_SOURCE_ID
 
 
-def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
+def test_resolve_active_stream_id_uses_simulator_status(monkeypatch) -> None:
+    clear_active_stream(DROGONSAT_SOURCE_ID)
     stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="idle",
-        packet_source=None,
-        receiver_id=None,
-        last_seen_at=None,
-    )
     source = TelemetrySource(
         id=DROGONSAT_SOURCE_ID,
         name="DrogonSat",
         source_type="simulator",
         base_url="http://simulator:8001",
+        telemetry_definition_path="defs/drogonsat.yaml",
     )
+    stream = SimpleNamespace(
+        id=stream_id,
+        source_id=DROGONSAT_SOURCE_ID,
+        status="idle",
+        packet_source=None,
+        receiver_id=None,
+        last_seen_at=None,
+        started_at=None,
+    )
+    db = MagicMock()
 
     def fake_get(model, key):
         if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
@@ -99,1174 +104,226 @@ def test_resolve_active_run_id_uses_simulator_status(monkeypatch) -> None:
             return stream
         return None
 
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
     db.get.side_effect = fake_get
     db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _EmptyResult()]
-
     monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: _FakeHttpxClient(
-            _FakeHttpxResponse(
-                {
-                    "state": "running",
-                    "config": {
-                        "stream_id": f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
-                    },
-                }
-            )
+        "app.services.source_stream_service.httpx.Client",
+        lambda timeout=2.0: _HttpxClient(
+            _HttpxResponse({"state": "running", "config": {"stream_id": stream_id}})
         ),
     )
 
-    assert (
-        resolve_active_run_id(db, DROGONSAT_SOURCE_ID)
-        == stream_id
-    )
-    clear_active_run(DROGONSAT_SOURCE_ID)
+    try:
+        assert resolve_active_stream_id(db, DROGONSAT_SOURCE_ID) == stream_id
+        assert _get_cached_active_stream_entry(DROGONSAT_SOURCE_ID)[0] == stream_id
+    finally:
+        clear_active_stream(DROGONSAT_SOURCE_ID)
 
 
-def test_resolve_active_run_id_recovers_simulator_stream_after_stale_active_row(
-    monkeypatch,
-) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    runtime_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+def test_resolve_active_stream_id_returns_logical_source_when_simulator_is_idle(monkeypatch) -> None:
+    clear_active_stream(DROGONSAT_SOURCE_ID)
     source = TelemetrySource(
         id=DROGONSAT_SOURCE_ID,
         name="DrogonSat",
         source_type="simulator",
         base_url="http://simulator:8001",
+        telemetry_definition_path="defs/drogonsat.yaml",
     )
-
-    def fake_get(model, key):
-        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
-            return source
-        if model.__name__ == "TelemetryStream" and key == runtime_stream_id:
-            return stale_stream
-        return None
-
-    stale_stream = SimpleNamespace(
-        id=runtime_stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="active",
-        packet_source="packet-old",
-        receiver_id="rx-old",
-        last_seen_at=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
-    )
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    class _StaleResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return stale_stream
-
-    db.get.side_effect = fake_get
-    db.execute.side_effect = [_EmptyResult(), _StaleResult(), _EmptyResult()]
-
-    monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: _FakeHttpxClient(
-            _FakeHttpxResponse(
-                {
-                    "state": "running",
-                    "config": {
-                        "stream_id": runtime_stream_id,
-                        "packet_source": "packet-new",
-                        "receiver_id": "rx-new",
-                    },
-                }
-            )
-        ),
-    )
-
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == runtime_stream_id
-    assert stale_stream.status == "active"
-    assert stale_stream.packet_source == "packet-new"
-    assert stale_stream.receiver_id == "rx-new"
-    clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_recovers_simulator_stream_after_stale_current_rows(
-    monkeypatch,
-) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
     db = MagicMock()
-    stale_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    db.get.side_effect = lambda model, source_id: (
-        TelemetrySource(
-            id=DROGONSAT_SOURCE_ID,
-            name="DrogonSat",
-            source_type="simulator",
-            base_url="http://simulator:8001",
-        )
-        if source_id == DROGONSAT_SOURCE_ID
-        else None
-    )
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
+    db.get.side_effect = lambda model, key: source if model is TelemetrySource and key == DROGONSAT_SOURCE_ID else None
     db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _EmptyResult()]
 
-    cleared: list[str] = []
-
-    def fake_clear_active_stream(vehicle_id: str, *, db=None):
-        cleared.append(vehicle_id)
-
     monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: _FakeHttpxClient(
-            _FakeHttpxResponse(
-                {
-                    "state": "idle",
-                    "config": {
-                        "stream_id": stale_stream_id,
-                    },
-                }
-            )
+        "app.services.source_stream_service.httpx.Client",
+        lambda timeout=2.0: _HttpxClient(
+            _HttpxResponse({"state": "idle", "config": {"stream_id": "stale-stream"}})
         ),
     )
-    monkeypatch.setattr("app.services.source_run_service.clear_active_stream", fake_clear_active_stream)
 
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
-    assert cleared == [DROGONSAT_SOURCE_ID]
-    db.add.assert_not_called()
-
-
-def test_resolve_active_run_id_falls_back_when_simulator_status_fails(monkeypatch) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="idle",
-        packet_source=None,
-        receiver_id=None,
-        last_seen_at=None,
-    )
-    stale_stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="active",
-        packet_source="packet-old",
-        receiver_id="rx-old",
-        last_seen_at=datetime(2000, 1, 1, tzinfo=timezone.utc),
-    )
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="simulator",
-        base_url="http://simulator:8001",
-    )
-    current = SimpleNamespace(
-        stream_id=stream_id,
-        reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
-        generation_time=datetime(2026, 3, 13, 17, 12, 39, tzinfo=timezone.utc),
-        packet_source="ground-station-a",
-        receiver_id="rx-7",
-    )
-
-    def fake_get(model, key):
-        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
-            return source
-        if model.__name__ == "TelemetryStream" and key == stream_id:
-            return stream
-        return None
-
-    class _Result:
-        def __init__(self, row):
-            self._row = row
-
-        def scalars(self):
-            return self
-
-        def first(self):
-            return self._row
-
-    class _CurrentResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return current
-
-    db.get.side_effect = fake_get
-
-    def fake_execute(statement):
-        sql = str(statement)
-        if "telemetry_streams.status" in sql and "last_seen_at >=" in sql:
-            return _Result(None)
-        if "telemetry_streams.status" in sql:
-            return _Result(stale_stream)
-        if "JOIN telemetry_metadata" in sql:
-            return _CurrentResult()
-        return _Result(None)
-
-    db.execute.side_effect = fake_execute
-
-    cleared: list[str] = []
-
-    def fake_clear_active_stream(vehicle_id: str, *, db=None):
-        cleared.append(vehicle_id)
-
-    monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: (_ for _ in ()).throw(TimeoutError("simulator status timeout")),
-    )
-    monkeypatch.setattr("app.services.source_run_service.clear_active_stream", fake_clear_active_stream)
-
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
-
-
-def test_resolve_latest_stream_id_recovers_most_recent_stream_when_idle(monkeypatch) -> None:
-    logical_vehicle_id = DROGONSAT_SOURCE_ID
-    latest_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    db = MagicMock()
-
-    class _LatestResult:
-        def __init__(self, value):
-            self._value = value
-
-        def scalars(self):
-            return self
-
-        def first(self):
-            return self._value
-
-    monkeypatch.setattr(
-        srs,
-        "get_stream_vehicle_id",
-        lambda _db, _source_id: None,
-    )
-    monkeypatch.setattr(
-        srs,
-        "resolve_logical_vehicle_id",
-        lambda _db, source_id: source_id,
-    )
-    monkeypatch.setattr(
-        srs,
-        "resolve_active_stream_id",
-        lambda _db, source_id, timeout=2.0: source_id,
-    )
-    db.execute.return_value = _LatestResult(latest_stream_id)
-
-    assert srs.resolve_latest_stream_id(db, logical_vehicle_id) == latest_stream_id
+    assert resolve_active_stream_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
 
 
 def test_resolve_latest_stream_id_preserves_explicit_stream_id(monkeypatch) -> None:
     stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
     db = MagicMock()
-
     monkeypatch.setattr(
-        srs,
-        "get_stream_vehicle_id",
-        lambda _db, source_id: DROGONSAT_SOURCE_ID if source_id == stream_id else None,
-    )
-    monkeypatch.setattr(
-        srs,
-        "resolve_logical_vehicle_id",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected logical lookup")),
-    )
-    monkeypatch.setattr(
-        srs,
-        "resolve_active_stream_id",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected active lookup")),
+        "app.services.source_stream_service.get_stream_source_id",
+        lambda _db, value: DROGONSAT_SOURCE_ID if value == stream_id else None,
     )
 
-    assert srs.resolve_latest_stream_id(db, stream_id) == stream_id
+    assert resolve_latest_stream_id(db, stream_id) == stream_id
 
 
-def test_resolve_active_run_id_prefers_live_simulator_status_over_cached_run(monkeypatch) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
+def test_resolve_latest_stream_id_recovers_most_recent_stream_when_idle(monkeypatch) -> None:
+    latest_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
     db = MagicMock()
-    cached_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
-    live_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-53Z"
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="simulator",
-        base_url="http://simulator:8001",
+    monkeypatch.setattr(
+        "app.services.source_stream_service.get_stream_source_id",
+        lambda _db, _source_id: None,
     )
+    monkeypatch.setattr(
+        "app.services.source_stream_service.resolve_active_stream_id",
+        lambda _db, source_id, timeout=2.0: source_id,
+    )
+    db.execute.return_value = _ScalarResult(latest_stream_id)
+
+    assert resolve_latest_stream_id(db, DROGONSAT_SOURCE_ID) == latest_stream_id
+
+
+def test_register_stream_rejects_reserved_source_collision() -> None:
+    source_id = "source-a"
+    db = MagicMock()
 
     def fake_get(model, key):
-        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
-            return source
-        return None
-
-    db.get.side_effect = fake_get
-    db.execute.side_effect = AssertionError("simulator status should short-circuit before DB lookups")
-    register_active_run(cached_stream_id)
-
-    captured: dict[str, object] = {}
-
-    class _Response:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "state": "active",
-                "config": {
-                    "stream_id": live_stream_id,
-                    "packet_source": "simulator-link",
-                    "receiver_id": "rx-1",
-                },
-            }
-
-    class _Client:
-        def __init__(self, timeout=2.0):
-            captured["timeout"] = timeout
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url):
-            captured["url"] = url
-            return _Response()
-
-    monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        _Client,
-    )
-    monkeypatch.setattr(
-        "app.services.source_run_service.register_stream",
-        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: (
-            captured.update(
-                {
-                    "vehicle_id": vehicle_id,
-                    "stream_id": stream_id,
-                    "packet_source": packet_source,
-                    "receiver_id": receiver_id,
-                    "started_at": started_at,
-                    "seen_at": seen_at,
-                }
-            ),
-            register_active_run(stream_id),
-        ),
-    )
-
-    try:
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == live_stream_id
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == live_stream_id
-        assert captured["url"] == "http://simulator:8001/status"
-        assert captured["vehicle_id"] == DROGONSAT_SOURCE_ID
-        assert captured["stream_id"] == live_stream_id
-        assert captured["packet_source"] == "simulator-link"
-        assert captured["receiver_id"] == "rx-1"
-        assert get_cached_active_run_id(DROGONSAT_SOURCE_ID) == live_stream_id
-        db.execute.assert_not_called()
-    finally:
-        clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_prefers_recent_active_cache_over_stale_simulator_status(
-    monkeypatch,
-) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    cached_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-53Z"
-    stale_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="simulator",
-        base_url="http://simulator:8001",
-    )
-
-    db.get.side_effect = lambda model, key: source if model is TelemetrySource and key == DROGONSAT_SOURCE_ID else None
-    db.execute.side_effect = AssertionError("stale simulator cache should not outrank a newer active stream")
-
-    srs._cache_simulator_status(
-        DROGONSAT_SOURCE_ID,
-        state="running",
-        active_stream_id=stale_stream_id,
-        packet_source="simulator-link",
-        receiver_id="rx-1",
-        seen_at=time.time() - 10.0,
-    )
-    register_active_run(cached_stream_id, seen_at=time.time())
-
-    monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: (_ for _ in ()).throw(AssertionError("should not poll when a newer active cache exists")),
-    )
-
-    try:
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == cached_stream_id
-    finally:
-        clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_prefers_newer_simulator_status_over_older_active_cache(
-    monkeypatch,
-) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    old_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
-    live_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-53Z"
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="simulator",
-        base_url="http://simulator:8001",
-    )
-
-    def fake_get(model, key):
-        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
-            return source
-        return None
-
-    db.get.side_effect = fake_get
-    db.execute.side_effect = AssertionError("simulator status should short-circuit before DB lookups")
-    register_active_run(old_stream_id, seen_at=time.time() - 5.0)
-
-    captured: dict[str, object] = {}
-
-    class _Response:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "state": "active",
-                "config": {
-                    "stream_id": live_stream_id,
-                    "packet_source": "simulator-link",
-                    "receiver_id": "rx-2",
-                },
-            }
-
-    class _Client:
-        def __init__(self, timeout=2.0):
-            captured["timeout"] = timeout
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def get(self, url):
-            captured["url"] = url
-            return _Response()
-
-    monkeypatch.setattr("app.services.source_run_service.httpx.Client", _Client)
-    monkeypatch.setattr(
-        "app.services.source_run_service.register_stream",
-        lambda _db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, started_at=None, seen_at=None: (
-            captured.update(
-                {
-                    "vehicle_id": vehicle_id,
-                    "stream_id": stream_id,
-                    "packet_source": packet_source,
-                    "receiver_id": receiver_id,
-                    "started_at": started_at,
-                    "seen_at": seen_at,
-                }
-            ),
-            register_active_run(stream_id),
-        ),
-    )
-
-    try:
-        resolved = resolve_active_run_id(db, DROGONSAT_SOURCE_ID)
-        assert resolved == live_stream_id
-        assert captured["url"] == "http://simulator:8001/status"
-        assert captured["stream_id"] == live_stream_id
-    finally:
-        clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_prefers_recent_cached_run(monkeypatch) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    db.get.side_effect = lambda model, source_id: (
-        TelemetrySource(
-            id=DROGONSAT_SOURCE_ID,
-            name="DrogonSat",
-            source_type="simulator",
-            base_url="http://simulator:8001",
-        )
-        if source_id == DROGONSAT_SOURCE_ID
-        else None
-    )
-
-    register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z")
-
-    def fail_client(timeout=2.0):
-        raise TimeoutError("status poll timeout")
-
-    monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        fail_client,
-    )
-
-    assert (
-        resolve_active_run_id(db, DROGONSAT_SOURCE_ID)
-        == f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
-    )
-    clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_can_use_cache_for_non_simulator_sources(monkeypatch) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    cached_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z"
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="ground_station",
-        base_url=None,
-    )
-
-    db.get.side_effect = lambda model, source_id: source if source_id == DROGONSAT_SOURCE_ID else None
-    db.execute.side_effect = AssertionError("local cache should short-circuit before DB lookups")
-    register_active_run(cached_stream_id)
-
-    try:
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == cached_stream_id
-    finally:
-        clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_only_queries_active_stream_rows() -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    seen: list[str] = []
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    def fake_execute(statement):
-        seen.append(str(statement))
-        return _EmptyResult()
-
-    db.execute.side_effect = fake_execute
-    db.get.return_value = None
-
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
-    assert any("telemetry_streams.status" in sql for sql in seen)
-    assert any("JOIN telemetry_metadata" in sql and "telemetry_metadata.source_id" in sql for sql in seen)
-
-
-def test_resolve_active_run_id_ignores_stale_active_row_without_current_rows() -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    stale_stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="active",
-        packet_source="ground-station-a",
-        receiver_id="rx-7",
-        last_seen_at=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
-    )
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="ground_station",
-        base_url=None,
-    )
-
-    def fake_get(model, key):
-        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
-            return source
-        return None
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    class _StaleResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return stale_stream
-
-    db.get.side_effect = fake_get
-    db.execute.side_effect = [_EmptyResult(), _StaleResult(), _EmptyResult()]
-
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
-    clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_ignores_stale_current_rows_without_freshness(monkeypatch) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    stale_stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="idle",
-        packet_source=None,
-        receiver_id=None,
-        last_seen_at=None,
-    )
-    stale_current = SimpleNamespace(
-        stream_id=stream_id,
-        reception_time=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
-        generation_time=datetime(2026, 3, 13, 16, 17, 51, tzinfo=timezone.utc),
-        packet_source="ground-station-a",
-        receiver_id="rx-7",
-    )
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="ground_station",
-        base_url=None,
-    )
-
-    def fake_get(model, key):
-        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
-            return source
-        return None
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    class _CurrentResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return stale_current
-
-    db.get.side_effect = fake_get
-
-    seen: list[str] = []
-    register_calls: list[dict[str, object]] = []
-
-    def fake_execute(statement):
-        sql = str(statement)
-        seen.append(sql)
-        if "telemetry_streams.status" in sql and "last_seen_at >=" in sql:
-            return _EmptyResult()
-        if "telemetry_streams" in sql and "ORDER BY telemetry_streams.last_seen_at" in sql:
-            return _EmptyResult()
-        if "JOIN telemetry_metadata" in sql:
-            if "reception_time >=" in sql:
-                return _EmptyResult()
-            return _CurrentResult()
-        raise AssertionError(f"Unexpected query: {sql}")
-
-    db.execute.side_effect = fake_execute
-
-    def fake_register_stream(_db, *, vehicle_id, stream_id, packet_source=None, receiver_id=None, seen_at=None):
-        register_calls.append(
-            {
-                "vehicle_id": vehicle_id,
-                "stream_id": stream_id,
-                "packet_source": packet_source,
-                "receiver_id": receiver_id,
-                "seen_at": seen_at,
-            }
-        )
-        return stale_stream
-
-    monkeypatch.setattr("app.services.source_run_service.register_stream", fake_register_stream)
-    try:
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
-        assert register_calls == []
-        assert any("reception_time >=" in sql for sql in seen)
-    finally:
-        clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_falls_back_to_logical_vehicle_when_simulator_status_is_unavailable(
-    monkeypatch,
-) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    stale_stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="active",
-        packet_source="ground-station-a",
-        receiver_id="rx-7",
-        last_seen_at=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
-    )
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="simulator",
-        base_url="http://simulator:8001",
-    )
-
-    def fake_get(model, key):
-        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
-            return source
-        return None
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    class _StaleResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return stale_stream
-
-    db.get.side_effect = fake_get
-    db.execute.side_effect = [_EmptyResult(), _StaleResult(), _EmptyResult()]
-
-    monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: (_ for _ in ()).throw(TimeoutError("simulator status timeout")),
-    )
-
-    try:
-        assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == DROGONSAT_SOURCE_ID
-        assert stale_stream.status == "active"
-    finally:
-        clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_recovers_stream_from_current_rows() -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="idle",
-        packet_source=None,
-        receiver_id=None,
-        last_seen_at=None,
-    )
-    current = SimpleNamespace(
-        stream_id=stream_id,
-        reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
-        generation_time=datetime(2026, 3, 13, 17, 12, 39, tzinfo=timezone.utc),
-        packet_source="ground-station-a",
-        receiver_id="rx-7",
-    )
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    class _CurrentResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return current
-
-    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _CurrentResult(), _EmptyResult()]
-    db.get.side_effect = lambda model, key: stream if model.__name__ == "TelemetryStream" and key == stream_id else None
-
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
-    assert stream.status == "active"
-    assert stream.last_seen_at == current.reception_time
-    assert stream.packet_source == "ground-station-a"
-    db.add.assert_not_called()
-    clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_recovers_opaque_stream_from_current_rows() -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream_id = "c3bb4cf5-21dd-4b84-bc91-1e3a3a944f78"
-    stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="idle",
-        packet_source=None,
-        receiver_id=None,
-        last_seen_at=None,
-    )
-    current = SimpleNamespace(
-        stream_id=stream_id,
-        reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
-        generation_time=datetime(2026, 3, 13, 17, 12, 39, tzinfo=timezone.utc),
-        packet_source="ground-station-a",
-        receiver_id="rx-7",
-    )
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    class _CurrentResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return current
-
-    db.execute.side_effect = [_EmptyResult(), _EmptyResult(), _CurrentResult(), _EmptyResult()]
-    db.get.side_effect = lambda model, key: stream if model.__name__ == "TelemetryStream" and key == stream_id else None
-
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
-    assert stream.status == "active"
-    assert stream.last_seen_at == current.reception_time
-    assert stream.packet_source == "ground-station-a"
-    db.add.assert_not_called()
-    clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_recovers_stream_from_idle_registry_when_current_rows_exist() -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    idle_stream = SimpleNamespace(
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="idle",
-        packet_source=None,
-        receiver_id=None,
-        last_seen_at=None,
-    )
-    current = SimpleNamespace(
-        stream_id=stream_id,
-        reception_time=datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc),
-        generation_time=datetime(2026, 3, 13, 17, 12, 39, tzinfo=timezone.utc),
-        packet_source="ground-station-a",
-        receiver_id="rx-7",
-    )
-
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    class _IdleResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return idle_stream
-
-    class _CurrentResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return current
-
-    db.execute.side_effect = [_EmptyResult(), _IdleResult(), _CurrentResult()]
-    db.get.side_effect = lambda model, key: (
-        idle_stream if model.__name__ == "TelemetryStream" and key == stream_id else None
-    )
-
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
-    assert idle_stream.status == "active"
-    assert idle_stream.packet_source == "ground-station-a"
-    assert idle_stream.receiver_id == "rx-7"
-    assert idle_stream.last_seen_at == current.reception_time
-    db.add.assert_not_called()
-    clear_active_run(DROGONSAT_SOURCE_ID)
-
-
-def test_resolve_active_run_id_prefers_simulator_status_over_idle_registry_row(monkeypatch) -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
-    idle_stream = SimpleNamespace(
-        id=stream_id,
-        vehicle_id=DROGONSAT_SOURCE_ID,
-        status="idle",
-        packet_source=None,
-        receiver_id=None,
-        last_seen_at=datetime(2026, 3, 13, 16, 17, 52, tzinfo=timezone.utc),
-    )
-    source = TelemetrySource(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="simulator",
-        base_url="http://simulator:8001",
-    )
-
-    def fake_get(model, key):
-        if model is TelemetrySource and key == DROGONSAT_SOURCE_ID:
-            return source
-        if model.__name__ == "TelemetryStream" and key == stream_id:
-            return idle_stream
-        return None
-
-    db.get.side_effect = fake_get
-    db.execute.side_effect = AssertionError("simulator status should run before persisted rows")
-
-    monkeypatch.setattr(
-        "app.services.source_run_service.httpx.Client",
-        lambda timeout=2.0: _FakeHttpxClient(
-            _FakeHttpxResponse(
-                {
-                    "state": "running",
-                    "config": {
-                        "stream_id": stream_id,
-                        "packet_source": "packet-new",
-                        "receiver_id": "rx-new",
-                    },
-                }
+        if model is TelemetrySource and key == source_id:
+            return TelemetrySource(
+                id=source_id,
+                name="Source A",
+                source_type="vehicle",
+                telemetry_definition_path="defs/source-a.yaml",
             )
-        ),
-    )
+        if model is TelemetrySource and key == "source-b":
+            return TelemetrySource(
+                id="source-b",
+                name="Source B",
+                source_type="vehicle",
+                telemetry_definition_path="defs/source-b.yaml",
+            )
+        return None
 
-    assert resolve_active_run_id(db, DROGONSAT_SOURCE_ID) == stream_id
-    assert idle_stream.status == "active"
-    assert idle_stream.packet_source == "packet-new"
-    assert idle_stream.receiver_id == "rx-new"
-    clear_active_run(DROGONSAT_SOURCE_ID)
+    db.get.side_effect = fake_get
+
+    with pytest.raises(StreamIdConflictError):
+        register_stream(db, source_id=source_id, stream_id="source-b")
 
 
-def test_resolve_active_run_id_respects_explicit_idle_stream_state() -> None:
-    source_id = "vehicle-a"
-    clear_active_run(source_id)
+def test_clear_active_stream_marks_persisted_active_streams_idle() -> None:
+    source_id = DROGONSAT_SOURCE_ID
+    stream = TelemetryStream(id="stream-a", source_id=source_id, status="active")
     db = MagicMock()
 
-    class _EmptyResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return None
-
-    class _IdleResult:
-        def scalars(self):
-            return self
-
-        def first(self):
-            return SimpleNamespace(status="idle")
-
-    db.execute.side_effect = [_EmptyResult(), _IdleResult(), _EmptyResult()]
-    db.get.return_value = None
-
-    assert resolve_active_run_id(db, source_id) == source_id
-    db.add.assert_not_called()
-    clear_active_run(source_id)
-
-
-def test_clear_active_run_marks_persisted_active_streams_idle() -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    db = MagicMock()
-    stream = SimpleNamespace(status="active")
-
-    class _ActiveResult:
+    class _AllResult:
         def scalars(self):
             return self
 
         def all(self):
             return [stream]
 
-    db.execute.return_value = _ActiveResult()
+    db.execute.return_value = _AllResult()
 
-    register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-17-52Z")
-    clear_active_run(DROGONSAT_SOURCE_ID, db=db)
+    clear_active_stream(source_id, db=db)
 
     assert stream.status == "idle"
 
 
-def test_upsert_mapping_resolves_aliases_to_canonical_names(monkeypatch) -> None:
+def test_upsert_mapping_keeps_vehicle_surface_and_persists_source_id(monkeypatch) -> None:
     db = MagicMock()
-    body = SimpleNamespace(
-        vehicle_id="source-a",
-        frame_type="gps_lla",
-        lat_channel_name="LATITUDE",
-        lon_channel_name="LONGITUDE",
-        alt_channel_name="ALTITUDE",
-        x_channel_name=None,
-        y_channel_name=None,
-        z_channel_name=None,
-        active=True,
+    source = TelemetrySource(
+        id="vehicle-a",
+        name="Vehicle A",
+        source_type="vehicle",
+        telemetry_definition_path="defs/vehicle-a.yaml",
     )
-    source = TelemetrySource(id="source-a", name="Source A", source_type="vehicle")
 
-    class _RowResult:
+    class _LockResult:
         def scalars(self):
             return self
 
         def first(self):
             return source
 
-    class _EmptyResult:
+    class _ExistingResult:
         def scalars(self):
             return self
 
         def first(self):
             return None
 
-    db.execute.side_effect = [_RowResult(), _EmptyResult()]
+    db.execute.side_effect = [_LockResult(), _ExistingResult()]
     monkeypatch.setattr(
         position_service,
-        "resolve_channel_name",
-        lambda _db, vehicle_id, channel_name: {
-            "LATITUDE": "GPS_LAT",
-            "LONGITUDE": "GPS_LON",
-            "ALTITUDE": "GPS_ALT",
-        }.get(channel_name),
+        "_resolve_mapping_channel_name",
+        lambda _db, _source_id, channel_name: channel_name,
     )
 
-    mapping = position_service.upsert_mapping(db, body)
-
-    assert mapping.lat_channel_name == "GPS_LAT"
-    assert mapping.lon_channel_name == "GPS_LON"
-    assert mapping.alt_channel_name == "GPS_ALT"
-
-
-def test_register_active_run_does_not_roll_back_to_older_run() -> None:
-    clear_active_run(DROGONSAT_SOURCE_ID)
-    register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-23-07Z")
-    register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-22-43Z")
-
-    db = MagicMock()
-    db.get.side_effect = lambda model, source_id: (
-        TelemetrySource(
-            id=DROGONSAT_SOURCE_ID,
-            name="DrogonSat",
-            source_type="simulator",
-            base_url="http://simulator:8001",
-        )
-        if source_id == DROGONSAT_SOURCE_ID
-        else None
+    mapping = position_service.upsert_mapping(
+        db,
+        PositionChannelMappingUpsert(
+            vehicle_id="vehicle-a",
+            frame_type="gps_lla",
+            lat_channel_name="GPS_LAT",
+            lon_channel_name="GPS_LON",
+            alt_channel_name="GPS_ALT",
+            active=True,
+        ),
     )
 
-    assert (
-        resolve_active_run_id(db, DROGONSAT_SOURCE_ID)
-        == f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-23-07Z"
-    )
-    clear_active_run(DROGONSAT_SOURCE_ID)
+    assert mapping.source_id == "vehicle-a"
+    db.add.assert_called_once()
+    db.flush.assert_called_once()
 
 
-def test_build_sample_for_mapping_reads_from_run_but_labels_logical_source(
-    monkeypatch,
-) -> None:
-    requested_source_ids: list[str] = []
-    now = datetime(2026, 3, 13, 17, 12, 40, tzinfo=timezone.utc)
-
-    def fake_get_latest_for_channel(db, *, source_id: str, channel_name: str):
-        requested_source_ids.append(source_id)
-        values = {
-            "GPS_LAT": 1.5,
-            "GPS_LON": 2.5,
-            "GPS_ALT": 400_000.0,
-        }
-        return values[channel_name], now
-
-    monkeypatch.setattr(position_service, "_get_latest_for_channel", fake_get_latest_for_channel)
-
-    mapping = SimpleNamespace(
-        source_id=DROGONSAT_SOURCE_ID,
+def test_get_latest_positions_uses_vehicle_ids_filter_and_latest_stream(monkeypatch) -> None:
+    mapping = PositionChannelMapping(
+        id=uuid4(),
+        source_id="vehicle-a",
         frame_type="gps_lla",
         lat_channel_name="GPS_LAT",
         lon_channel_name="GPS_LON",
         alt_channel_name="GPS_ALT",
-        x_channel_name=None,
-        y_channel_name=None,
-        z_channel_name=None,
+        active=True,
     )
-    source = SimpleNamespace(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="simulator",
+    source = TelemetrySource(
+        id="vehicle-a",
+        name="Vehicle A",
+        source_type="vehicle",
+        telemetry_definition_path="defs/vehicle-a.yaml",
     )
-
-    sample = position_service._build_sample_for_mapping(
-        MagicMock(),
-        mapping,
-        source,
-        data_source_id=f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
-        now=now,
-        staleness=position_service.timedelta(seconds=300),
-    )
-
-    assert requested_source_ids == [
-        f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
-        f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
-        f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
-    ]
-    assert sample.source_id == DROGONSAT_SOURCE_ID
-    assert sample.source_name == "DrogonSat"
-    assert sample.valid is True
-
-
-def test_get_latest_positions_resolves_latest_run_for_mapped_source(
-    monkeypatch,
-) -> None:
     db = MagicMock()
-    mapping = SimpleNamespace(source_id=DROGONSAT_SOURCE_ID)
-    source = SimpleNamespace(
-        id=DROGONSAT_SOURCE_ID,
-        name="DrogonSat",
-        source_type="simulator",
-    )
-    db.execute.side_effect = [
-        _FakeScalarResult([mapping]),
-        _FakeScalarResult([source]),
-    ]
 
+    class _MappingsResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [mapping]
+
+    class _SourcesResult:
+        def scalars(self):
+            return self
+
+        def all(self):
+            return [source]
+
+    db.execute.side_effect = [_MappingsResult(), _SourcesResult()]
     monkeypatch.setattr(
         position_service,
         "resolve_latest_stream_id",
-        lambda db_session, source_id: f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z",
+        lambda _db, source_id: f"{source_id}-stream",
+    )
+    seen_stream_ids: list[str] = []
+    monkeypatch.setattr(
+        position_service,
+        "_build_sample_for_mapping",
+        lambda _db, mapping_arg, source_arg, *, data_source_id, now, staleness: (
+            seen_stream_ids.append(data_source_id)
+            or PositionSample(
+                vehicle_id=source_arg.id,
+                vehicle_name=source_arg.name,
+                vehicle_type=source_arg.source_type,
+                lat_deg=1.0,
+                lon_deg=2.0,
+                alt_m=3.0,
+                timestamp=now.isoformat(),
+                valid=True,
+                frame_type=mapping_arg.frame_type,
+                raw_channels={"lat": 1.0, "lon": 2.0, "alt": 3.0},
+            )
+        ),
     )
 
-    seen: dict[str, str] = {}
-
-    def fake_build_sample(db_session, mapping_obj, source_obj, *, data_source_id, now, staleness):
-        seen["data_source_id"] = data_source_id
-        return PositionSample(
-            source_id=source_obj.id,
-            source_name=source_obj.name,
-            source_type=source_obj.source_type,
-            lat_deg=1.0,
-            lon_deg=2.0,
-            alt_m=3.0,
-            timestamp=now.isoformat(),
-            valid=True,
-            frame_type="gps_lla",
-        )
-
-    monkeypatch.setattr(position_service, "_build_sample_for_mapping", fake_build_sample)
-
-    samples = position_service.get_latest_positions(db, vehicle_ids=[DROGONSAT_SOURCE_ID])
+    samples = position_service.get_latest_positions(db, vehicle_ids=["vehicle-a"])
 
     assert len(samples) == 1
-    assert samples[0].source_id == DROGONSAT_SOURCE_ID
-    assert seen["data_source_id"] == f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    assert samples[0].vehicle_id == "vehicle-a"
+    assert seen_stream_ids == ["vehicle-a-stream"]

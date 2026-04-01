@@ -242,7 +242,7 @@ export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
   return (
     <RealtimeTelemetryProvider
       channelNames={channelNames}
-      vehicleId={sourceId}
+      sourceId={sourceId}
       streamId={feedSourceId ?? null}
       initialChannels={initialChannelsForProvider}
     >

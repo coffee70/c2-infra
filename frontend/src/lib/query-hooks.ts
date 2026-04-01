@@ -73,7 +73,7 @@ export interface TelemetryRecentResponse {
 
 export interface OpsEventSchema {
   id: string;
-  vehicle_id: string;
+  source_id: string;
   stream_id?: string | null;
   event_time: string;
   event_type: string;
@@ -184,7 +184,7 @@ export function useAddToWatchlistMutation(
       fetchJson("/telemetry/watchlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vehicle_id: sourceId, telemetry_name: name }),
+        body: JSON.stringify({ source_id: sourceId, telemetry_name: name }),
       }),
     onMutate: async (name) => {
       await queryClient.cancelQueries({ queryKey: queryKeys.watchlist(sourceId) });
@@ -387,16 +387,13 @@ export function useTelemetryRecentQuery(
   const queryEntries = Object.entries(params).filter(
     ([key]) => key !== "channelName" && key !== "catalogSourceId"
   );
-  const normalizedEntries = params.catalogSourceId
-    ? queryEntries.map(([key, value]) => [key === "source_id" ? "run_id" : key, value] as [string, string])
-    : queryEntries;
   return useQuery<TelemetryRecentResponse>({
     queryKey: queryKeys.telemetryRecent(params),
     enabled,
     queryFn: async ({ signal }) =>
       fetchJson<TelemetryRecentResponse>(
         `${buildTelemetryApiBase(params.catalogSourceId ?? params.source_id, params.channelName)}/recent?${new URLSearchParams(
-          normalizedEntries
+          queryEntries
         ).toString()}`,
         { signal }
       ),
@@ -406,12 +403,12 @@ export function useTelemetryRecentQuery(
 export function useTelemetryExplanationQuery(
   channelName: string,
   sourceId: string,
-  runId?: string,
+  streamId?: string,
   enabled = true
 ) {
-  const suffix = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  const suffix = streamId ? `?stream_id=${encodeURIComponent(streamId)}` : "";
   return useQuery<ExplainResponse>({
-    queryKey: queryKeys.telemetryExplanation(channelName, runId ?? sourceId),
+    queryKey: queryKeys.telemetryExplanation(channelName, streamId ?? sourceId),
     enabled,
     retry: 0,
     queryFn: async ({ signal }) =>

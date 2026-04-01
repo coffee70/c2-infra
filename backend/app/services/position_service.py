@@ -22,7 +22,7 @@ from app.models.schemas import (
 )
 from app.services.channel_alias_service import resolve_channel_metadata, resolve_channel_name
 from app.services.overview_service import _get_latest_value_and_ts
-from app.services.source_run_service import resolve_latest_stream_id, run_id_to_source_id
+from app.services.source_stream_service import resolve_latest_stream_id
 from app.utils.coordinates import ecef_to_lla, eci_to_lla
 
 logger = logging.getLogger(__name__)
@@ -34,14 +34,14 @@ VALID_FRAMES = {"gps_lla", "ecef", "eci"}
 def _resolve_mapping_channel_name(db: Session, source_id: str, channel_name: str | None) -> str | None:
     if not channel_name:
         return None
-    resolved = resolve_channel_name(db, vehicle_id=source_id, channel_name=channel_name)
+    resolved = resolve_channel_name(db, source_id=source_id, channel_name=channel_name)
     if resolved is None:
         raise ValueError(f"Telemetry not found: {channel_name}")
     return resolved
 
 
 def _get_meta_by_name(db: Session, source_id: str, name: str) -> Optional[TelemetryMetadata]:
-    return resolve_channel_metadata(db, vehicle_id=source_id, channel_name=name)
+    return resolve_channel_metadata(db, source_id=source_id, channel_name=name)
 
 
 def _get_latest_for_channel(

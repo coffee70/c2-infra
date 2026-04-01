@@ -19,13 +19,12 @@ from app.models.schemas import (
     ExplainResponse,
     SearchResult,
 )
-from app.services.source_run_service import (
+from app.services.source_stream_service import (
     StreamIdConflictError,
-    get_stream_vehicle_id,
-    normalize_vehicle_id,
+    get_stream_source_id,
     normalize_source_id,
     register_stream,
-    run_id_to_source_id,
+    resolve_latest_stream_id,
 )
 from app.services.channel_alias_service import (
     get_aliases_by_telemetry_ids,
@@ -100,7 +99,7 @@ class TelemetryService:
         red_high: Optional[float] = None,
     ) -> UUID:
         """Create telemetry metadata with embedding."""
-        logical_source_id = run_id_to_source_id(source_id)
+        logical_source_id = normalize_source_id(source_id)
         text_for_embedding = f"{name} {units} {description or ''}".strip()
         embedding = self._embedding.embed(text_for_embedding)
 
@@ -123,7 +122,7 @@ class TelemetryService:
 
     def get_by_name(self, source_id: str, name: str) -> Optional[TelemetryMetadata]:
         """Fetch metadata by source and name."""
-        return resolve_channel_metadata(self._db, vehicle_id=source_id, channel_name=name)
+        return resolve_channel_metadata(self._db, source_id=source_id, channel_name=name)
 
     def get_by_id(self, telemetry_id: UUID) -> Optional[TelemetryMetadata]:
         """Fetch metadata by ID."""
@@ -135,23 +134,24 @@ class TelemetryService:
         telemetry_name: str,
         data: list[tuple[datetime, float]],
         *,
-        vehicle_id: str | None = None,
+        source_id: str | None = None,
         packet_source: str | None = None,
         receiver_id: str | None = None,
     ) -> int:
         """Insert batch of time-series data. source_id scopes data when telemetry_data is source-aware."""
-        metadata_vehicle_id = vehicle_id or run_id_to_source_id(stream_id)
-        logical_vehicle_id = normalize_vehicle_id(metadata_vehicle_id)
-        existing_owner = get_stream_vehicle_id(self._db, stream_id)
-        if existing_owner is not None and normalize_vehicle_id(existing_owner) != logical_vehicle_id:
-            raise StreamIdConflictError("stream_id does not belong to vehicle")
-        meta = self.get_by_name(logical_vehicle_id, telemetry_name)
+        logical_source_id = normalize_source_id(source_id) if source_id else get_stream_source_id(self._db, stream_id)
+        if logical_source_id is None:
+            raise ValueError("source_id is required for unknown stream_id")
+        existing_owner = get_stream_source_id(self._db, stream_id)
+        if existing_owner is not None and normalize_source_id(existing_owner) != logical_source_id:
+            raise StreamIdConflictError("stream_id does not belong to source")
+        meta = self.get_by_name(logical_source_id, telemetry_name)
         if not meta:
             raise ValueError(f"Telemetry not found: {telemetry_name}")
         sample_timestamps = [ts for ts, _ in data]
         register_stream(
             self._db,
-            vehicle_id=logical_vehicle_id,
+            source_id=logical_source_id,
             stream_id=stream_id,
             packet_source=packet_source,
             receiver_id=receiver_id,
@@ -161,7 +161,7 @@ class TelemetryService:
 
         rows = [
             TelemetryData(
-                source_id=stream_id,
+                stream_id=stream_id,
                 telemetry_id=meta.id,
                 timestamp=ts,
                 value=Decimal(str(v)),
@@ -186,12 +186,12 @@ class TelemetryService:
         """Vector similarity search with enriched metadata and optional filters."""
         if not query or not query.strip():
             return []
-        data_source_id = normalize_source_id(source_id)
+        data_source_id = resolve_latest_stream_id(self._db, source_id)
 
         # Fetch more candidates when filters are applied
         fetch_limit = limit * 5 if any([subsystem, anomalous_only, units, recent_minutes]) else limit
 
-        logical_source_id = run_id_to_source_id(source_id)
+        logical_source_id = normalize_source_id(source_id)
         query_embedding = self._embedding.embed(query)
         distance_expr = TelemetryMetadata.embedding.cosine_distance(query_embedding)
 
@@ -213,7 +213,7 @@ class TelemetryService:
         result_by_name: dict[str, SearchResult] = {}
         aliases_by_id: dict[UUID, list[str]] = get_aliases_by_telemetry_ids(
             self._db,
-            vehicle_id=source_id,
+            source_id=source_id,
             telemetry_ids=candidate_ids,
         )
 
@@ -366,7 +366,7 @@ class TelemetryService:
         aliases_by_id.update(
             get_aliases_by_telemetry_ids(
                 self._db,
-                vehicle_id=source_id,
+                source_id=source_id,
                 telemetry_ids=candidate_ids,
             )
         )
@@ -411,7 +411,7 @@ class TelemetryService:
         source_id: str = "default",
     ) -> list[tuple[datetime, float]]:
         """Get most recent values for a telemetry point, optionally filtered by time range and source."""
-        data_source_id = normalize_source_id(source_id)
+        data_source_id = resolve_latest_stream_id(self._db, source_id)
         meta = self.get_by_name(source_id, name)
         if not meta:
             raise ValueError(f"Telemetry not found: {name}")
@@ -420,7 +420,7 @@ class TelemetryService:
             select(TelemetryData.timestamp, TelemetryData.value)
             .where(
                 TelemetryData.telemetry_id == meta.id,
-                TelemetryData.source_id == data_source_id,
+                TelemetryData.stream_id == data_source_id,
             )
             .order_by(desc(TelemetryData.timestamp))
             .limit(limit)
@@ -450,7 +450,7 @@ class TelemetryService:
         self, name: str, limit: int = 5, source_id: str = "default"
     ) -> list[RelatedChannel]:
         """Get channels linked by subsystem/physics for 'What to check next'."""
-        data_source_id = normalize_source_id(source_id)
+        data_source_id = resolve_latest_stream_id(self._db, source_id)
         meta = self.get_by_name(source_id, name)
         if not meta:
             return []
@@ -461,7 +461,7 @@ class TelemetryService:
 
         # Fetch all metadata except self
         stmt = select(TelemetryMetadata).where(
-            TelemetryMetadata.source_id == run_id_to_source_id(source_id),
+            TelemetryMetadata.source_id == normalize_source_id(source_id),
             TelemetryMetadata.name != canonical_name,
         )
         all_meta = self._db.execute(stmt).scalars().all()
@@ -551,14 +551,14 @@ class TelemetryService:
         self, name: str, skip_llm: bool = False, source_id: str = "default"
     ) -> ExplainResponse:
         """Build full explanation with stats, z-score, and LLM response."""
-        data_source_id = normalize_source_id(source_id)
+        data_source_id = resolve_latest_stream_id(self._db, source_id)
         meta = self.get_by_name(source_id, name)
         if not meta:
             raise ValueError(f"Telemetry not found: {name}")
         canonical_name = meta.name
         aliases = get_aliases_by_telemetry_ids(
             self._db,
-            vehicle_id=source_id,
+            source_id=source_id,
             telemetry_ids=[meta.id],
         ).get(meta.id, [])
 

@@ -73,8 +73,8 @@ interface TelemetryDetailTabsProps {
   recentData: RecentPoint[];
   /** Source (from banner / URL); only telemetry_sources ids. */
   sourceId: string;
-  /** Selected run id, if any. Omit to use the active/latest stream for the source. */
-  currentRunId?: string | null;
+  /** Selected stream id, if any. Omit to use the active/latest stream for the source. */
+  currentStreamId?: string | null;
   decodedName: string;
 }
 
@@ -89,7 +89,7 @@ export function TelemetryDetailTabs({
   explain,
   recentData,
   sourceId,
-  currentRunId,
+  currentStreamId,
   decodedName,
 }: TelemetryDetailTabsProps) {
   const initialChannels = [
@@ -109,17 +109,17 @@ export function TelemetryDetailTabs({
 
   return (
     <RealtimeTelemetryProvider
-      key={`${sourceId}:${currentRunId ?? ""}`}
+      key={`${sourceId}:${currentStreamId ?? ""}`}
       channelNames={[decodedName]}
-      vehicleId={sourceId}
-      streamId={currentRunId ?? null}
+      sourceId={sourceId}
+      streamId={currentStreamId ?? null}
       initialChannels={initialChannels}
     >
       <TelemetryDetailTabsContent
         explain={explain}
         recentData={recentData}
         sourceId={sourceId}
-        currentRunId={currentRunId ?? undefined}
+        currentStreamId={currentStreamId ?? undefined}
         decodedName={decodedName}
       />
     </RealtimeTelemetryProvider>
@@ -130,7 +130,7 @@ function TelemetryDetailTabsContent({
   explain,
   recentData,
   sourceId,
-  currentRunId,
+  currentStreamId,
   decodedName,
 }: TelemetryDetailTabsProps) {
   const [activeTab, setActiveTab] = useState<TabId>("summary");
@@ -403,7 +403,7 @@ function TelemetryDetailTabsContent({
                     <TrendChartAnalysis
                       channelName={decodedName}
                       vehicleId={sourceId}
-                      streamId={currentRunId ?? null}
+                      streamId={currentStreamId ?? null}
                       units={explain.units}
                       bounds={{
                         p5: explain.statistics.p5,
@@ -431,7 +431,7 @@ function TelemetryDetailTabsContent({
                 <TelemetryHistoryTable
                   channelName={decodedName}
                   sourceId={sourceId}
-                  defaultRunId={currentRunId ?? undefined}
+                  defaultRunId={currentStreamId ?? undefined}
                   units={explain.units}
                 />
                 </div>
@@ -446,12 +446,12 @@ function TelemetryDetailTabsContent({
                 <ExplanationBlock
                   channelName={decodedName}
                   sourceId={sourceId}
-                  runId={currentRunId ?? undefined}
+                  runId={currentStreamId ?? undefined}
                 />
                 <ChannelRecentEvents
                   channelName={decodedName}
                   vehicleId={sourceId}
-                  streamId={currentRunId ?? undefined}
+                  streamId={currentStreamId ?? undefined}
                   sinceMinutes={60}
                 />
                 </div>

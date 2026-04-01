@@ -23,11 +23,10 @@ from app.models.telemetry import (
     WatchlistEntry,
 )
 from app.services.channel_alias_service import get_aliases_by_telemetry_ids
-from app.services.source_run_service import (
-    get_stream_vehicle_id,
+from app.services.source_stream_service import (
+    get_stream_source_id,
     normalize_source_id,
     resolve_latest_stream_id,
-    run_id_to_source_id,
 )
 from app.utils.subsystem import infer_subsystem
 from telemetry_catalog.builtins import BUILT_IN_SOURCES
@@ -45,21 +44,21 @@ CHANNEL_ORIGIN_CATALOG = "catalog"
 CHANNEL_ORIGIN_DISCOVERED = "discovered"
 
 
-def _resolve_stream_vehicle_id(db: Session, source_id: str) -> str:
-    """Resolve a stream-scoped request to the owning vehicle id."""
-    return get_stream_vehicle_id(db, source_id) or run_id_to_source_id(source_id)
+def _resolve_stream_source_id(db: Session, source_id: str) -> str:
+    """Resolve a stream-scoped request to the owning source id."""
+    return get_stream_source_id(db, source_id) or normalize_source_id(source_id)
 
 
 def _resolve_realtime_stream_scope(
     db: Session,
     *,
-    vehicle_id: str,
+    source_id: str,
     stream_id: str | None = None,
 ) -> tuple[str, str]:
-    """Return the concrete stream id and logical vehicle id for realtime lookups."""
-    logical_source_id = _resolve_stream_vehicle_id(db, vehicle_id)
+    """Return the concrete stream id and logical source id for realtime lookups."""
+    logical_source_id = _resolve_stream_source_id(db, source_id)
     if stream_id is not None:
-        return normalize_source_id(stream_id), logical_source_id
+        return stream_id, logical_source_id
     return resolve_latest_stream_id(db, logical_source_id), logical_source_id
 
 
@@ -191,7 +190,7 @@ def _create_stream_scope_table(db: Session, *, table_name: str, source_id: str) 
             UNION
             SELECT ts.id AS stream_id
             FROM telemetry_streams AS ts
-            WHERE ts.vehicle_id = :source_id
+            WHERE ts.source_id = :source_id
             """
         ),
         {"source_id": source_id},
@@ -565,6 +564,7 @@ def _seed_metadata_for_source(
 
     for channel in definition.channels:
         meta = existing_by_name.get(channel.name)
+        created_meta = False
         if meta is None:
             renamed_alias = next(
                 (
@@ -596,6 +596,7 @@ def _seed_metadata_for_source(
                 channel_origin=CHANNEL_ORIGIN_CATALOG,
             )
             db.add(meta)
+            created_meta = True
         elif meta.channel_origin == CHANNEL_ORIGIN_DISCOVERED:
             meta.channel_origin = CHANNEL_ORIGIN_CATALOG
             if meta.embedding is None:
@@ -611,6 +612,10 @@ def _seed_metadata_for_source(
         meta.discovery_namespace = None
         meta.red_low = Decimal(str(channel.red_low)) if channel.red_low is not None else None
         meta.red_high = Decimal(str(channel.red_high)) if channel.red_high is not None else None
+        if created_meta:
+            # Flush new metadata rows before inserting alias rows that reference them
+            # so clean baseline bootstraps satisfy FK constraints on first startup.
+            db.flush()
         for alias_name in channel.aliases:
             conflicting_meta = existing_by_name.get(alias_name)
             if conflicting_meta is not None and conflicting_meta.name != channel.name:
@@ -1025,7 +1030,7 @@ def _merge_builtin_duplicate_source(
         text(
             """
             UPDATE telemetry_streams
-            SET vehicle_id = :new_source_id
+            SET source_id = :new_source_id
             WHERE id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
             """
         ),
@@ -1147,15 +1152,15 @@ def reconcile_builtin_source_duplicates(db: Session) -> None:
 def source_has_telemetry_history(db: Session, source_id: str) -> bool:
     resolved_source_id = resolve_source_id_alias(source_id) or source_id
     owned_stream_ids = select(TelemetryStream.id).where(
-        TelemetryStream.vehicle_id == resolved_source_id
+        TelemetryStream.source_id == resolved_source_id
     )
     history_count = db.execute(
         select(func.count())
         .select_from(TelemetryData)
         .where(
             or_(
-                TelemetryData.source_id == resolved_source_id,
-                TelemetryData.source_id.in_(owned_stream_ids),
+                TelemetryData.stream_id == resolved_source_id,
+                TelemetryData.stream_id.in_(owned_stream_ids),
             )
         )
     ).scalar_one()
@@ -1166,7 +1171,7 @@ def get_realtime_snapshot_for_channels(
     db: Session,
     channel_names: list[str],
     *,
-    vehicle_id: str = "default",
+    source_id: str = "default",
     stream_id: str | None = None,
 ) -> list[RealtimeChannelUpdate]:
     """Get current values from telemetry_current for given channels and source."""
@@ -1174,14 +1179,14 @@ def get_realtime_snapshot_for_channels(
         return []
     data_source_id, logical_source_id = _resolve_realtime_stream_scope(
         db,
-        vehicle_id=vehicle_id,
+        source_id=source_id,
         stream_id=stream_id,
     )
 
     stmt = (
         select(TelemetryMetadata, TelemetryCurrent)
         .join(TelemetryCurrent, TelemetryMetadata.id == TelemetryCurrent.telemetry_id)
-        .where(TelemetryCurrent.source_id == data_source_id)
+        .where(TelemetryCurrent.stream_id == data_source_id)
         .where(TelemetryMetadata.source_id == logical_source_id)
         .where(TelemetryMetadata.name.in_(channel_names))
     )
@@ -1194,7 +1199,7 @@ def get_realtime_snapshot_for_channels(
             select(TelemetryData.timestamp, TelemetryData.value)
             .where(
                 TelemetryData.telemetry_id == meta.id,
-                TelemetryData.source_id == data_source_id,
+                TelemetryData.stream_id == data_source_id,
             )
             .order_by(desc(TelemetryData.timestamp))
             .limit(SPARKLINE_POINTS)
@@ -1207,7 +1212,7 @@ def get_realtime_snapshot_for_channels(
 
         result.append(
             RealtimeChannelUpdate(
-                vehicle_id=logical_source_id,
+                source_id=logical_source_id,
                 stream_id=data_source_id,
                 name=meta.name,
                 units=meta.units,
@@ -1230,7 +1235,7 @@ def get_realtime_snapshot_for_channels(
 
 def get_watchlist_channel_names(db: Session, source_id: str) -> list[str]:
     """Get watchlist channel names in display order."""
-    logical_source_id = _resolve_stream_vehicle_id(db, source_id)
+    logical_source_id = _resolve_stream_source_id(db, source_id)
     stmt = (
         select(WatchlistEntry.telemetry_name)
         .where(WatchlistEntry.source_id == logical_source_id)
@@ -1242,7 +1247,7 @@ def get_watchlist_channel_names(db: Session, source_id: str) -> list[str]:
 def get_active_alerts(
     db: Session,
     *,
-    vehicle_id: str = "default",
+    source_id: str = "default",
     stream_id: str | None = None,
     subsystems: list[str] | None = None,
     severities: list[str] | None = None,
@@ -1250,13 +1255,13 @@ def get_active_alerts(
     """Get active (non-resolved, non-cleared) alerts for a source."""
     data_source_id, logical_source_id = _resolve_realtime_stream_scope(
         db,
-        vehicle_id=vehicle_id,
+        source_id=source_id,
         stream_id=stream_id,
     )
     stmt = (
         select(TelemetryAlert, TelemetryMetadata)
         .join(TelemetryMetadata, TelemetryAlert.telemetry_id == TelemetryMetadata.id)
-        .where(TelemetryAlert.source_id == data_source_id)
+        .where(TelemetryAlert.stream_id == data_source_id)
         .where(TelemetryMetadata.source_id == logical_source_id)
         .where(TelemetryAlert.cleared_at.is_(None))
         .where(TelemetryAlert.resolved_at.is_(None))
@@ -1275,8 +1280,8 @@ def get_active_alerts(
         result.append(
             TelemetryAlertSchema(
                 id=str(alert.id),
-                vehicle_id=logical_source_id,
-                stream_id=alert.source_id,
+                source_id=logical_source_id,
+                stream_id=alert.stream_id,
                 channel_name=meta.name,
                 telemetry_id=str(meta.id),
                 subsystem=subsys,

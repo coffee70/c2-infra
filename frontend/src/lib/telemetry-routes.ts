@@ -3,10 +3,10 @@
 export function buildTelemetryDetailHref(
   sourceId: string,
   channelName: string,
-  runId?: string,
+  streamId?: string,
 ): string {
   const href = `/sources/${encodeURIComponent(sourceId)}/telemetry/${encodeURIComponent(channelName)}`;
-  return runId ? `${href}?run=${encodeURIComponent(runId)}` : href;
+  return streamId ? `${href}?stream_id=${encodeURIComponent(streamId)}` : href;
 }
 
 export function buildTelemetryApiBase(sourceId: string, channelName: string): string {

@@ -29,7 +29,7 @@ def _stream_scope_clause(stream_id: str):
 def write_event(
     db: Session,
     *,
-    vehicle_id: str,
+    source_id: str,
     stream_id: Optional[str] = None,
     event_time: datetime,
     event_type: str,
@@ -42,7 +42,7 @@ def write_event(
     """Write a single ops event. Returns the created event."""
     event = OpsEvent(
         id=uuid4(),
-        vehicle_id=vehicle_id,
+        source_id=source_id,
         stream_id=stream_id,
         event_time=event_time,
         event_type=event_type,
@@ -60,7 +60,7 @@ def write_event(
 def query_events(
     db: Session,
     *,
-    vehicle_id: str,
+    source_id: str,
     stream_id: Optional[str] = None,
     since: datetime,
     until: Optional[datetime] = None,
@@ -73,7 +73,7 @@ def query_events(
     """Query ops events by time window and optional filters. Returns (events, total_count)."""
     stmt = (
         select(OpsEvent)
-        .where(OpsEvent.vehicle_id == vehicle_id)
+        .where(OpsEvent.source_id == source_id)
         .where(OpsEvent.event_time >= since)
     )
     if stream_id is not None:
@@ -88,7 +88,7 @@ def query_events(
         stmt = stmt.where(OpsEvent.entity_id == channel_name)
 
     count_stmt = select(func.count()).select_from(OpsEvent).where(
-        OpsEvent.vehicle_id == vehicle_id,
+        OpsEvent.source_id == source_id,
         OpsEvent.event_time >= since,
     )
     if stream_id is not None:

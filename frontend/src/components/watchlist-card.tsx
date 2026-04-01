@@ -84,7 +84,7 @@ export function WatchlistCard({
         : "Normal";
 
   const tooltipTitle = !hasData
-    ? "Configured on the watchlist, waiting for telemetry for this source or run"
+    ? "Configured on the watchlist, waiting for telemetry for this source or stream"
     :
     stateReason === "out_of_limits"
       ? "Value outside mission-defined limits"

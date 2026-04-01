@@ -46,13 +46,13 @@ class TestFeedHealthTracker:
         assert status["connected"] is False
 
 
-def test_write_event_uses_vehicle_and_stream_fields() -> None:
+def test_write_event_uses_source_and_stream_fields() -> None:
     db = MagicMock()
     event_time = datetime.now(timezone.utc)
 
     event = write_event(
         db,
-        vehicle_id="vehicle-a",
+        source_id="source-a",
         stream_id="vehicle-a-2026-03-28T12-00-00Z",
         event_time=event_time,
         event_type="alert.opened",
@@ -63,7 +63,7 @@ def test_write_event_uses_vehicle_and_stream_fields() -> None:
         payload={"alert_id": "a1"},
     )
 
-    assert event.vehicle_id == "vehicle-a"
+    assert event.source_id == "source-a"
     assert event.stream_id == "vehicle-a-2026-03-28T12-00-00Z"
     db.add.assert_called_once()
     db.flush.assert_called_once()
@@ -95,7 +95,7 @@ def test_query_events_with_stream_scope_keeps_feed_status_events() -> None:
 
     query_events(
         db,
-        vehicle_id="vehicle-a",
+        source_id="source-a",
         stream_id="vehicle-a-2026-03-28T12-00-00Z",
         since=datetime(2026, 3, 28, 11, 0, tzinfo=timezone.utc),
     )

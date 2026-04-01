@@ -23,7 +23,7 @@ from app.realtime.processor import (
     _resolve_measurement_channel,
 )
 from app.routes.realtime import _normalize_event_times, _validate_stream_batch_identities, websocket_realtime
-from app.services.source_run_service import StreamIdConflictError
+from app.services.source_stream_service import StreamIdConflictError
 from app.services.telemetry_service import _compute_state
 
 
@@ -89,7 +89,7 @@ async def test_realtime_bus_processes_measurements_in_parallel() -> None:
     for idx in range(4):
         bus.publish_measurement(
             MeasurementEvent(
-                vehicle_id="test",
+                source_id="test",
 
                 stream_id="test",
                 channel_name=f"CHAN_{idx}",
@@ -131,7 +131,7 @@ def test_normalize_event_times_uses_ingest_time_when_reception_missing(monkeypat
     events = _normalize_event_times(
         [
             MeasurementEvent(
-                vehicle_id="source-a",
+                source_id="source-a",
 
                 stream_id="source-a",
                 channel_name="PWR_MAIN_BUS_VOLT",
@@ -157,7 +157,7 @@ def test_build_channel_name_from_tags_normalizes_explicit_dynamic_name() -> None
 def test_resolve_measurement_channel_prefers_dynamic_tags_over_raw_channel_name() -> None:
     channel_name, namespace, allow_dynamic = _resolve_measurement_channel(
         MeasurementEvent(
-            vehicle_id="source-a",
+            source_id="source-a",
 
             stream_id="source-a",
             channel_name="PayloadTemp",
@@ -175,7 +175,7 @@ def test_resolve_measurement_channel_prefers_dynamic_tags_over_raw_channel_name(
 def test_resolve_measurement_channel_keeps_strict_explicit_name_without_dynamic_context() -> None:
     channel_name, namespace, allow_dynamic = _resolve_measurement_channel(
         MeasurementEvent(
-            vehicle_id="source-a",
+            source_id="source-a",
 
             stream_id="source-a",
             channel_name="PWR_MAIN_BUS_VOLT",
@@ -193,7 +193,7 @@ def test_normalize_event_times_synthesizes_generation_from_reception() -> None:
     normalized = _normalize_event_times(
         [
             MeasurementEvent(
-                vehicle_id="source-a",
+                source_id="source-a",
 
                 stream_id="source-a",
                 channel_name="PWR_MAIN_BUS_VOLT",
@@ -212,7 +212,7 @@ def test_normalize_event_times_preserves_server_arrival_when_reception_missing()
     normalized = _normalize_event_times(
         [
             MeasurementEvent(
-                vehicle_id="source-a",
+                source_id="source-a",
 
                 stream_id="source-a",
                 channel_name="PWR_MAIN_BUS_VOLT",
@@ -228,7 +228,7 @@ def test_normalize_event_times_preserves_server_arrival_when_reception_missing()
     assert normalized[0].reception_time != normalized[0].generation_time
 
 
-def test_validate_stream_batch_identities_allows_reserved_vehicle_id(
+def test_validate_stream_batch_identities_allows_reserved_source_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db = MagicMock()
@@ -242,13 +242,13 @@ def test_validate_stream_batch_identities_allows_reserved_vehicle_id(
         if model is TelemetrySource and key == "vehicle-a"
         else None
     )
-    monkeypatch.setattr("app.routes.realtime.get_stream_vehicle_id", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("app.routes.realtime.get_stream_source_id", lambda *_args, **_kwargs: None)
 
     _validate_stream_batch_identities(
         db,
         [
             MeasurementEvent(
-                vehicle_id="vehicle-a",
+                source_id="vehicle-a",
                 stream_id="vehicle-a",
                 channel_name="PWR_MAIN_BUS_VOLT",
                 generation_time="2026-03-26T12:00:00+00:00",
@@ -287,14 +287,14 @@ async def test_websocket_realtime_resolves_latest_stream_without_explicit_stream
         async def disconnect(self, websocket) -> None:
             self.disconnected = True
 
-        async def subscribe_watchlist(self, websocket, channels, vehicle_id="default", stream_id=None) -> None:
-            self.subscriptions.append(("watchlist", list(channels), vehicle_id, stream_id))
+        async def subscribe_watchlist(self, websocket, channels, source_id="default", stream_id=None) -> None:
+            self.subscriptions.append(("watchlist", list(channels), source_id, stream_id))
 
-        async def subscribe_channel(self, websocket, name, vehicle_id="default", stream_id=None) -> None:
-            self.subscriptions.append(("channel", name, vehicle_id, stream_id))
+        async def subscribe_channel(self, websocket, name, source_id="default", stream_id=None) -> None:
+            self.subscriptions.append(("channel", name, source_id, stream_id))
 
-        async def subscribe_alerts(self, websocket, vehicle_id="default", stream_id=None) -> None:
-            self.subscriptions.append(("alerts", vehicle_id, stream_id))
+        async def subscribe_alerts(self, websocket, source_id="default", stream_id=None) -> None:
+            self.subscriptions.append(("alerts", source_id, stream_id))
 
     class FakeWebSocket:
         def __init__(self, messages: list[str]) -> None:
@@ -314,7 +314,7 @@ async def test_websocket_realtime_resolves_latest_stream_without_explicit_stream
 
     fake_hub = FakeHub()
     snapshot_update = RealtimeChannelUpdate(
-        vehicle_id="vehicle-a",
+        source_id="vehicle-a",
         stream_id="stream-1",
         name="VBAT",
         subsystem_tag="power",
@@ -324,8 +324,8 @@ async def test_websocket_realtime_resolves_latest_stream_without_explicit_stream
         state="normal",
     )
 
-    def fake_resolve_latest_stream_id(session, vehicle_id: str) -> str:
-        resolve_calls.append((session, vehicle_id))
+    def fake_resolve_latest_stream_id(session, source_id: str) -> str:
+        resolve_calls.append((session, source_id))
         return "stream-1"
 
     monkeypatch.setattr("app.routes.realtime.get_ws_hub", lambda: fake_hub)
@@ -339,9 +339,9 @@ async def test_websocket_realtime_resolves_latest_stream_without_explicit_stream
     monkeypatch.setattr("app.routes.realtime.get_active_alerts", lambda *args, **kwargs: [])
 
     message_by_type = {
-        "subscribe_watchlist": {"type": "subscribe_watchlist", "vehicle_id": "vehicle-a"},
-        "subscribe_channel": {"type": "subscribe_channel", "vehicle_id": "vehicle-a", "name": "VBAT"},
-        "subscribe_alerts": {"type": "subscribe_alerts", "vehicle_id": "vehicle-a"},
+        "subscribe_watchlist": {"type": "subscribe_watchlist", "source_id": "vehicle-a"},
+        "subscribe_channel": {"type": "subscribe_channel", "source_id": "vehicle-a", "name": "VBAT"},
+        "subscribe_alerts": {"type": "subscribe_alerts", "source_id": "vehicle-a"},
     }
     expected_subscription = {
         "subscribe_watchlist": ("watchlist", ["VBAT"], "vehicle-a", None),
@@ -385,7 +385,7 @@ def test_process_measurement_creates_discovered_channel_for_unknown_input(monkey
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        vehicle_id="source-a",
+        source_id="source-a",
         name="decoder.aprs.payload_temp",
         units="",
         description=None,
@@ -415,7 +415,7 @@ def test_process_measurement_creates_discovered_channel_for_unknown_input(monkey
     event = _normalize_event_times(
         [
             MeasurementEvent(
-                vehicle_id="source-a",
+                source_id="source-a",
 
                 stream_id="source-a",
                 channel_name=None,
@@ -467,7 +467,7 @@ def test_process_measurement_skips_unknown_explicit_channel_without_dynamic_cont
     processor._process_measurement(
         db,
         MeasurementEvent(
-            vehicle_id="source-a",
+            source_id="source-a",
 
             stream_id="source-a",
             channel_name="PAYLOAD_TEMP_TYPO",
@@ -504,7 +504,7 @@ def test_process_measurement_does_not_record_feed_health_for_rejected_stream(mon
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        vehicle_id="vehicle-a",
+        source_id="vehicle-a",
         name="VBAT",
         units="V",
         description=None,
@@ -529,12 +529,12 @@ def test_process_measurement_does_not_record_feed_health_for_rejected_stream(mon
     monkeypatch.setattr(
         "app.realtime.processor.register_stream",
         lambda *args, **kwargs: (_ for _ in ()).throw(
-            StreamIdConflictError("stream_id does not belong to vehicle")
+            StreamIdConflictError("stream_id does not belong to source")
         ),
     )
 
     event = MeasurementEvent(
-        vehicle_id="vehicle-a",
+        source_id="vehicle-a",
         stream_id="vehicle-b-2026-03-26T12-00-00Z",
         channel_name="VBAT",
         generation_time="2026-03-26T12:00:01+00:00",
@@ -573,7 +573,7 @@ def test_process_measurement_duplicate_insert_refreshes_stream_and_feed_health(m
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        vehicle_id="vehicle-a",
+        source_id="vehicle-a",
         name="VBAT",
         units="V",
         description=None,
@@ -619,7 +619,7 @@ def test_process_measurement_duplicate_insert_refreshes_stream_and_feed_health(m
     monkeypatch.setattr(
         "app.realtime.processor.register_stream",
         lambda *args, **kwargs: registered.append(
-            (kwargs["vehicle_id"], kwargs["stream_id"])
+            (kwargs["source_id"], kwargs["stream_id"])
         ),
     )
     monkeypatch.setattr(
@@ -631,7 +631,7 @@ def test_process_measurement_duplicate_insert_refreshes_stream_and_feed_health(m
     processor._process_measurement(
         db,
         MeasurementEvent(
-            vehicle_id="vehicle-a",
+            source_id="vehicle-a",
             stream_id="vehicle-a-2026-03-26T12-00-00Z",
             channel_name="VBAT",
             generation_time="2026-03-26T12:00:01+00:00",
@@ -671,7 +671,7 @@ def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkey
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        vehicle_id="source-a",
+        source_id="source-a",
         name="PWR_MAIN_BUS_VOLT",
         units="V",
         description="Main bus voltage",
@@ -686,7 +686,7 @@ def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkey
     processor._process_measurement(
         db,
         MeasurementEvent(
-            vehicle_id="source-a",
+            source_id="source-a",
 
             stream_id="source-a",
             channel_name="VBAT",
@@ -720,7 +720,7 @@ def test_process_measurement_uses_dynamic_tags_even_when_raw_channel_name_is_pre
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        vehicle_id="source-a",
+        source_id="source-a",
         name="decoder.aprs.payload_temp",
         units="",
         description=None,
@@ -745,7 +745,7 @@ def test_process_measurement_uses_dynamic_tags_even_when_raw_channel_name_is_pre
     processor._process_measurement(
         db,
         MeasurementEvent(
-            vehicle_id="source-a",
+            source_id="source-a",
 
             stream_id="source-a",
             channel_name="PayloadTemp",
@@ -784,7 +784,7 @@ def test_process_measurement_duplicate_first_dynamic_sample_keeps_discovered_met
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        vehicle_id="source-a",
+        source_id="source-a",
         name="decoder.aprs.payload_temp",
         units="",
         description=None,
@@ -816,7 +816,7 @@ def test_process_measurement_duplicate_first_dynamic_sample_keeps_discovered_met
     processor._process_measurement(
         db,
         MeasurementEvent(
-            vehicle_id="source-a",
+            source_id="source-a",
 
             stream_id="source-a",
             channel_name=None,
@@ -855,7 +855,7 @@ def test_process_measurement_refreshes_current_packet_identity(monkeypatch) -> N
 
     meta = TelemetryMetadata(
         id=uuid4(),
-        vehicle_id="source-a",
+        source_id="source-a",
         name="VBAT",
         units="V",
         description="Main bus voltage",
@@ -894,7 +894,7 @@ def test_process_measurement_refreshes_current_packet_identity(monkeypatch) -> N
     processor._process_measurement(
         db,
         MeasurementEvent(
-            vehicle_id="source-a",
+            source_id="source-a",
             stream_id="source-a",
             channel_name="VBAT",
             generation_time="2026-03-26T12:00:02+00:00",
