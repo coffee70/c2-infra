@@ -229,7 +229,7 @@ export function EarthOverviewView({
               sourceId,
               {
                 ...status,
-                source_id: sourceId,
+                vehicle_id: sourceId,
               },
             ] as const;
           } catch {
@@ -261,7 +261,7 @@ export function EarthOverviewView({
         setOrbitStatusBySource((prev) => ({
           ...prev,
           [logicalSourceId]: {
-            source_id: logicalSourceId,
+            vehicle_id: logicalSourceId,
             status: msg.status ?? "",
             reason: msg.reason ?? "",
             orbit_type: msg.orbit_type ?? null,

@@ -278,11 +278,9 @@ async def simulator_start(
 @router.post("/pause")
 async def simulator_pause(
     vehicle_id: str | None = None,
-    source_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Pause the simulator."""
-    vehicle_id = vehicle_id or source_id
     if vehicle_id is None:
         raise HTTPException(status_code=400, detail="vehicle_id is required")
     resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
@@ -307,11 +305,9 @@ async def simulator_pause(
 @router.post("/resume")
 async def simulator_resume(
     vehicle_id: str | None = None,
-    source_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Resume the simulator."""
-    vehicle_id = vehicle_id or source_id
     if vehicle_id is None:
         raise HTTPException(status_code=400, detail="vehicle_id is required")
     resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
@@ -336,11 +332,9 @@ async def simulator_resume(
 @router.post("/stop")
 async def simulator_stop(
     vehicle_id: str | None = None,
-    source_id: str | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Stop the simulator."""
-    vehicle_id = vehicle_id or source_id
     if vehicle_id is None:
         raise HTTPException(status_code=400, detail="vehicle_id is required")
     resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id

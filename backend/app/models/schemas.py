@@ -49,7 +49,7 @@ class TelemetryDataIngest(BaseModel):
 
     telemetry_name: str
     data: list[DataPoint]
-    source_id: str = "default"
+    source_id: str
     stream_id: str
     packet_source: Optional[str] = None
     receiver_id: Optional[str] = None

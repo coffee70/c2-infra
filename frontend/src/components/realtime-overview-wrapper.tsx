@@ -386,7 +386,7 @@ function RealtimeOverviewContent({
       setOrbitStatusBySource((prev) => ({
         ...prev,
         [msg.vehicle_id]: {
-          source_id: msg.vehicle_id,
+          vehicle_id: msg.vehicle_id,
           status: msg.status,
           reason: msg.reason,
           orbit_type: msg.orbit_type ?? null,

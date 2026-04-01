@@ -4,7 +4,7 @@
 
 The Overview is your main dashboard. When you have a telemetry stream connected (or historical data), it shows your watchlist, feed health, anomalies, event workflows, and integrated telemetry search in a single data-focused layout—no Earth view on this page.
 
-For a full-screen 3D Earth view with position markers and source selection, use the **Planning** tab (or [Planning](/planning)): the globe fills the viewport below the app bar. Each selected source shows its **current position** (point and label) and a **recent position trail** (polyline) that builds as telemetry is received. For simulators, Planning follows the source's **active run** automatically, so you keep selecting the logical source while the globe reads live position and orbit status from the current run behind it. A single **left-side card** (“Earth view”) has two independent sections: **Show on globe** (a dropdown to select one or multiple sources to display) and **Position mapping** (per-source configuration of frame and channels). You can configure position for any source whether or not it’s currently shown on the globe.
+For a full-screen 3D Earth view with position markers and source selection, use the **Planning** tab (or [Planning](/planning)): the globe fills the viewport below the app bar. Each selected source shows its current position (point and label) and a recent position trail (polyline) that builds as telemetry is received. For simulators, Planning follows the source's active stream automatically, so you keep selecting the logical source while the globe reads live position and orbit status from the current stream behind it. A single left-side card (“Earth view”) has two independent sections: **Show on globe** (a dropdown to select one or multiple sources to display) and **Position mapping** (per-source configuration of frame and channels). You can configure position for any source whether or not it’s currently shown on the globe.
 
 ## Watchlist Cards
 
@@ -14,7 +14,7 @@ Each card shows:
 - **Current value** — latest measurement with units
 - **State badge** — Normal (green), Caution (yellow), or Warning (red)
 - **Sparkline** — recent trend over time
-- **Persistent visibility** — If a channel is on the watchlist, its card stays on the Overview even when the selected source or simulator run has no current data for it. In that case the card shows **No data** until telemetry resumes or you remove the channel from the watchlist.
+- **Persistent visibility** — If a channel is on the watchlist, its card stays on the Overview even when the selected source or simulator stream has no current data for it. In that case the card shows **No data** until telemetry resumes or you remove the channel from the watchlist.
 
 Click a card to open the [channel detail page](/docs/investigating-channels) for stats, trend chart, and AI explanation.
 
@@ -26,7 +26,7 @@ At the top of the Overview:
   - **Live** — receiving data within the last ~15 seconds
   - **Degraded** — no recent data for 15–60 seconds
   - **No data** — no data for 60+ seconds
-- **Simulator/run sync:** If the selected source is a simulator and you start or stop it from the [Sources](/sources) page, the Overview switches to the simulator's active run automatically within a few seconds. The page stays in place during the handoff, shows a small switching indicator, and updates the watchlist, feed badge, and `Live` pill without a browser refresh.
+- **Simulator/stream sync:** If the selected source is a simulator and you start or stop it from the [Sources](/sources) page, the Overview switches to the simulator's active stream automatically within a few seconds. The page stays in place during the handoff, shows a small switching indicator, and updates the watchlist, feed badge, and `Live` pill without a browser refresh.
 - **Approximate rate** — e.g. "~5 Hz" when connected
 - **Simulator status** — when the selected source is a simulator: a single status badge (Disconnected, Running, Paused, or Idle) with semantic color
 - **Source selector** — when multiple sources exist, switch between them; grouped by **Vehicles** and **Simulators** (see [Multi-Source Operations](/docs/multi-source))
@@ -74,7 +74,7 @@ To see a simulator’s position and trail on the globe:
 1. **Generate position telemetry** — On the [Sources](/sources) page, add a simulator (if needed), click **Manage**, then **Start**. The simulator emits position channels (e.g. `GPS_LAT`, `GPS_LON`, `GPS_ALT`) along with other telemetry.
 2. **Open Planning** — Go to the [Planning](/planning) tab. In the Earth view card, open **Show on globe** and select the simulator (and any other sources you want).
 3. **Confirm the mapping** — Built-in and newly registered sources seed their position mapping from the telemetry definition file. In **Position mapping**, verify the frame and channel names if you want operator confirmation or an override. `DrogonSat` uses GPS/LLA channels; `RhaegalSat` uses ECEF XYZ channels.
-4. Planning resolves the simulator source to its **current run** automatically. The globe then shows the simulator’s **current position** (point and label), a **recent trail** (polyline), and the correct `Live` status as telemetry is received for that run.
+4. Planning resolves the simulator source to its current stream automatically. The globe then shows the simulator’s current position (point and label), a recent trail (polyline), and the correct `Live` status as telemetry is received for that stream.
 5. Use **Nominal** or **Orbit nominal** when you want a stable realistic path on the globe. Use **Orbit decay**, **Orbit highly elliptical**, **Orbit suborbital**, or **Orbit escape** only when you intentionally want the orbit-analysis badges and alerting to exercise those cases.
 
 ## Orbit validation

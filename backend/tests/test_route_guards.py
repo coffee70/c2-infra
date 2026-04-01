@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.telemetry import TelemetryStream
+from app.routes.orbit import orbit_status
 from app.routes.simulator import simulator_start, simulator_status
 from app.services.source_stream_service import (
     clear_active_stream,
@@ -205,3 +206,32 @@ async def test_simulator_status_normalizes_legacy_source_alias(monkeypatch) -> N
 
     assert seen["source_id"] == "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
     assert payload["connected"] is True
+
+
+def test_simulator_operator_routes_no_longer_accept_source_id_keyword() -> None:
+    from app.routes.simulator import simulator_pause, simulator_resume, simulator_stop
+
+    with pytest.raises(TypeError):
+        simulator_pause(source_id="simulator")
+    with pytest.raises(TypeError):
+        simulator_resume(source_id="simulator")
+    with pytest.raises(TypeError):
+        simulator_stop(source_id="simulator")
+
+
+def test_orbit_status_uses_vehicle_id_keyword() -> None:
+    request = MagicMock(query_params={})
+    assert orbit_status(request, vehicle_id="simulator") is not None
+
+    with pytest.raises(TypeError):
+        orbit_status(request, source_id="simulator")
+
+
+def test_orbit_status_rejects_legacy_source_id_query_param() -> None:
+    request = MagicMock(query_params={"source_id": "simulator"})
+
+    with pytest.raises(HTTPException) as exc_info:
+        orbit_status(request)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Use vehicle_id"

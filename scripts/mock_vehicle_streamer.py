@@ -105,7 +105,7 @@ def backfill_historical(
                     json={
                         "telemetry_name": name,
                         "data": batch,
-                        "vehicle_id": MOCK_VEHICLE_SOURCE_ID,
+                        "source_id": MOCK_VEHICLE_SOURCE_ID,
                         "stream_id": MOCK_VEHICLE_SOURCE_ID,
                     },
                     timeout=30,
@@ -204,7 +204,7 @@ def main() -> None:
 
                 seq += 1
                 batch.append({
-                    "vehicle_id": MOCK_VEHICLE_SOURCE_ID,
+                    "source_id": MOCK_VEHICLE_SOURCE_ID,
                     "stream_id": MOCK_VEHICLE_SOURCE_ID,
                     "channel_name": name,
                     "generation_time": now.isoformat(),

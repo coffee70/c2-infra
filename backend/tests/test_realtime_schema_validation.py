@@ -30,7 +30,7 @@ def test_measurement_event_requires_channel_identifier() -> None:
             {
                 "events": [
                     {
-                        "vehicle_id": "source-a",
+                        "source_id": "source-a",
                         "stream_id": "source-a-stream",
                         "generation_time": "2026-03-26T12:00:00Z",
                         "value": 1.23,
@@ -45,7 +45,7 @@ def test_measurement_event_accepts_dynamic_field_tags_without_channel_name() -> 
         {
             "events": [
                 {
-                    "vehicle_id": "source-a",
+                    "source_id": "source-a",
                     "stream_id": "source-a-stream",
                     "generation_time": "2026-03-26T12:00:00Z",
                     "value": 1.23,
@@ -63,7 +63,7 @@ def test_measurement_event_accepts_reception_time_without_generation_time() -> N
         {
             "events": [
                 {
-                    "vehicle_id": "source-a",
+                    "source_id": "source-a",
                     "stream_id": "source-a-stream",
                     "reception_time": "2026-03-26T12:00:01Z",
                     "value": 1.23,
@@ -84,7 +84,7 @@ def test_measurement_event_rejects_missing_generation_and_reception_time() -> No
             {
                 "events": [
                     {
-                        "vehicle_id": "source-a",
+                        "source_id": "source-a",
                         "stream_id": "source-a-stream",
                         "value": 1.23,
                         "tags": {"decoder": "APRS", "field_name": "Payload Temp"},
@@ -100,11 +100,28 @@ def test_measurement_event_rejects_field_only_tags_without_namespace_context() -
             {
                 "events": [
                     {
-                        "vehicle_id": "source-a",
+                        "source_id": "source-a",
                         "stream_id": "source-a-stream",
                         "generation_time": "2026-03-26T12:00:00Z",
                         "value": 1.23,
                         "tags": {"field_name": "Payload Temp"},
+                    }
+                ]
+            }
+        )
+
+
+def test_measurement_event_rejects_legacy_vehicle_id_runtime_contract() -> None:
+    with pytest.raises(ValidationError):
+        MeasurementEventBatch.model_validate(
+            {
+                "events": [
+                    {
+                        "vehicle_id": "source-a",
+                        "stream_id": "source-a-stream",
+                        "generation_time": "2026-03-26T12:00:00Z",
+                        "value": 1.23,
+                        "tags": {"decoder": "APRS", "field_name": "Payload Temp"},
                     }
                 ]
             }

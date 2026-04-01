@@ -196,7 +196,7 @@ class TestSubmitAndGetStatus:
 
 
 class TestRealtimeProcessorOrbitHandoff:
-    def test_submit_orbit_sample_uses_logical_source_for_run_ids(
+    def test_submit_orbit_sample_uses_logical_source_for_stream_ids(
         self,
         monkeypatch,
     ) -> None:

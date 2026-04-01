@@ -30,7 +30,7 @@ async function fetchWithFallback(
 }
 
 export interface OrbitStatus {
-  source_id: string;
+  vehicle_id: string;
   status: "VALID" | "ANOMALY" | "INSUFFICIENT_DATA" | string;
   reason: string;
   orbit_type?: string | null;
@@ -41,25 +41,25 @@ export interface OrbitStatus {
   period_sec?: number | null;
 }
 
-/** Response: map of source_id -> OrbitStatus */
+/** Response: map of vehicle_id -> OrbitStatus */
 export type OrbitStatusResponse = Record<string, OrbitStatus>;
 
 function isOrbitStatus(value: unknown): value is OrbitStatus {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<OrbitStatus>;
-  return typeof candidate.source_id === "string" && typeof candidate.status === "string";
+  return typeof candidate.vehicle_id === "string" && typeof candidate.status === "string";
 }
 
 export async function fetchOrbitStatus(
-  sourceId?: string
+  vehicleId?: string
 ): Promise<OrbitStatusResponse> {
-  const qs = sourceId
-    ? `?source_id=${encodeURIComponent(sourceId)}`
+  const qs = vehicleId
+    ? `?vehicle_id=${encodeURIComponent(vehicleId)}`
     : "";
   const res = await fetchWithFallback(`/telemetry/orbit/status${qs}`);
   const data = (await res.json()) as OrbitStatusResponse | OrbitStatus | null;
   if (isOrbitStatus(data)) {
-    return { [data.source_id]: data };
+    return { [data.vehicle_id]: data };
   }
   return data ?? {};
 }
