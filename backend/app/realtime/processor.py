@@ -283,6 +283,7 @@ class RealtimeProcessor:
             packet_source=event.packet_source,
             receiver_id=event.receiver_id,
             seen_at=recv_time,
+            activate=False,
         )
         get_feed_health_tracker().record_reception(source_id)
 

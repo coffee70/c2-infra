@@ -147,13 +147,17 @@ function mergeWatchlistChannels(
   return entries.map((entry) => channelsByName.get(entry.name) ?? buildPlaceholderChannel(entry.name));
 }
 
-async function fetchOverviewSnapshot(sourceId: string): Promise<OverviewSnapshot> {
+async function fetchOverviewSnapshot(
+  sourceId: string,
+  streamId?: string | null,
+): Promise<OverviewSnapshot> {
+  const overviewScopeId = streamId || sourceId;
   const [overviewRes, anomaliesRes, watchlistRes] = await Promise.all([
     fetchWithTimeoutAndFallback(
-      `/telemetry/overview?source_id=${encodeURIComponent(sourceId)}`
+      `/telemetry/overview?source_id=${encodeURIComponent(overviewScopeId)}`
     ),
     fetchWithTimeoutAndFallback(
-      `/telemetry/anomalies?source_id=${encodeURIComponent(sourceId)}`
+      `/telemetry/anomalies?source_id=${encodeURIComponent(overviewScopeId)}`
     ),
     fetchWithTimeoutAndFallback(
       `/telemetry/watchlist?source_id=${encodeURIComponent(sourceId)}`
@@ -256,7 +260,7 @@ export function OverviewContent() {
 
     try {
       setError(unavailableMessage);
-      const snapshot = await fetchOverviewSnapshot(effectiveSource);
+      const snapshot = await fetchOverviewSnapshot(effectiveSource, committedStreamId);
       setChannels(snapshot.channels);
       setAnomalies(snapshot.anomalies);
       if (snapshot.hasPartialFailure) {
@@ -363,7 +367,7 @@ export function OverviewContent() {
         const effectiveStreamId = isSimulatorSource
           ? runtimeStreamId ?? streamsList[0]?.stream_id ?? effectiveSource
           : streamsList[0]?.stream_id ?? effectiveSource;
-        const snapshot = await fetchOverviewSnapshot(effectiveSource);
+        const snapshot = await fetchOverviewSnapshot(effectiveSource, effectiveStreamId);
 
         if (cancelled) return;
 
@@ -442,7 +446,7 @@ export function OverviewContent() {
         setShowSwitchingIndicator(true);
         setError(unavailableMessage);
 
-        const snapshot = await fetchOverviewSnapshot(effectiveSource);
+        const snapshot = await fetchOverviewSnapshot(effectiveSource, streamId);
 
         if (cancelled) return;
 

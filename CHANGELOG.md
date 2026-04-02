@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Simulator realtime runtime contract** — The simulator now sends `source_id` in realtime ingest payloads instead of the legacy runtime `vehicle_id`, restoring compatibility with `POST /telemetry/realtime/ingest`.
+- **Source-wide stream following and explicit stream pinning** — WebSocket subscriptions that omit `stream_id` now keep following the source’s active/latest stream across rollover, while explicitly selected streams remain pinned exactly, including explicit base-stream selections.
+- **History and overview stream selection** — The history table now sends the selected stream as `stream_id`, and Overview bootstrap/refresh requests keep the selected stream scope when reloading data.
+- **Historical stream ownership and activation** — Realtime batch validation now checks `stream_id` ownership from registry/data instead of alias collisions, historical stream listings now include data-backed streams without registry rows, and replay/backfill ingest no longer promotes touched streams to active/latest automatically.
+- **Channel-scoped fallback resolution** — Channel summary, explain, and recent endpoints now fall back to the latest stream that actually contains the requested channel instead of the source’s unrelated latest stream.
+- **Position mapping serialization and rollover consistency** — Position config responses serialize correctly from `source_id`-backed mappings again, and position assembly now resolves one stream per source so coordinates cannot mix across a rollover.
+- **Baseline schema integrity** — The baseline migration restores Timescale hypertable creation for `telemetry_data` and enforces `watchlist(source_id, telemetry_name)` uniqueness on fresh installs.
 - **Overview source resolution crash** — The overview service now imports `normalize_source_id` correctly, so `/telemetry/overview` returns data instead of throwing a `NameError` on the local stack.
 - **Overview bootstrap failure handling** — When the initial overview snapshot request fails, the page now shows an error state with a retry action instead of staying on the loading spinner forever.
 - **Realtime ingest phantom runs** — `POST /telemetry/realtime/ingest` no longer reserves `telemetry_streams` rows before a batch is accepted, so dropped or rejected realtime traffic does not leave behind user-visible empty runs.

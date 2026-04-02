@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 
 class ChannelListItem(BaseModel):
@@ -518,7 +518,7 @@ class PositionChannelMappingSchema(BaseModel):
     model_config = {"from_attributes": True}
 
     id: str
-    vehicle_id: str
+    vehicle_id: str = Field(validation_alias=AliasChoices("vehicle_id", "source_id"))
     frame_type: str  # gps_lla | ecef | eci
 
     @field_validator("id", mode="before")

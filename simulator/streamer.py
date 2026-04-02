@@ -209,7 +209,7 @@ class TelemetryStreamer:
             seq += 1
             batch.append(
                 {
-                    "vehicle_id": self.vehicle_id,
+                    "source_id": self.vehicle_id,
                     "stream_id": self.stream_id,
                     "channel_name": name,
                     "generation_time": generation_time.isoformat(),
@@ -313,7 +313,7 @@ class TelemetryStreamer:
 
                 seq += 1
                 batch.append({
-                    "vehicle_id": self.vehicle_id,
+                    "source_id": self.vehicle_id,
                     "stream_id": self.stream_id,
                     "channel_name": name,
                     "generation_time": generation_time.isoformat(),

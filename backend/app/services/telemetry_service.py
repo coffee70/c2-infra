@@ -157,6 +157,7 @@ class TelemetryService:
             receiver_id=receiver_id,
             started_at=min(sample_timestamps) if sample_timestamps else None,
             seen_at=max(sample_timestamps) if sample_timestamps else None,
+            activate=False,
         )
 
         rows = [

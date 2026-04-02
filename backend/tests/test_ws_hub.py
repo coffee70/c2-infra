@@ -5,7 +5,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.models.schemas import RealtimeChannelUpdate, TelemetryAlertSchema
-from app.realtime.ws_hub import RealtimeWsHub
+from app.realtime.ws_hub import (
+    RealtimeWsHub,
+    SUBSCRIPTION_MODE_EXPLICIT_STREAM,
+    SUBSCRIPTION_MODE_SOURCE_WIDE,
+)
 
 
 def _make_ws(active_source_id: str) -> MagicMock:
@@ -25,6 +29,7 @@ async def test_broadcast_telemetry_update_matches_source_and_stream_scope() -> N
         source_ws: {
             "active_source_id": "vehicle-a",
             "active_stream_id": None,
+            "stream_subscription_mode": SUBSCRIPTION_MODE_SOURCE_WIDE,
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -32,6 +37,7 @@ async def test_broadcast_telemetry_update_matches_source_and_stream_scope() -> N
         base_ws: {
             "active_source_id": "vehicle-a",
             "active_stream_id": "vehicle-a",
+            "stream_subscription_mode": SUBSCRIPTION_MODE_EXPLICIT_STREAM,
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -39,6 +45,7 @@ async def test_broadcast_telemetry_update_matches_source_and_stream_scope() -> N
         stream_ws: {
             "active_source_id": "vehicle-a",
             "active_stream_id": "stream-1",
+            "stream_subscription_mode": SUBSCRIPTION_MODE_EXPLICIT_STREAM,
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -46,6 +53,7 @@ async def test_broadcast_telemetry_update_matches_source_and_stream_scope() -> N
         other_ws: {
             "active_source_id": "vehicle-b",
             "active_stream_id": None,
+            "stream_subscription_mode": SUBSCRIPTION_MODE_SOURCE_WIDE,
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -66,7 +74,7 @@ async def test_broadcast_telemetry_update_matches_source_and_stream_scope() -> N
     )
 
     assert source_ws.send_text.await_count == 1
-    assert base_ws.send_text.await_count == 1
+    assert base_ws.send_text.await_count == 0
     assert stream_ws.send_text.await_count == 1
     assert other_ws.send_text.await_count == 0
 
@@ -80,6 +88,7 @@ async def test_historical_stream_scoped_subscription_stays_pinned() -> None:
         source_ws: {
             "active_source_id": "vehicle-a",
             "active_stream_id": None,
+            "stream_subscription_mode": SUBSCRIPTION_MODE_SOURCE_WIDE,
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -87,6 +96,7 @@ async def test_historical_stream_scoped_subscription_stays_pinned() -> None:
         stream_ws: {
             "active_source_id": "vehicle-a",
             "active_stream_id": "stream-1",
+            "stream_subscription_mode": SUBSCRIPTION_MODE_EXPLICIT_STREAM,
             "watchlist_channels": {"VBAT"},
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -121,6 +131,7 @@ async def test_broadcast_alert_event_matches_source_and_stream_scope() -> None:
         source_ws: {
             "active_source_id": "vehicle-a",
             "active_stream_id": None,
+            "stream_subscription_mode": SUBSCRIPTION_MODE_SOURCE_WIDE,
             "watchlist_channels": set(),
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -128,6 +139,7 @@ async def test_broadcast_alert_event_matches_source_and_stream_scope() -> None:
         base_ws: {
             "active_source_id": "vehicle-a",
             "active_stream_id": "vehicle-a",
+            "stream_subscription_mode": SUBSCRIPTION_MODE_EXPLICIT_STREAM,
             "watchlist_channels": set(),
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -135,6 +147,7 @@ async def test_broadcast_alert_event_matches_source_and_stream_scope() -> None:
         stream_ws: {
             "active_source_id": "vehicle-a",
             "active_stream_id": "stream-1",
+            "stream_subscription_mode": SUBSCRIPTION_MODE_EXPLICIT_STREAM,
             "watchlist_channels": set(),
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -142,6 +155,7 @@ async def test_broadcast_alert_event_matches_source_and_stream_scope() -> None:
         other_ws: {
             "active_source_id": "vehicle-b",
             "active_stream_id": None,
+            "stream_subscription_mode": SUBSCRIPTION_MODE_SOURCE_WIDE,
             "watchlist_channels": set(),
             "channel_detail": set(),
             "alerts_subscribed": True,
@@ -167,6 +181,37 @@ async def test_broadcast_alert_event_matches_source_and_stream_scope() -> None:
     )
 
     assert source_ws.send_text.await_count == 1
-    assert base_ws.send_text.await_count == 1
+    assert base_ws.send_text.await_count == 0
     assert stream_ws.send_text.await_count == 1
     assert other_ws.send_text.await_count == 0
+
+
+@pytest.mark.anyio
+async def test_explicit_base_stream_subscription_remains_exact() -> None:
+    hub = RealtimeWsHub()
+    base_ws = _make_ws("vehicle-a")
+    hub._connections = {
+        base_ws: {
+            "active_source_id": "vehicle-a",
+            "active_stream_id": "vehicle-a",
+            "stream_subscription_mode": SUBSCRIPTION_MODE_EXPLICIT_STREAM,
+            "watchlist_channels": {"VBAT"},
+            "channel_detail": set(),
+            "alerts_subscribed": True,
+        },
+    }
+
+    await hub._do_broadcast_telemetry_update(
+        RealtimeChannelUpdate(
+            source_id="vehicle-a",
+            stream_id="vehicle-a",
+            name="VBAT",
+            subsystem_tag="power",
+            current_value=4.2,
+            generation_time="2026-03-26T12:00:00+00:00",
+            reception_time="2026-03-26T12:00:01+00:00",
+            state="normal",
+        )
+    )
+
+    assert base_ws.send_text.await_count == 1

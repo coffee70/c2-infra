@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.telemetry import (
+    TelemetryCurrent,
     TelemetryData,
     TelemetryMetadata,
     TelemetrySource,
@@ -112,6 +113,43 @@ def _resolve_scoped_stream_id(db: Session, source_id: str, stream_id: Optional[s
         return ensure_stream_belongs_to_source(db, source_id, stream_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Stream not found for source")
+
+
+def _resolve_latest_stream_id_for_channel(db: Session, source_id: str, name: str) -> str:
+    """Resolve the latest stream for a source that actually contains the channel."""
+    logical_source_id = normalize_source_id(source_id)
+    meta = _get_channel_meta(db, logical_source_id, name)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Telemetry not found")
+
+    current_stream_id = (
+        db.execute(
+            select(TelemetryCurrent.stream_id)
+            .where(TelemetryCurrent.telemetry_id == meta.id)
+            .order_by(
+                TelemetryCurrent.reception_time.desc(),
+                TelemetryCurrent.generation_time.desc(),
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if isinstance(current_stream_id, str) and current_stream_id:
+        return current_stream_id
+
+    historical_stream_id = (
+        db.execute(
+            select(TelemetryData.stream_id)
+            .where(TelemetryData.telemetry_id == meta.id)
+            .order_by(TelemetryData.timestamp.desc())
+        )
+        .scalars()
+        .first()
+    )
+    if isinstance(historical_stream_id, str) and historical_stream_id:
+        return historical_stream_id
+
+    return _resolve_scoped_stream_id(db, logical_source_id)
 
 
 def get_embedding_provider() -> SentenceTransformerEmbeddingProvider:
@@ -305,21 +343,39 @@ def get_source_streams(
 ):
     """List stream ids for a source (any channel). Newest first."""
     logical_source_id = normalize_source_id(source_id)
-
-    stmt = (
+    registry_rows = db.execute(
         select(
             TelemetryStream.id,
             TelemetryStream.last_seen_at,
+        ).where(TelemetryStream.source_id == logical_source_id)
+    ).fetchall()
+    history_rows = db.execute(
+        select(
+            TelemetryData.stream_id,
+            func.max(TelemetryData.timestamp).label("last_seen_at"),
         )
-        .where(TelemetryStream.source_id == logical_source_id)
-        .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
-    )
+        .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
+        .where(TelemetryMetadata.source_id == logical_source_id)
+        .group_by(TelemetryData.stream_id)
+    ).fetchall()
 
-    rows = db.execute(stmt).fetchall()
+    stream_seen_at: dict[str, datetime | None] = {}
+    for stream_id, seen_at in registry_rows:
+        stream_seen_at[stream_id] = seen_at
+    for stream_id, seen_at in history_rows:
+        prior = stream_seen_at.get(stream_id)
+        if prior is None or (seen_at is not None and seen_at > prior):
+            stream_seen_at[stream_id] = seen_at
+
+    rows = sorted(
+        stream_seen_at.items(),
+        key=lambda item: (item[1].timestamp() if item[1] is not None else float("-inf"), item[0]),
+        reverse=True,
+    )
     return ChannelSourcesResponse(
         sources=[
-            ChannelSourceItem(stream_id=row[0], label=_format_source_label(row[0]))
-            for row in rows
+            ChannelSourceItem(stream_id=stream_id, label=_format_source_label(stream_id))
+            for stream_id, _seen_at in rows
         ]
     )
 
@@ -558,7 +614,11 @@ def get_summary_for_source(
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    scoped_stream_id = _resolve_scoped_stream_id(db, source_id, stream_id)
+    scoped_stream_id = (
+        _resolve_scoped_stream_id(db, source_id, stream_id)
+        if stream_id is not None
+        else _resolve_latest_stream_id_for_channel(db, source_id, name)
+    )
     return get_summary(name=name, source_id=scoped_stream_id, db=db)
 
 
@@ -591,7 +651,11 @@ def explain_for_source(
     llm: object = Depends(get_llm_provider),
 ):
     name = unquote(name)
-    scoped_stream_id = _resolve_scoped_stream_id(db, source_id, stream_id)
+    scoped_stream_id = (
+        _resolve_scoped_stream_id(db, source_id, stream_id)
+        if stream_id is not None
+        else _resolve_latest_stream_id_for_channel(db, source_id, name)
+    )
     return explain(
         name=name,
         skip_llm=skip_llm,
@@ -633,10 +697,9 @@ def get_channel_streams(
         raise HTTPException(status_code=404, detail="Telemetry not found")
 
     logical_source_id = normalize_source_id(source_id)
-
-    channel_last_seen = (
+    rows = db.execute(
         select(
-            TelemetryData.stream_id.label("stream_id"),
+            TelemetryData.stream_id,
             func.max(TelemetryData.timestamp).label("last_seen_at"),
         )
         .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
@@ -645,23 +708,11 @@ def get_channel_streams(
             TelemetryData.telemetry_id == meta.id,
         )
         .group_by(TelemetryData.stream_id)
-        .subquery()
-    )
-
-    stmt = (
-        select(
-            TelemetryStream.id,
-            channel_last_seen.c.last_seen_at,
-        )
-        .join(channel_last_seen, channel_last_seen.c.stream_id == TelemetryStream.id)
-        .where(TelemetryStream.source_id == logical_source_id)
         .order_by(
-            desc(channel_last_seen.c.last_seen_at),
-            TelemetryStream.id.desc(),
+            desc(func.max(TelemetryData.timestamp)),
+            TelemetryData.stream_id.desc(),
         )
-    )
-
-    rows = db.execute(stmt).fetchall()
+    ).fetchall()
     return ChannelSourcesResponse(
         sources=[
             ChannelSourceItem(stream_id=row[0], label=_format_source_label(row[0]))
@@ -779,7 +830,11 @@ def get_recent_for_source(
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    scoped_stream_id = _resolve_scoped_stream_id(db, source_id, stream_id)
+    scoped_stream_id = (
+        _resolve_scoped_stream_id(db, source_id, stream_id)
+        if stream_id is not None
+        else _resolve_latest_stream_id_for_channel(db, source_id, name)
+    )
     return get_recent(
         name=name,
         limit=limit,

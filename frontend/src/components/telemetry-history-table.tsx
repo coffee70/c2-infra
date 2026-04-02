@@ -155,7 +155,7 @@ export function TelemetryHistoryTable({
     catalogSourceId: sourceId,
     limit: String(limit),
     since: sinceIso,
-    ...(selectedStreamId ? { source_id: selectedStreamId } : {}),
+    ...(selectedStreamId ? { stream_id: selectedStreamId } : {}),
   });
   const rows = useMemo(() => historyQuery.data?.data ?? [], [historyQuery.data]);
   const loading = historyQuery.isLoading || historyQuery.isFetching;

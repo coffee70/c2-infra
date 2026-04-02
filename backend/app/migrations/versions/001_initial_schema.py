@@ -124,6 +124,18 @@ def upgrade() -> None:
         "telemetry_data",
         ["source_id", "telemetry_id", "timestamp"],
     )
+    op.execute(
+        sa.text(
+            """
+            SELECT create_hypertable(
+              'telemetry_data',
+              'timestamp',
+              if_not_exists => TRUE,
+              migrate_data => TRUE
+            )
+            """
+        )
+    )
 
     op.create_table(
         "telemetry_statistics",
@@ -166,6 +178,12 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_watchlist_source_id"), "watchlist", ["source_id"])
     op.create_index(op.f("ix_watchlist_telemetry_name"), "watchlist", ["telemetry_name"])
+    op.create_index(
+        "ix_watchlist_source_telemetry_name",
+        "watchlist",
+        ["source_id", "telemetry_name"],
+        unique=True,
+    )
 
     op.create_table(
         "telemetry_current",
@@ -328,6 +346,7 @@ def downgrade() -> None:
 
     op.drop_table("telemetry_current")
 
+    op.drop_index("ix_watchlist_source_telemetry_name", table_name="watchlist")
     op.drop_index(op.f("ix_watchlist_telemetry_name"), table_name="watchlist")
     op.drop_index(op.f("ix_watchlist_source_id"), table_name="watchlist")
     op.drop_table("watchlist")

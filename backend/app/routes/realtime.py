@@ -114,11 +114,6 @@ def _validate_stream_batch_identities(db: Session, events: list[MeasurementEvent
             continue
         stream_owners[event.stream_id] = logical_source_id
 
-        reserved_source_id = normalize_source_id(event.stream_id)
-        reserved_source = db.get(TelemetrySource, reserved_source_id)
-        if reserved_source is not None and reserved_source_id != logical_source_id:
-            raise HTTPException(status_code=400, detail="stream_id conflicts with an existing source_id")
-
         existing_owner = get_stream_source_id(db, event.stream_id)
         if existing_owner is not None and normalize_source_id(existing_owner) != logical_source_id:
             raise HTTPException(status_code=400, detail="stream_id does not belong to source")
@@ -274,7 +269,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                     websocket,
                     channels,
                     source_id=source_id,
-                    stream_id=snapshot_stream_id,
+                    stream_id=stream_id,
                 )
 
                 # Send snapshot
@@ -333,7 +328,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         websocket,
                         name,
                         source_id=source_id,
-                        stream_id=snapshot_stream_id,
+                        stream_id=stream_id,
                     )
                     session = session_factory()
                     try:
@@ -358,7 +353,7 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                 await hub.subscribe_alerts(
                     websocket,
                     source_id=source_id,
-                    stream_id=snapshot_stream_id,
+                    stream_id=stream_id,
                 )
                 session = session_factory()
                 try:

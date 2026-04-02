@@ -49,6 +49,7 @@ def _get_latest_for_channel(
     *,
     source_id: str,
     channel_name: Optional[str],
+    data_source_id: str | None = None,
 ) -> tuple[Optional[float], Optional[datetime]]:
     """Get latest value and timestamp for a named channel for a source."""
     if not channel_name:
@@ -57,12 +58,12 @@ def _get_latest_for_channel(
     if not meta:
         return None, None
 
-    data_source_id = resolve_latest_stream_id(db, source_id)
-    current = db.get(TelemetryCurrent, (data_source_id, meta.id))
+    resolved_stream_id = data_source_id or resolve_latest_stream_id(db, source_id)
+    current = db.get(TelemetryCurrent, (resolved_stream_id, meta.id))
     if current:
         return float(current.value), current.generation_time
 
-    latest = _get_latest_value_and_ts(db, meta.id, source_id=data_source_id)
+    latest = _get_latest_value_and_ts(db, meta.id, source_id=resolved_stream_id)
     if not latest:
         return None, None
     value, ts = latest
@@ -177,16 +178,19 @@ def _build_sample_for_mapping(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.lat_channel_name,
+                data_source_id=data_source_id,
             )
             lon, ts_lon = _get_latest_for_channel(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.lon_channel_name,
+                data_source_id=data_source_id,
             )
             alt, ts_alt = _get_latest_for_channel(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.alt_channel_name,
+                data_source_id=data_source_id,
             )
             raw_channels = {
                 "lat": lat,
@@ -219,16 +223,19 @@ def _build_sample_for_mapping(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.x_channel_name,
+                data_source_id=data_source_id,
             )
             y, ts_y = _get_latest_for_channel(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.y_channel_name,
+                data_source_id=data_source_id,
             )
             z, ts_z = _get_latest_for_channel(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.z_channel_name,
+                data_source_id=data_source_id,
             )
             raw_channels = {"x": x, "y": y, "z": z}
             if x is None or y is None or z is None:

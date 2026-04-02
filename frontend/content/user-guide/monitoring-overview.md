@@ -27,6 +27,7 @@ At the top of the Overview:
   - **Degraded** — no recent data for 15–60 seconds
   - **No data** — no data for 60+ seconds
 - **Simulator/stream sync:** If the selected source is a simulator and you start or stop it from the [Sources](/sources) page, the Overview switches to the simulator's active stream automatically within a few seconds. The page stays in place during the handoff, shows a small switching indicator, and updates the watchlist, feed badge, and `Live` pill without a browser refresh.
+- **Source-wide live following:** When you do not explicitly pin a stream, the live Overview keeps following the selected source’s current stream after rollover. Explicit stream selections stay pinned to that stream.
 - **Approximate rate** — e.g. "~5 Hz" when connected
 - **Simulator status** — when the selected source is a simulator: a single status badge (Disconnected, Running, Paused, or Idle) with semantic color
 - **Source selector** — when multiple sources exist, switch between them; grouped by **Vehicles** and **Simulators** (see [Multi-Source Operations](/docs/multi-source))
@@ -66,6 +67,8 @@ On the [Planning](/planning) page, the left-side **Earth view** card has two sep
 - **Position mapping** — A list of all sources; each row shows the source name, type, and current mapping (or “Not configured”). Expand a row to set **frame** (GPS lat/lon/alt or ECEF/ECI X/Y/Z) and channel names, then **Save mapping** or **Remove mapping**. You can configure any source even if it’s not currently shown on the globe.
 
 Each source has at most one active position mapping. If a source has no valid mapping, it won’t show a position on the globe when you add it to “Show on globe.”
+
+On channel detail pages, the **History** stream picker is explicit: choosing a stream pins history queries to that stream, while **Active / latest** keeps the page on the source’s current stream.
 
 ### Workflow: Simulator on the Planning globe
 

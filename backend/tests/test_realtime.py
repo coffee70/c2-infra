@@ -344,9 +344,9 @@ async def test_websocket_realtime_resolves_latest_stream_without_explicit_stream
         "subscribe_alerts": {"type": "subscribe_alerts", "source_id": "vehicle-a"},
     }
     expected_subscription = {
-        "subscribe_watchlist": ("watchlist", ["VBAT"], "vehicle-a", "stream-1"),
-        "subscribe_channel": ("channel", "VBAT", "vehicle-a", "stream-1"),
-        "subscribe_alerts": ("alerts", "vehicle-a", "stream-1"),
+        "subscribe_watchlist": ("watchlist", ["VBAT"], "vehicle-a", None),
+        "subscribe_channel": ("channel", "VBAT", "vehicle-a", None),
+        "subscribe_alerts": ("alerts", "vehicle-a", None),
     }
 
     ws = FakeWebSocket([json.dumps(message_by_type[message_type])])
