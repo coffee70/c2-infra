@@ -79,7 +79,7 @@ To see a simulator’s position and trail on the globe:
 1. **Generate position telemetry** — On the [Sources](/sources) page, add a simulator (if needed), click **Manage**, then **Start**. The simulator emits position channels (e.g. `GPS_LAT`, `GPS_LON`, `GPS_ALT`) along with other telemetry.
 2. **Open Planning** — Go to the [Planning](/planning) tab. In the Earth view card, open **Show on globe** and select the simulator (and any other sources you want).
 3. **Confirm the mapping** — Built-in and newly registered sources seed their position mapping from the telemetry definition file. In **Position mapping**, verify the frame and channel names if you want operator confirmation or an override. `DrogonSat` uses GPS/LLA channels; `RhaegalSat` uses ECEF XYZ channels.
-4. Planning resolves the simulator source to its current stream automatically. The globe then shows the simulator’s current position (point and label), a recent trail (polyline), and the correct `Live` status as telemetry is received for that stream.
+4. Planning resolves the simulator source to its current stream automatically. The globe then shows the simulator’s current position (point and label), a recent trail (polyline), and a per-source feed badge (`Live`, `Degraded`, or `No data`) on the selected source row as telemetry is received for that stream.
 5. Use **Nominal** or **Orbit nominal** when you want a stable realistic path on the globe. Use **Orbit decay**, **Orbit highly elliptical**, **Orbit suborbital**, or **Orbit escape** only when you intentionally want the orbit-analysis badges and alerting to exercise those cases.
 
 ## Orbit validation
@@ -87,7 +87,7 @@ To see a simulator’s position and trail on the globe:
 For sources that have a **position mapping** (and thus a position telemetry stream), the platform runs **orbit validation** in real time: it computes orbital parameters (perigee, apogee, eccentricity, velocity), classifies the orbit (LEO, MEO, GEO), and detects anomalies such as escape trajectory, suborbital, orbit decay, or highly elliptical LEO.
 
 - **Where to see status**
-  - **Planning page** — In the left panel, each source with a position mapping shows an orbit status badge (e.g. **LEO** for valid nominal, or the anomaly type). If any source currently shown on the globe has an orbit anomaly, a **red alert banner** appears in the left panel with the source name and reason.
+  - **Planning page** — In the left panel, each selected source row shows its own feed-health badge (`Live`, `Degraded`, or `No data`). Each source with a position mapping also shows an orbit status badge (e.g. **LEO** for valid nominal, or the anomaly type). If any source currently shown on the globe has an orbit anomaly, a **red alert banner** appears in the left panel with the source name and reason.
   - **Overview** — Orbit anomalies appear in the **Events Console** under an **Orbit** subsection (with a link to Planning). The **Alerts** count and dropdown in the Context Banner include orbit anomalies so you see them alongside telemetry alerts.
 
 - **What anomalies mean** — *Escape trajectory*: orbital energy ≥ 0 (unbound). *Suborbital*: velocity < 7 km/s at altitude < 1000 km. *Orbit decay*: predicted perigee below 120 km. *Highly elliptical*: eccentricity > 0.2 for an expected LEO mission. Status updates are pushed in real time over the same WebSocket as telemetry and alerts.

@@ -1,8 +1,10 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { FeedStatusBadge } from "@/components/feed-status-badge";
 import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
 import { useRealtimeFeedStatus } from "@/lib/realtime-telemetry-context";
+import type { FeedState } from "@/lib/feed-status";
 import { resolveSourceAlias } from "@/lib/source-ids";
 import {
   useSimulatorRuntime,
@@ -98,10 +100,10 @@ export function ContextBanner({
 
   const sourceLabel =
     sources.find((s) => s.id === sourceId)?.name ?? fallbackSourceLabel(sourceId);
-  const feedState = isSimulator && resolvedSimulatorStatus?.state === "idle"
+  const feedState: FeedState = isSimulator && resolvedSimulatorStatus?.state === "idle"
     ? "disconnected"
     :
-    (feedStatus?.state as "connected" | "degraded" | "disconnected" | undefined) ??
+    feedStatus?.state ??
     (feedStatus?.connected
       ? "connected"
       : feedStatus?.last_reception_time != null
@@ -161,27 +163,7 @@ export function ContextBanner({
       </div>
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground">Feed:</span>
-        <Badge
-          variant={
-            feedState === "connected"
-              ? "success"
-              : feedState === "degraded"
-                ? "secondary"
-                : "destructive"
-          }
-          className="text-xs"
-        >
-          {feedState === "connected" ? (
-            <>
-              <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
-              Live
-            </>
-          ) : feedState === "degraded" ? (
-            "Degraded"
-          ) : (
-            "No data"
-          )}
-        </Badge>
+        <FeedStatusBadge state={feedState} />
         {feedStatus?.approx_rate_hz != null && feedStatus.approx_rate_hz > 0 && (
           <span className="text-muted-foreground text-xs">
             ~{feedStatus.approx_rate_hz.toFixed(1)} Hz

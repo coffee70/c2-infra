@@ -21,11 +21,17 @@ import {
   fetchSimulatorRuntimeStatus,
   type SimulatorRuntimeStatus,
 } from "@/lib/simulator-runtime";
+import {
+  fetchFeedStatus,
+  type FeedState,
+  type FeedStatus,
+} from "@/lib/feed-status";
 import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { FeedStatusBadge } from "@/components/feed-status-badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -125,6 +131,9 @@ export function EarthOverviewView({
   const [simulatorRuntimeBySource, setSimulatorRuntimeBySource] = useState<
     Record<string, SimulatorRuntimeStatus>
   >({});
+  const [feedStatusBySource, setFeedStatusBySource] = useState<
+    Record<string, FeedStatus>
+  >({});
 
   const loadAllMappings = useCallback(async () => {
     setAllMappingsLoading(true);
@@ -148,6 +157,50 @@ export function EarthOverviewView({
     if (sources.length === 0) return;
     loadAllMappings();
   }, [sources.length, loadAllMappings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (selectedIds.length === 0) {
+        setFeedStatusBySource({});
+        return;
+      }
+
+      const entries = await Promise.all(
+        selectedIds.map(async (sourceId) => {
+          try {
+            const status = await fetchFeedStatus(sourceId);
+            return [sourceId, status] as const;
+          } catch {
+            return [sourceId, null] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      const next: Record<string, FeedStatus> = {};
+      for (const [sourceId, status] of entries) {
+        if (status) next[sourceId] = status;
+      }
+      setFeedStatusBySource(next);
+    }
+    load();
+    const interval = setInterval(load, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedIds]);
+
+  useEffect(() => {
+    setFeedStatusBySource((prev) => {
+      const next = { ...prev };
+      const selected = new Set(selectedIds);
+      for (const sourceId of Object.keys(next)) {
+        if (!selected.has(sourceId)) delete next[sourceId];
+      }
+      return next;
+    });
+  }, [selectedIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -382,10 +435,6 @@ export function EarthOverviewView({
     return () => { cancelled = true; };
   }, [expandedSourceId, sources]);
 
-  const liveStatus = useMemo(() => {
-    return positions.some((p) => p.valid) ? "live" : "stale";
-  }, [positions]);
-
   const effectivePositions = useMemo(() => {
     if (selectedIds.length === 0) return [];
     const set = new Set(selectedIds);
@@ -495,6 +544,22 @@ export function EarthOverviewView({
     return `${selectedIds.length} sources`;
   }, [sources, selectedIds]);
 
+  const feedStateBySource = useMemo<Record<string, FeedState>>(() => {
+    const next: Record<string, FeedState> = {};
+    for (const source of sources) {
+      const runtime = simulatorRuntimeBySource[source.id];
+      if (
+        source.source_type === "simulator" &&
+        (runtime?.connected === false || runtime?.state === "idle")
+      ) {
+        next[source.id] = "disconnected";
+        continue;
+      }
+      next[source.id] = feedStatusBySource[source.id]?.state ?? "disconnected";
+    }
+    return next;
+  }, [feedStatusBySource, simulatorRuntimeBySource, sources]);
+
   return (
     <div className="absolute inset-0 h-full min-h-0 w-full min-w-0">
       <div className="relative h-full min-h-0 w-full min-w-0">
@@ -504,22 +569,11 @@ export function EarthOverviewView({
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between gap-2">
                   <CardTitle className="text-sm">Earth view</CardTitle>
-                  <div className="flex items-center gap-2 text-[11px]">
-                    {liveStatus === "live" ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 px-2 py-0.5 font-medium text-green-700 dark:bg-green-500/30 dark:text-green-400">
-                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500 dark:bg-green-400" />
-                        Live
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/20 px-2 py-0.5 font-medium text-amber-700 dark:bg-amber-500/30 dark:text-amber-300">
-                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500 dark:bg-amber-300" />
-                        Stale
-                      </span>
-                    )}
-                    {lastUpdated && (
-                      <span className="text-muted-foreground">{lastUpdated.toLocaleTimeString()}</span>
-                    )}
-                  </div>
+                  {lastUpdated && (
+                    <div className="text-muted-foreground text-[11px]">
+                      {lastUpdated.toLocaleTimeString()}
+                    </div>
+                  )}
                 </div>
               </CardHeader>
               <CardContent className="space-y-5 pt-0">
@@ -612,7 +666,10 @@ export function EarthOverviewView({
                             open={open}
                             onOpenChange={(o) => setExpandedSourceId(o ? src.id : null)}
                           >
-                            <CollapsibleTrigger className="hover:bg-accent/50 hover:border-border data-[state=open]:border-border data-[state=open]:bg-accent/50 flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2 text-left text-xs">
+                            <CollapsibleTrigger
+                              data-testid={`planning-source-row-${src.id}`}
+                              className="hover:bg-accent/50 hover:border-border data-[state=open]:border-border data-[state=open]:bg-accent/50 flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2 text-left text-xs"
+                            >
                               {open ? (
                                 <ChevronDownIcon className="text-muted-foreground size-3.5 shrink-0" />
                               ) : (
@@ -622,6 +679,12 @@ export function EarthOverviewView({
                               <Badge variant="outline" className="shrink-0 text-[9px] uppercase">
                                 {typeLabel}
                               </Badge>
+                              {selectedIds.includes(src.id) && (
+                                <FeedStatusBadge
+                                  state={feedStateBySource[src.id] ?? "disconnected"}
+                                  className="ml-1.5 shrink-0"
+                                />
+                              )}
                               <span className="text-muted-foreground ml-auto truncate text-[11px]">
                                 {m ? mappingSummary(m) : "Not configured"}
                               </span>

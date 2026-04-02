@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Planning per-source feed health** — The Planning Earth view no longer shows one global `Live` banner for all selected sources. Each selected source now renders its own `Live` / `Degraded` / `No data` badge, and stopped simulators switch to `No data` immediately instead of inheriting another source’s live state.
 - **Simulator realtime runtime contract** — The simulator now sends `source_id` in realtime ingest payloads instead of the legacy runtime `vehicle_id`, restoring compatibility with `POST /telemetry/realtime/ingest`.
 - **Source-wide stream following and explicit stream pinning** — WebSocket subscriptions that omit `stream_id` now keep following the source’s active/latest stream across rollover, while explicitly selected streams remain pinned exactly, including explicit base-stream selections.
 - **History and overview stream selection** — The history table now sends the selected stream as `stream_id`, and Overview bootstrap/refresh requests keep the selected stream scope when reloading data.

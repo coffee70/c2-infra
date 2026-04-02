@@ -12,12 +12,14 @@ import {
 } from "react";
 import {
   RealtimeWsClient,
-  type FeedStatusMessage,
   type RealtimeChannelUpdate,
   type RealtimeMessage,
 } from "./realtime-ws-client";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import {
+  fetchFeedStatus,
+  normalizeFeedStatus,
+  type FeedStatus,
+} from "./feed-status";
 
 /** Single channel state: value, timestamp, state, and rolling live points for sparklines. */
 export interface LiveChannelState {
@@ -83,51 +85,6 @@ function toLiveState(
     subsystem_tag: ch.subsystem_tag,
     liveData: liveData ?? [],
     sparkline_data: spark ?? [],
-  };
-}
-
-type FeedState = "connected" | "degraded" | "disconnected";
-
-interface FeedStatusResponse {
-  source_id: string;
-  connected: boolean;
-  state?: FeedState;
-  last_reception_time: number | string | null;
-  approx_rate_hz?: number | null;
-}
-
-export interface FeedStatus {
-  source_id: string;
-  connected: boolean;
-  state: FeedState;
-  last_reception_time: string | null;
-  approx_rate_hz: number | null;
-}
-
-function deriveFeedState(status: {
-  connected: boolean;
-  state?: FeedState;
-  last_reception_time: number | string | null;
-}): FeedState {
-  if (status.state) return status.state;
-  if (status.connected) return "connected";
-  return status.last_reception_time != null ? "degraded" : "disconnected";
-}
-
-function normalizeFeedStatus(
-  status: FeedStatusMessage | FeedStatusResponse
-): FeedStatus {
-  const lastReceptionTime =
-    typeof status.last_reception_time === "number"
-      ? new Date(status.last_reception_time * 1000).toISOString()
-      : status.last_reception_time;
-
-  return {
-    source_id: status.source_id,
-    connected: status.connected,
-    state: deriveFeedState(status),
-    last_reception_time: lastReceptionTime,
-    approx_rate_hz: status.approx_rate_hz ?? null,
   };
 }
 
@@ -317,15 +274,12 @@ export function RealtimeTelemetryProvider({
   useEffect(() => {
     let cancelled = false;
 
-    fetch(`${API_URL}/ops/feed-status?source_id=${encodeURIComponent(sourceId)}`, {
-      cache: "no-store",
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: FeedStatusResponse | null) => {
+    fetchFeedStatus(sourceId)
+      .then((data) => {
         if (!cancelled && data) {
           setFeedStatusStore({
             sourceId,
-            feedStatus: normalizeFeedStatus(data),
+            feedStatus: data,
           });
         }
       })
