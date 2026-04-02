@@ -10,7 +10,7 @@ export default function PlanningPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-full flex items-center justify-center">
+        <div className="flex min-h-full items-center justify-center">
           <Spinner size="lg" className="h-10 w-10" />
         </div>
       }

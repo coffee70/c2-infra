@@ -84,8 +84,8 @@ export function EarthOverviewGlobe({
 
   if (!isClient) {
     return (
-      <div className="w-full h-full flex items-center justify-center bg-black/80">
-        <div className="text-sm text-muted-foreground">Preparing globe…</div>
+      <div className="flex h-full w-full items-center justify-center bg-black/80">
+        <div className="text-muted-foreground text-sm">Preparing globe…</div>
       </div>
     );
   }

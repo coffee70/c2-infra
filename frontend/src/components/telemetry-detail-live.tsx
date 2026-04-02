@@ -50,7 +50,7 @@ export function TelemetryDetailLive({
           variant="success"
           className="absolute top-2 right-2 gap-1.5"
         >
-          <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse opacity-80" />
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current opacity-80" />
           Live
         </Badge>
       )}

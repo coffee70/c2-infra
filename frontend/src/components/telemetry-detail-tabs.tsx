@@ -160,7 +160,7 @@ function TelemetryDetailTabsContent({
               <BreadcrumbLink asChild>
                 <Link
                   href="/sources"
-                  className="text-primary hover:underline underline-offset-4"
+                  className="text-primary underline-offset-4 hover:underline"
                 >
                   Sources
                 </Link>
@@ -169,7 +169,7 @@ function TelemetryDetailTabsContent({
             <BreadcrumbSeparator />
             <BreadcrumbItem>
               <BreadcrumbPage
-                className="truncate max-w-[200px]"
+                className="max-w-50 truncate"
                 title={sourceName}
               >
                 {sourceName}
@@ -178,7 +178,7 @@ function TelemetryDetailTabsContent({
             <BreadcrumbSeparator />
             <BreadcrumbItem>
               <BreadcrumbPage
-                className="truncate max-w-[200px]"
+                className="max-w-50 truncate"
                 title={decodedName}
               >
                 {decodedName}
@@ -190,7 +190,7 @@ function TelemetryDetailTabsContent({
         <div className="flex min-h-0 gap-12">
           <aside className="sticky top-20 shrink-0 self-start">
             <nav
-              className="flex flex-col gap-1 text-sm text-muted-foreground"
+              className="text-muted-foreground flex flex-col gap-1 text-sm"
               aria-label="Telemetry detail sections"
               role="tablist"
             >
@@ -198,7 +198,7 @@ function TelemetryDetailTabsContent({
                 type="button"
                 role="tab"
                 aria-selected={activeTab === "summary"}
-                className={`block rounded-md px-3 py-2 -ml-3 text-left transition-colors ${
+                className={`-ml-3 block rounded-md px-3 py-2 text-left transition-colors ${
                   activeTab === "summary"
                     ? "bg-muted text-foreground font-medium"
                     : "hover:bg-muted/50 hover:text-foreground"
@@ -211,7 +211,7 @@ function TelemetryDetailTabsContent({
                 type="button"
                 role="tab"
                 aria-selected={activeTab === "live"}
-                className={`block rounded-md px-3 py-2 -ml-3 text-left transition-colors ${
+                className={`-ml-3 block rounded-md px-3 py-2 text-left transition-colors ${
                   activeTab === "live"
                     ? "bg-muted text-foreground font-medium"
                     : "hover:bg-muted/50 hover:text-foreground"
@@ -224,7 +224,7 @@ function TelemetryDetailTabsContent({
                 type="button"
                 role="tab"
                 aria-selected={activeTab === "history"}
-                className={`block rounded-md px-3 py-2 -ml-3 text-left transition-colors ${
+                className={`-ml-3 block rounded-md px-3 py-2 text-left transition-colors ${
                   activeTab === "history"
                     ? "bg-muted text-foreground font-medium"
                     : "hover:bg-muted/50 hover:text-foreground"
@@ -237,7 +237,7 @@ function TelemetryDetailTabsContent({
                 type="button"
                 role="tab"
                 aria-selected={activeTab === "explanation"}
-                className={`block rounded-md px-3 py-2 -ml-3 text-left transition-colors ${
+                className={`-ml-3 block rounded-md px-3 py-2 text-left transition-colors ${
                   activeTab === "explanation"
                     ? "bg-muted text-foreground font-medium"
                     : "hover:bg-muted/50 hover:text-foreground"
@@ -253,7 +253,7 @@ function TelemetryDetailTabsContent({
             <div className="flex w-full max-w-5xl flex-col space-y-8">
               {activeTab === "summary" && (
                 <div
-                  className="space-y-8 w-full"
+                  className="w-full space-y-8"
                   role="tabpanel"
                   aria-label="Summary"
                 >
@@ -271,16 +271,16 @@ function TelemetryDetailTabsContent({
                   live={isLive}
                 />
 
-                <Card className="mt-2 border-muted">
+                <Card className="border-muted mt-2">
                   <CardHeader>
-                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                    <CardTitle className="text-muted-foreground text-sm font-medium">
                       Statistics
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
                     <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
-                        <dt className="text-xs text-muted-foreground">
+                        <dt className="text-muted-foreground text-xs">
                           Typical range (P5–P95)
                         </dt>
                         <dd className="mt-0.5 font-medium">
@@ -290,7 +290,7 @@ function TelemetryDetailTabsContent({
                         </dd>
                       </div>
                       <div>
-                        <dt className="text-xs text-muted-foreground">Spread</dt>
+                        <dt className="text-muted-foreground text-xs">Spread</dt>
                         <dd className="mt-0.5 font-medium">
                           {formatSmartValue(
                             explain.statistics.max_value -
@@ -300,7 +300,7 @@ function TelemetryDetailTabsContent({
                         </dd>
                       </div>
                       <div>
-                        <dt className="text-xs text-muted-foreground">
+                        <dt className="text-muted-foreground text-xs">
                           Extremes
                         </dt>
                         <dd className="mt-0.5 font-medium">
@@ -317,7 +317,7 @@ function TelemetryDetailTabsContent({
                         </dd>
                       </div>
                       <div>
-                        <dt className="text-xs text-muted-foreground">
+                        <dt className="text-muted-foreground text-xs">
                           N samples
                         </dt>
                         <dd className="mt-0.5 font-medium">
@@ -326,7 +326,7 @@ function TelemetryDetailTabsContent({
                       </div>
                     </dl>
                     <Separator className="my-3" />
-                    <div className="space-y-1.5 text-sm text-muted-foreground">
+                    <div className="text-muted-foreground space-y-1.5 text-sm">
                       <p>
                         5% of the time it&apos;s below{" "}
                         {formatSmartValue(explain.statistics.p5, explain.units)}
@@ -341,14 +341,14 @@ function TelemetryDetailTabsContent({
                       </p>
                     </div>
                     <Collapsible>
-                      <CollapsibleTrigger className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer data-[state=open]:[&_svg]:rotate-180">
+                      <CollapsibleTrigger className="text-muted-foreground hover:text-foreground flex cursor-pointer items-center gap-2 text-xs data-[state=open]:[&_svg]:rotate-180">
                         Mean, Std Dev
                         <ChevronDownIcon className="size-3.5 transition-transform duration-200" />
                       </CollapsibleTrigger>
                       <CollapsibleContent>
                         <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
                           <div>
-                            <dt className="text-xs text-muted-foreground">
+                            <dt className="text-muted-foreground text-xs">
                               Mean
                             </dt>
                             <dd>
@@ -359,7 +359,7 @@ function TelemetryDetailTabsContent({
                             </dd>
                           </div>
                           <div>
-                            <dt className="text-xs text-muted-foreground">
+                            <dt className="text-muted-foreground text-xs">
                               Std Dev
                             </dt>
                             <dd>
@@ -379,7 +379,7 @@ function TelemetryDetailTabsContent({
 
               {activeTab === "live" && (
                 <div
-                  className="space-y-6 w-full"
+                  className="w-full space-y-6"
                   role="tabpanel"
                   aria-label="Live telemetry and trends"
                 >
@@ -424,7 +424,7 @@ function TelemetryDetailTabsContent({
 
               {activeTab === "history" && (
                 <div
-                  className="space-y-6 w-full"
+                  className="w-full space-y-6"
                   role="tabpanel"
                   aria-label="Telemetry history table"
                 >
@@ -439,7 +439,7 @@ function TelemetryDetailTabsContent({
 
               {activeTab === "explanation" && (
                 <div
-                  className="space-y-6 w-full"
+                  className="w-full space-y-6"
                   role="tabpanel"
                   aria-label="Explanation and related events"
                 >

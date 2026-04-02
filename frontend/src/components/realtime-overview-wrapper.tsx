@@ -253,7 +253,6 @@ function RealtimeOverviewContent({
   initialAnomalies,
   sources,
   sourceId,
-  feedSourceId,
   initialSimulatorSourceId = null,
   initialSimulatorStatus = null,
   simulatorStatus = null,
@@ -492,7 +491,7 @@ function RealtimeOverviewContent({
       <div className="flex min-h-0 flex-col gap-6 md:flex-row md:gap-12">
         <aside className="shrink-0 md:sticky md:top-20 md:self-start">
           <nav
-            className="flex gap-2 overflow-x-auto pb-1 text-sm text-muted-foreground md:flex-col md:gap-1 md:overflow-visible md:pb-0"
+            className="text-muted-foreground flex gap-2 overflow-x-auto pb-1 text-sm md:flex-col md:gap-1 md:overflow-visible md:pb-0"
             aria-label="Overview sections"
             role="tablist"
           >
@@ -535,14 +534,14 @@ function RealtimeOverviewContent({
                           </span>
                         )}
                         {showSwitchingIndicator && (
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                          <span className="bg-muted text-muted-foreground inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium">
                             <Spinner className="size-3" />
                             Switching…
                           </span>
                         )}
                       </div>
                     </div>
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-muted-foreground text-sm">
                       Key channels: power, thermal, ADCS, comms
                     </p>
                   </CardHeader>

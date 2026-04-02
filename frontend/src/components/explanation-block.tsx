@@ -32,7 +32,7 @@ export function ExplanationBlock({ channelName, sourceId, streamId }: Explanatio
         </CardHeader>
         <CardContent className="flex items-center justify-center py-12">
           <Spinner className="h-8 w-8" />
-          <span className="ml-2 text-sm text-muted-foreground">
+          <span className="text-muted-foreground ml-2 text-sm">
             Generating explanation…
           </span>
         </CardContent>
@@ -47,7 +47,7 @@ export function ExplanationBlock({ channelName, sourceId, streamId }: Explanatio
           <CardTitle>Explanation</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-muted-foreground text-sm">
             Unable to load explanation. You can try again later.
           </p>
         </CardContent>
@@ -59,7 +59,7 @@ export function ExplanationBlock({ channelName, sourceId, streamId }: Explanatio
     <>
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle>Explanation</CardTitle>
             {data.confidence_indicator && (
               <Badge variant="secondary" className="text-xs font-normal">
@@ -70,7 +70,7 @@ export function ExplanationBlock({ channelName, sourceId, streamId }: Explanatio
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <h3 className="text-sm font-medium text-muted-foreground mb-1">
+            <h3 className="text-muted-foreground mb-1 text-sm font-medium">
               What this means
             </h3>
             <p className="text-base">
@@ -79,12 +79,12 @@ export function ExplanationBlock({ channelName, sourceId, streamId }: Explanatio
           </div>
           {data.llm_explanation && (
             <Collapsible>
-              <CollapsibleTrigger className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer data-[state=open]:[&_svg]:rotate-180">
+              <CollapsibleTrigger className="text-muted-foreground hover:text-foreground flex cursor-pointer items-center gap-2 text-xs data-[state=open]:[&_svg]:rotate-180">
                 Full explanation
                 <ChevronDownIcon className="size-3.5 transition-transform duration-200" />
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <p className="mt-2 whitespace-pre-wrap text-sm">
+                <p className="mt-2 text-sm whitespace-pre-wrap">
                   {data.llm_explanation}
                 </p>
               </CollapsibleContent>

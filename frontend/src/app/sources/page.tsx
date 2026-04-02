@@ -136,7 +136,7 @@ export default function SourcesPage() {
 
   if (loading) {
     return (
-      <div className="min-h-full p-4 sm:p-6 lg:p-8 flex items-center justify-center">
+      <div className="flex min-h-full items-center justify-center p-4 sm:p-6 lg:p-8">
         <Spinner size="lg" className="h-10 w-10" />
       </div>
     );
@@ -144,22 +144,22 @@ export default function SourcesPage() {
 
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8">
-      <div className="max-w-2xl mx-auto space-y-8">
+      <div className="mx-auto max-w-2xl space-y-8">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">Sources</h1>
+          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Sources</h1>
           <Button onClick={openWizard}>Add source</Button>
         </div>
 
         <Card>
           <CardHeader>
             <CardTitle>Vehicles</CardTitle>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-sm">
               Telemetry sources from physical or external ingest.
             </p>
           </CardHeader>
           <CardContent>
             {vehicles.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No vehicles registered.</p>
+              <p className="text-muted-foreground text-sm">No vehicles registered.</p>
             ) : (
               <ul className="space-y-2">
                 {vehicles.map((s) => {
@@ -167,13 +167,13 @@ export default function SourcesPage() {
                   return (
                     <li
                       key={s.id}
-                      className="flex flex-col gap-2 py-3 border-b last:border-0"
+                      className="flex flex-col gap-2 border-b py-3 last:border-0"
                     >
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <span className="font-medium">{s.name}</span>
                           {s.description && (
-                            <span className="ml-2 text-sm text-muted-foreground">
+                            <span className="text-muted-foreground ml-2 text-sm">
                               {s.description}
                             </span>
                           )}
@@ -207,7 +207,7 @@ export default function SourcesPage() {
                         </div>
                       </div>
                       {!isEditing ? (
-                        <p className="text-xs text-muted-foreground font-mono">
+                        <p className="text-muted-foreground font-mono text-xs">
                           {s.telemetry_definition_path || "—"}
                         </p>
                       ) : (
@@ -232,7 +232,7 @@ export default function SourcesPage() {
                               />
                             </div>
                           </div>
-                          {editError ? <p className="text-sm text-destructive">{editError}</p> : null}
+                          {editError ? <p className="text-destructive text-sm">{editError}</p> : null}
                         </div>
                       )}
                     </li>
@@ -246,13 +246,13 @@ export default function SourcesPage() {
         <Card>
           <CardHeader>
             <CardTitle>Simulators</CardTitle>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-sm">
               In-app or remote simulator instances. Add one to connect.
             </p>
           </CardHeader>
           <CardContent>
             {simulators.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No simulators. Add one to get started.</p>
+              <p className="text-muted-foreground text-sm">No simulators. Add one to get started.</p>
             ) : (
               <ul className="space-y-3">
                 {simulators.map((s) => {
@@ -262,9 +262,9 @@ export default function SourcesPage() {
                   return (
                     <li
                       key={s.id}
-                      className="flex flex-col gap-2 py-3 border-b last:border-0"
+                      className="flex flex-col gap-2 border-b py-3 last:border-0"
                     >
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{s.name}</span>
                           <SimulatorStatusBadge
@@ -308,7 +308,7 @@ export default function SourcesPage() {
                         </div>
                       </div>
                       {!isEditing ? (
-                        <div className="space-y-1 text-xs text-muted-foreground font-mono">
+                        <div className="text-muted-foreground space-y-1 font-mono text-xs">
                           <p>{s.base_url || "—"}</p>
                           <p>{s.telemetry_definition_path || "—"}</p>
                         </div>
@@ -335,11 +335,11 @@ export default function SourcesPage() {
                               />
                             </div>
                           </div>
-                          {editError ? <p className="text-sm text-destructive">{editError}</p> : null}
+                          {editError ? <p className="text-destructive text-sm">{editError}</p> : null}
                         </div>
                       )}
                       {isEditing ? (
-                        <p className="text-xs text-muted-foreground font-mono">
+                        <p className="text-muted-foreground font-mono text-xs">
                           Definition path is fixed by the simulator runtime: {s.telemetry_definition_path || "—"}
                         </p>
                       ) : null}
@@ -372,14 +372,14 @@ export default function SourcesPage() {
                   setWizardType("vehicle");
                   handleWizardNext();
                 }}
-                className="flex items-start gap-4 rounded-lg border border-input bg-background p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="border-input bg-background hover:bg-accent hover:text-accent-foreground flex items-start gap-4 rounded-lg border p-4 text-left transition-colors"
               >
-                <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                  <SatelliteIcon className="size-6 text-primary" />
+                <div className="bg-primary/10 flex size-12 shrink-0 items-center justify-center rounded-lg">
+                  <SatelliteIcon className="text-primary size-6" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">Vehicle</p>
-                  <p className="mt-0.5 text-sm text-muted-foreground">
+                  <p className="text-muted-foreground mt-0.5 text-sm">
                     Register a physical spacecraft or external telemetry stream using a shared telemetry definition file.
                   </p>
                 </div>
@@ -390,14 +390,14 @@ export default function SourcesPage() {
                   setWizardType("simulator");
                   handleWizardNext();
                 }}
-                className="flex items-start gap-4 rounded-lg border border-input bg-background p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+                className="border-input bg-background hover:bg-accent hover:text-accent-foreground flex items-start gap-4 rounded-lg border p-4 text-left transition-colors"
               >
-                <div className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                  <CpuIcon className="size-6 text-primary" />
+                <div className="bg-primary/10 flex size-12 shrink-0 items-center justify-center rounded-lg">
+                  <CpuIcon className="text-primary size-6" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">Simulator</p>
-                  <p className="mt-0.5 text-sm text-muted-foreground">
+                  <p className="text-muted-foreground mt-0.5 text-sm">
                     Add an in-app or remote simulator instance backed by a source-specific telemetry definition file.
                   </p>
                 </div>
@@ -435,13 +435,13 @@ export default function SourcesPage() {
                     placeholder="http://simulator:8001"
                     className="mt-1"
                   />
-                  <p className="text-xs text-muted-foreground mt-1">
+                  <p className="text-muted-foreground mt-1 text-xs">
                     URL the server uses to reach the simulator (e.g. http://simulator:8001).
                   </p>
                 </div>
               ) : null}
               {wizardError && (
-                <p className="text-sm text-destructive">{wizardError}</p>
+                <p className="text-destructive text-sm">{wizardError}</p>
               )}
             </div>
           )}

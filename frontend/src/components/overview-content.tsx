@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { WatchlistConfig } from "@/components/watchlist-config";
 import { RealtimeOverviewWrapper } from "@/components/realtime-overview-wrapper";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -200,7 +200,6 @@ async function fetchOverviewSnapshot(
 }
 
 export function OverviewContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const sourceFromUrl = searchParams.get("source");
   const unavailableChannel = searchParams.get("channel_unavailable");
@@ -234,7 +233,7 @@ export function OverviewContent() {
     setError(unavailableMessage);
   }, [unavailableChannel, unavailableMessage]);
 
-  let effectiveSource = resolveSourceAlias(
+  const effectiveSource = resolveSourceAlias(
     sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID
   );
   const sourceReady = sourceFromUrl !== null || storageChecked;
@@ -468,7 +467,14 @@ export function OverviewContent() {
     return () => {
       cancelled = true;
     };
-  }, [bootstrapLoading, committedStreamId, desiredStreamId, sourceReady, unavailableMessage]);
+  }, [
+    bootstrapLoading,
+    committedStreamId,
+    desiredStreamId,
+    effectiveSource,
+    sourceReady,
+    unavailableMessage,
+  ]);
 
   useEffect(() => {
     if (isSwitchingStreams || !showSwitchingIndicator) return;
@@ -487,16 +493,16 @@ export function OverviewContent() {
   if (!sourceReady || bootstrapLoading) {
     return (
       <div className="min-h-full p-4 sm:p-6 lg:p-8">
-        <div className="max-w-6xl mx-auto space-y-8">
+        <div className="mx-auto max-w-6xl space-y-8">
           <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               Operator Overview
             </h1>
           </div>
           <div className="flex min-h-64 items-center justify-center">
             <div className="flex flex-col items-center gap-4">
               <Spinner size="lg" className="h-10 w-10" />
-              <p className="text-sm text-muted-foreground">Loading overview…</p>
+              <p className="text-muted-foreground text-sm">Loading overview…</p>
             </div>
           </div>
         </div>
@@ -507,9 +513,9 @@ export function OverviewContent() {
   if (bootstrapFailed) {
     return (
       <div className="min-h-full p-4 sm:p-6 lg:p-8">
-        <div className="max-w-6xl mx-auto space-y-8">
+        <div className="mx-auto max-w-6xl space-y-8">
           <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               Operator Overview
             </h1>
           </div>
@@ -534,7 +540,7 @@ export function OverviewContent() {
 
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8">
-      <div className="max-w-6xl mx-auto space-y-8">
+      <div className="mx-auto max-w-6xl space-y-8">
         {error && (
           <Alert variant="destructive">
             <AlertDescription>
@@ -544,7 +550,7 @@ export function OverviewContent() {
         )}
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               Operator Overview
             </h1>
           </div>

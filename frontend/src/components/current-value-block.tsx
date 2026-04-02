@@ -92,7 +92,7 @@ export function CurrentValueBlock({
           <div className="text-6xl font-bold tabular-nums">
             {formatWithUnits(value, units)}
           </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+          <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
             {lastTimestamp && (
               <>
                 <span>

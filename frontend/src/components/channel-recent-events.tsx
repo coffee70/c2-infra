@@ -49,7 +49,7 @@ export function ChannelRecentEvents({
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium text-muted-foreground">
+          <CardTitle className="text-muted-foreground text-sm font-medium">
             Recent events for this channel
           </CardTitle>
         </CardHeader>
@@ -64,12 +64,12 @@ export function ChannelRecentEvents({
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium text-muted-foreground">
+          <CardTitle className="text-muted-foreground text-sm font-medium">
             Recent events for this channel
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-muted-foreground text-sm">
             No events in the last {sinceMinutes} minutes.
           </p>
         </CardContent>
@@ -80,7 +80,7 @@ export function ChannelRecentEvents({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium text-muted-foreground">
+        <CardTitle className="text-muted-foreground text-sm font-medium">
           Recent events for this channel
         </CardTitle>
       </CardHeader>
@@ -89,7 +89,7 @@ export function ChannelRecentEvents({
           {events.map((e) => (
             <li
               key={e.id}
-              className="flex flex-wrap items-center gap-2 text-sm border-b border-border/50 pb-2 last:border-0 last:pb-0"
+              className="border-border/50 flex flex-wrap items-center gap-2 border-b pb-2 text-sm last:border-0 last:pb-0"
             >
               <Badge
                 variant={e.severity === "warning" ? "destructive" : "secondary"}

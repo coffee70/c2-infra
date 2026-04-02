@@ -97,22 +97,22 @@ export function WatchlistCard({
   return (
     <Link
       href={href}
-      className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-lg"
+      className="focus-visible:ring-ring block rounded-lg focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
     >
       <Card
-        className={`hover:bg-accent/50 active:bg-accent/70 transition-colors duration-200 cursor-pointer h-full ${
+        className={`hover:bg-accent/50 active:bg-accent/70 h-full cursor-pointer transition-colors duration-200 ${
           stale ? "border-destructive/30" : ""
         }`}
       >
-        <CardHeader className="pb-2 min-w-0 overflow-hidden">
-          <div className="flex items-center justify-between gap-2 min-w-0">
-            <span className="font-medium text-sm truncate min-w-0">{name}</span>
+        <CardHeader className="min-w-0 overflow-hidden pb-2">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-sm font-medium">{name}</span>
             <Badge
               variant={stateVariant}
-              className="text-xs max-w-[130px] min-w-0 overflow-hidden"
+              className="max-w-[130px] min-w-0 overflow-hidden text-xs"
               title={tooltipTitle}
             >
-              <span className="truncate block">
+              <span className="block truncate">
                 {stateLabel}
                 {hasData && stateReason && (
                   <span className="ml-1 opacity-80">
@@ -127,14 +127,14 @@ export function WatchlistCard({
             <div className="text-2xl font-bold">
               {formatWithUnits(currentValue, units)}
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <div className="text-muted-foreground flex items-center gap-2 text-xs">
               <span>Last update: {formatTimeAgo(lastTimestamp)}</span>
               {hasData && stale && (
                 <span
-                  className="inline-flex items-center gap-1 rounded bg-destructive/20 px-1.5 py-0.5 text-destructive"
+                  className="bg-destructive/20 text-destructive inline-flex items-center gap-1 rounded px-1.5 py-0.5"
                   title="Data is stale (no update in 15+ minutes)"
                 >
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-destructive" />
+                  <span className="bg-destructive inline-block h-1.5 w-1.5 rounded-full" />
                   Stale
                 </span>
               )}

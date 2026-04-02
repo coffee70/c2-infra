@@ -109,7 +109,7 @@ export function ContextBanner({
         : "disconnected");
 
   return (
-    <div className="flex flex-wrap items-center gap-3 py-2 px-4 border-b bg-muted/30 text-sm">
+    <div className="bg-muted/30 flex flex-wrap items-center gap-3 border-b px-4 py-2 text-sm">
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground font-medium">Source:</span>
         {sources.length > 1 && onSourceChange ? (
@@ -173,7 +173,7 @@ export function ContextBanner({
         >
           {feedState === "connected" ? (
             <>
-              <span className="mr-1 inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+              <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
               Live
             </>
           ) : feedState === "degraded" ? (
@@ -210,13 +210,13 @@ export function ContextBanner({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex cursor-pointer items-center gap-1 rounded-md outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                  className="ring-offset-background focus-visible:ring-ring inline-flex cursor-pointer items-center gap-1 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-offset-1"
                   aria-label="View alerts"
                 >
                   <Badge variant="destructive" className="text-xs">
                     {activeAlertCount}
                   </Badge>
-                  <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+                  <ChevronDownIcon className="text-muted-foreground size-3.5" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="max-w-[280px]">
@@ -244,7 +244,7 @@ export function ContextBanner({
                 onAlertsClick?.();
                 scrollToAlerts(scrollToAlertsId);
               }}
-              className="inline-flex cursor-pointer items-center outline-none ring-offset-background hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+              className="ring-offset-background focus-visible:ring-ring inline-flex cursor-pointer items-center outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-offset-1"
               aria-label="Scroll to Events Console"
             >
               <Badge variant="destructive" className="text-xs">

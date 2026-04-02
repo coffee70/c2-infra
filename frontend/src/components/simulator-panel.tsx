@@ -207,7 +207,7 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
   const isEmbedded = onClose != null;
 
   return (
-    <div className={isEmbedded ? "space-y-6 border rounded-lg p-6 bg-card" : "space-y-6"}>
+    <div className={isEmbedded ? "bg-card space-y-6 rounded-lg border p-6" : "space-y-6"}>
       <div className={isEmbedded ? "space-y-6" : "space-y-8"}>
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-xl font-semibold tracking-tight">Telemetry Simulator</h2>
@@ -236,7 +236,7 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
           </CardHeader>
           <CardContent className="space-y-2">
             <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">State:</span>
+              <span className="text-muted-foreground text-sm">State:</span>
               <SimulatorStatusBadge
                 connected={connected}
                 state={status?.state}
@@ -244,7 +244,7 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
             </div>
             {connected && state !== "idle" && elapsedDisplay != null && (
               <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">Elapsed:</span>
+                <span className="text-muted-foreground text-sm">Elapsed:</span>
                 <span className="font-mono">{elapsedDisplay.toFixed(1)}s</span>
               </div>
             )}
@@ -275,7 +275,7 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
                 </SelectContent>
               </Select>
               {selectedScenario ? (
-                <p className="text-sm text-muted-foreground">{selectedScenario.description}</p>
+                <p className="text-muted-foreground text-sm">{selectedScenario.description}</p>
               ) : null}
             </div>
             <div className="grid gap-2">
@@ -286,7 +286,7 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
                   onCheckedChange={(c) => setRunForever(!!c)}
                   disabled={!canEdit}
                 />
-                <Label htmlFor="run-forever" className="font-normal cursor-pointer">
+                <Label htmlFor="run-forever" className="cursor-pointer font-normal">
                   Run forever
                 </Label>
               </div>
@@ -357,7 +357,7 @@ export function SimulatorPanel({ sourceId, onClose }: SimulatorPanelProps) {
             >
               {loading && state === "idle" ? (
                 <>
-                  <Spinner size="sm" className="mr-2 border-primary-foreground border-t-transparent" />
+                  <Spinner size="sm" className="border-primary-foreground mr-2 border-t-transparent" />
                   Starting...
                 </>
               ) : (
