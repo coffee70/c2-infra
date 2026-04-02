@@ -14,7 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from starlette.websockets import WebSocketDisconnect
 
-from app.models.schemas import MeasurementEvent, RealtimeChannelUpdate
+from app.models.schemas import MeasurementEvent, MeasurementEventBatch, RealtimeChannelUpdate
 from app.models.telemetry import TelemetryAlert, TelemetryMetadata, TelemetrySource
 from app.realtime.bus import InProcessEventBus
 from app.realtime.processor import (
@@ -23,7 +23,7 @@ from app.realtime.processor import (
     _resolve_measurement_channel,
 )
 from app.routes.realtime import _normalize_event_times, _validate_stream_batch_identities, websocket_realtime
-from app.services.source_stream_service import StreamIdConflictError
+from app.services.source_stream_service import SourceNotFoundError, StreamIdConflictError
 from app.services.telemetry_service import _compute_state
 
 
@@ -362,6 +362,208 @@ async def test_websocket_realtime_resolves_latest_stream_without_explicit_stream
         assert "snapshot_alerts" in ws.sent_texts[0]
     else:
         assert "stream-1" in ws.sent_texts[0]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("message_type", ["subscribe_watchlist", "subscribe_channel", "subscribe_alerts"])
+async def test_websocket_realtime_rejects_explicit_stream_outside_source_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    message_type: str,
+) -> None:
+    class FakeSession:
+        def __init__(self) -> None:
+            self.close = MagicMock()
+
+    class FakeHub:
+        def __init__(self) -> None:
+            self.subscriptions: list[tuple[object, ...]] = []
+            self.disconnected = False
+
+        async def connect(self, websocket) -> None:
+            await websocket.accept()
+
+        async def disconnect(self, websocket) -> None:
+            self.disconnected = True
+
+        async def subscribe_watchlist(self, websocket, channels, source_id="default", stream_id=None) -> None:
+            self.subscriptions.append(("watchlist", list(channels), source_id, stream_id))
+
+        async def subscribe_channel(self, websocket, name, source_id="default", stream_id=None) -> None:
+            self.subscriptions.append(("channel", name, source_id, stream_id))
+
+        async def subscribe_alerts(self, websocket, source_id="default", stream_id=None) -> None:
+            self.subscriptions.append(("alerts", source_id, stream_id))
+
+    class FakeWebSocket:
+        def __init__(self, messages: list[str]) -> None:
+            self._messages = list(messages)
+            self.sent_texts: list[str] = []
+
+        async def accept(self) -> None:
+            return None
+
+        async def receive_text(self) -> str:
+            if self._messages:
+                return self._messages.pop(0)
+            raise WebSocketDisconnect(code=1000)
+
+        async def send_text(self, text: str) -> None:
+            self.sent_texts.append(text)
+
+    fake_hub = FakeHub()
+    monkeypatch.setattr("app.routes.realtime.get_ws_hub", lambda: fake_hub)
+    monkeypatch.setattr("app.routes.realtime.get_session_factory", lambda: lambda: FakeSession())
+    monkeypatch.setattr(
+        "app.routes.realtime.ensure_stream_belongs_to_source",
+        lambda _db, _source_id, _stream_id: (_ for _ in ()).throw(ValueError("Stream not found for source")),
+    )
+
+    message_by_type = {
+        "subscribe_watchlist": {
+            "type": "subscribe_watchlist",
+            "source_id": "source-a",
+            "stream_id": "source-b-stream",
+            "channels": ["VBAT"],
+        },
+        "subscribe_channel": {
+            "type": "subscribe_channel",
+            "source_id": "source-a",
+            "stream_id": "source-b-stream",
+            "name": "VBAT",
+        },
+        "subscribe_alerts": {
+            "type": "subscribe_alerts",
+            "source_id": "source-a",
+            "stream_id": "source-b-stream",
+        },
+    }
+
+    ws = FakeWebSocket([json.dumps(message_by_type[message_type])])
+
+    await websocket_realtime(ws)
+
+    assert fake_hub.subscriptions == []
+    assert fake_hub.disconnected is True
+    assert ws.sent_texts == []
+
+
+@pytest.mark.anyio
+async def test_ingest_realtime_validates_stream_batch_before_ack(monkeypatch: pytest.MonkeyPatch) -> None:
+    call_order: list[str] = []
+
+    class FakeBus:
+        def measurement_queue_size(self) -> int:
+            return 0
+
+        def measurement_queue_maxsize(self) -> int:
+            return 100
+
+        def publish_measurement(self, event: MeasurementEvent) -> bool:
+            call_order.append(f"publish:{event.channel_name}")
+            return True
+
+    class FakeSession:
+        def rollback(self) -> None:
+            call_order.append("rollback")
+
+        def close(self) -> None:
+            call_order.append("close")
+
+    monkeypatch.setattr("app.routes.realtime.get_session_factory", lambda: lambda: FakeSession())
+    monkeypatch.setattr("app.routes.realtime.get_realtime_bus", lambda: FakeBus())
+    monkeypatch.setattr(
+        "app.routes.realtime._validate_stream_batch_identities",
+        lambda _db, _events: call_order.append("validated"),
+    )
+    monkeypatch.setattr("app.routes.realtime.audit_log", lambda *args, **kwargs: None)
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(request_id=None),
+        headers={},
+        method="POST",
+        url=SimpleNamespace(path="/telemetry/realtime/ingest"),
+    )
+    body = MeasurementEventBatch(
+        events=[
+            MeasurementEvent(
+                source_id="source-a",
+                stream_id="stream-a",
+                channel_name="VBAT",
+                generation_time="2026-03-30T12:00:00+00:00",
+                value=1.0,
+            )
+        ]
+    )
+
+    response = await __import__("app.routes.realtime", fromlist=["ingest_realtime"]).ingest_realtime(body, request)
+
+    assert response == {"accepted": 1}
+    assert call_order[:2] == ["validated", "publish:VBAT"]
+
+
+@pytest.mark.anyio
+async def test_ingest_realtime_does_not_ack_failed_stream_batch_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[str] = []
+
+    class FakeBus:
+        def measurement_queue_size(self) -> int:
+            return 0
+
+        def measurement_queue_maxsize(self) -> int:
+            return 100
+
+        def publish_measurement(self, event: MeasurementEvent) -> bool:
+            published.append(event.channel_name)
+            return True
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.rollback_calls = 0
+            self.close_calls = 0
+
+        def rollback(self) -> None:
+            self.rollback_calls += 1
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    session = FakeSession()
+    monkeypatch.setattr("app.routes.realtime.get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr("app.routes.realtime.get_realtime_bus", lambda: FakeBus())
+    monkeypatch.setattr(
+        "app.routes.realtime._validate_stream_batch_identities",
+        lambda _db, _events: (_ for _ in ()).throw(SourceNotFoundError("Source not found: source-a")),
+    )
+    monkeypatch.setattr("app.routes.realtime.audit_log", lambda *args, **kwargs: None)
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(request_id=None),
+        headers={},
+        method="POST",
+        url=SimpleNamespace(path="/telemetry/realtime/ingest"),
+    )
+    body = MeasurementEventBatch(
+        events=[
+            MeasurementEvent(
+                source_id="source-a",
+                stream_id="stream-a",
+                channel_name="VBAT",
+                generation_time="2026-03-30T12:00:00+00:00",
+                value=1.0,
+            )
+        ]
+    )
+
+    realtime_module = __import__("app.routes.realtime", fromlist=["ingest_realtime"])
+    with pytest.raises(HTTPException) as exc_info:
+        await realtime_module.ingest_realtime(body, request)
+
+    assert exc_info.value.status_code == 404
+    assert published == []
+    assert session.rollback_calls == 1
+    assert session.close_calls == 1
 
 
 @pytest.mark.anyio

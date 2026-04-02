@@ -215,9 +215,7 @@ export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
   const {
     initialChannels,
     sourceId,
-    feedSourceId,
   } = props;
-  const effectiveStreamId = feedSourceId ?? sourceId;
   const channelNames = useMemo(
     () => initialChannels.map((ch) => ch.name),
     [initialChannels]
@@ -243,7 +241,7 @@ export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
     <RealtimeTelemetryProvider
       channelNames={channelNames}
       sourceId={sourceId}
-      streamId={feedSourceId ?? null}
+      streamId={null}
       initialChannels={initialChannelsForProvider}
     >
       <RealtimeOverviewContent {...props} />
@@ -269,14 +267,14 @@ function RealtimeOverviewContent({
   const [currentHash, setCurrentHash] = useState<string>(
     typeof window !== "undefined" ? window.location.hash : ""
   );
-  const effectiveStreamId = feedSourceId ?? sourceId;
-  const activeStreamRef = useRef(effectiveStreamId);
+  const activeScopeId = sourceId;
+  const activeStreamRef = useRef(activeScopeId);
   const [alertStore, setAlertStore] = useState<{
     streamId: string;
     alerts: TelemetryAlert[];
     hasLoaded: boolean;
   }>({
-    streamId: effectiveStreamId,
+    streamId: activeScopeId,
     alerts: [],
     hasLoaded: false,
   });
@@ -286,10 +284,10 @@ function RealtimeOverviewContent({
   const pathname = usePathname();
   const { channelsArray, isLive: live, client } = useRealtimeTelemetry();
   const visibleAlertStore =
-    alertStore.streamId === effectiveStreamId
+    alertStore.streamId === activeScopeId
       ? alertStore
       : {
-          streamId: effectiveStreamId,
+          streamId: activeScopeId,
           alerts: [],
           hasLoaded: false,
         };
@@ -310,8 +308,8 @@ function RealtimeOverviewContent({
     ?? (isOverviewTabId(requestedTab) ? requestedTab : "watchlist");
 
   useEffect(() => {
-    activeStreamRef.current = effectiveStreamId;
-  }, [effectiveStreamId]);
+    activeStreamRef.current = activeScopeId;
+  }, [activeScopeId]);
 
   const selectTab = useCallback(
     (tab: OverviewTabId, options?: { preserveHash?: boolean }) => {
@@ -404,11 +402,11 @@ function RealtimeOverviewContent({
   useEffect(() => {
     if (!client) return;
     const unsub = client.subscribe(handleAlertsAndOrbit);
-    client.subscribeAlerts(sourceId, feedSourceId ?? null);
+    client.subscribeAlerts(sourceId, null);
     return () => {
       unsub();
     };
-  }, [client, feedSourceId, sourceId, handleAlertsAndOrbit]);
+  }, [client, sourceId, handleAlertsAndOrbit]);
 
   useEffect(() => {
     let cancelled = false;
@@ -609,7 +607,7 @@ function RealtimeOverviewContent({
 
             {activeTab === "event-history" && (
               <div role="tabpanel" aria-label="Event History" className="w-full">
-                <OpsEventHistory vehicleId={sourceId} streamId={effectiveStreamId} />
+                <OpsEventHistory vehicleId={sourceId} />
               </div>
             )}
           </div>

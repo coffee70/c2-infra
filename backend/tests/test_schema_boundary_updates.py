@@ -338,6 +338,41 @@ def test_resolve_requested_stream_id_rejects_invalid_explicit_stream(monkeypatch
     assert exc_info.value.status_code == 404
 
 
+def test_get_recent_values_db_only_preserves_explicit_stream_scope(monkeypatch) -> None:
+    timestamp = datetime(2026, 3, 31, 12, 0, tzinfo=timezone.utc)
+    telemetry_id = uuid4()
+    captured_params: list[dict[str, object]] = []
+    db = MagicMock()
+
+    monkeypatch.setattr(
+        telemetry_routes,
+        "resolve_latest_stream_id",
+        lambda _db, source_id: source_id,
+    )
+    monkeypatch.setattr(
+        telemetry_routes,
+        "_get_channel_meta",
+        lambda _db, _source_id, _name: SimpleNamespace(id=telemetry_id),
+    )
+
+    def fake_execute(statement):
+        compiled = statement.compile()
+        captured_params.append(dict(compiled.params))
+        return _FetchAllResult([(timestamp, 1.0)])
+
+    db.execute.side_effect = fake_execute
+
+    rows = telemetry_routes._get_recent_values_db_only(
+        db,
+        "VBAT",
+        limit=5,
+        source_id="stream-a",
+    )
+
+    assert rows == [(timestamp, 1.0)]
+    assert any("stream-a" in params.values() for params in captured_params)
+
+
 def test_validate_stream_batch_identities_rejects_unknown_source() -> None:
     db = MagicMock()
     db.get.return_value = None

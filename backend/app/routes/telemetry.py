@@ -74,6 +74,7 @@ from app.services.source_stream_service import (
     register_stream,
     StreamIdConflictError,
     resolve_active_stream_id,
+    resolve_latest_stream_id,
 )
 from app.config import get_settings
 from app.lib.audit import audit_log
@@ -730,7 +731,7 @@ def _get_recent_values_db_only(
     source_id: str = "default",
 ) -> list[tuple[datetime, float]]:
     """Get recent values using only DB—no embedding/LLM cold start. source_id filters when telemetry_data is source-aware."""
-    data_source_id = resolve_active_stream_id(db, source_id)
+    data_source_id = resolve_latest_stream_id(db, source_id)
     meta = _get_channel_meta(db, source_id, name)
     if not meta:
         raise ValueError(f"Telemetry not found: {name}")

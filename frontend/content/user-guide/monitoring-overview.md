@@ -70,6 +70,8 @@ Each source has at most one active position mapping. If a source has no valid ma
 
 On channel detail pages, the **History** stream picker is explicit: choosing a stream pins history queries to that stream, while **Active / latest** keeps the page on the source’s current stream.
 
+If you open a channel detail page without `?stream_id=...`, the page stays source-scoped by default. Summary, recent values, and live updates follow the source’s current stream instead of freezing on the stream that happened to be current when the page first loaded.
+
 ### Workflow: Simulator on the Planning globe
 
 To see a simulator’s position and trail on the globe:

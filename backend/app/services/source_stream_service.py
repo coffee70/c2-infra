@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, TypeVar
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -472,15 +472,50 @@ def resolve_latest_stream_id(db: Session, source_id: str, *, timeout: float = 2.
     if resolved != logical_source_id:
         return resolved
 
-    latest_stream_id = (
+    latest_registry_row = (
         db.execute(
-            select(TelemetryStream.id)
+            select(TelemetryStream.id, TelemetryStream.last_seen_at)
             .where(TelemetryStream.source_id == logical_source_id)
             .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
         )
-        .scalars()
         .first()
     )
-    if isinstance(latest_stream_id, str) and latest_stream_id:
-        return latest_stream_id
+    latest_history_row = (
+        db.execute(
+            select(
+                TelemetryData.stream_id,
+                func.max(TelemetryData.timestamp).label("last_seen_at"),
+            )
+            .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
+            .where(TelemetryMetadata.source_id == logical_source_id)
+            .group_by(TelemetryData.stream_id)
+            .order_by(desc(func.max(TelemetryData.timestamp)), desc(TelemetryData.stream_id))
+        )
+        .first()
+    )
+
+    latest_visible_stream_id: str | None = None
+    latest_visible_seen_at: datetime | None = None
+
+    if latest_registry_row is not None:
+        latest_visible_stream_id = latest_registry_row[0]
+        latest_visible_seen_at = latest_registry_row[1]
+
+    if latest_history_row is not None:
+        history_stream_id, history_seen_at = latest_history_row
+        if (
+            latest_visible_stream_id is None
+            or (
+                isinstance(history_seen_at, datetime)
+                and (
+                    latest_visible_seen_at is None
+                    or history_seen_at >= latest_visible_seen_at
+                )
+            )
+        ):
+            latest_visible_stream_id = history_stream_id
+            latest_visible_seen_at = history_seen_at
+
+    if isinstance(latest_visible_stream_id, str) and latest_visible_stream_id:
+        return latest_visible_stream_id
     return logical_source_id

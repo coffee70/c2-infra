@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **History run ordering** — the history run dropdown now preserves the backend ordering for opaque `stream_id` values instead of re-sorting them lexicographically on the client.
 - **Stream resolution freshness** — `resolve_active_stream_id()` now prefers live simulator `/status` data before trusting persisted active stream rows, and ignores stale active rows when runtime state is unavailable.
 - **Historical stream backfill** — migration `015` now seeds discovered telemetry streams as `idle` so old runs do not become current immediately after upgrade.
+- **Default follow vs explicit stream pinning** — Overview live subscriptions and ops history now stay source-scoped by default across stream rollover, telemetry detail pages no longer pin themselves to a concrete stream unless `stream_id` was explicitly requested, explicit stream history requests remain pinned through fallback paths, and latest-stream resolution now includes history-backed streams that are visible even without current registry rows.
 
 ### Added
 

@@ -92,43 +92,6 @@ async function fetchRecent(
   }
 }
 
-async function fetchLatestChannelStreamId(
-  name: string,
-  sourceId: string,
-): Promise<string | null> {
-  try {
-    const res = await fetch(
-      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/streams`,
-      { cache: "no-store" },
-    );
-    if (!res.ok) return null;
-    const data = await res.json() as { sources?: Array<{ stream_id?: string }> };
-    const latestStream = Array.isArray(data.sources) ? data.sources[0] : null;
-    return typeof latestStream?.stream_id === "string" && latestStream.stream_id
-      ? latestStream.stream_id
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchLatestStreamId(sourceId: string): Promise<string | null> {
-  try {
-    const res = await fetch(
-      `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/streams`,
-      { cache: "no-store" },
-    );
-    if (!res.ok) return null;
-    const data = await res.json() as { sources?: Array<{ stream_id?: string }> };
-    const latestStream = Array.isArray(data.sources) ? data.sources[0] : null;
-    return typeof latestStream?.stream_id === "string" && latestStream.stream_id
-      ? latestStream.stream_id
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 export default async function TelemetryDetailPage({
   params,
   searchParams,
@@ -147,14 +110,9 @@ export default async function TelemetryDetailPage({
       : null;
   const sourceId = requestedSourceId;
 
-  const currentStreamId =
-    requestedStreamId ??
-    (await fetchLatestChannelStreamId(decodedName, sourceId)) ??
-    (await fetchLatestStreamId(sourceId));
-
   const [explain, recentData] = await Promise.all([
-    fetchSummary(decodedName, sourceId, currentStreamId),
-    fetchRecent(decodedName, sourceId, currentStreamId),
+    fetchSummary(decodedName, sourceId, requestedStreamId),
+    fetchRecent(decodedName, sourceId, requestedStreamId),
   ]);
 
   if (!explain) {
@@ -178,7 +136,7 @@ export default async function TelemetryDetailPage({
       explain={explain}
       recentData={recentData}
       sourceId={sourceId}
-      currentStreamId={currentStreamId}
+      currentStreamId={requestedStreamId}
       decodedName={decodedName}
     />
   );

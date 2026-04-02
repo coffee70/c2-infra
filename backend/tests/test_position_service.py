@@ -156,6 +156,7 @@ def test_resolve_latest_stream_id_preserves_explicit_stream_id(monkeypatch) -> N
 
 def test_resolve_latest_stream_id_recovers_most_recent_stream_when_idle(monkeypatch) -> None:
     latest_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    latest_seen_at = datetime(2026, 3, 13, 17, 12, 34, tzinfo=timezone.utc)
     db = MagicMock()
     monkeypatch.setattr(
         "app.services.source_stream_service.get_stream_source_id",
@@ -165,9 +166,54 @@ def test_resolve_latest_stream_id_recovers_most_recent_stream_when_idle(monkeypa
         "app.services.source_stream_service.resolve_active_stream_id",
         lambda _db, source_id, timeout=2.0: source_id,
     )
-    db.execute.return_value = _ScalarResult(latest_stream_id)
+    db.execute.side_effect = [
+        _ScalarResult((latest_stream_id, latest_seen_at)),
+        _EmptyResult(),
+    ]
 
     assert resolve_latest_stream_id(db, DROGONSAT_SOURCE_ID) == latest_stream_id
+
+
+def test_resolve_latest_stream_id_uses_history_only_stream_when_registry_missing(monkeypatch) -> None:
+    history_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-14T17-12-34Z"
+    history_seen_at = datetime(2026, 3, 14, 17, 12, 34, tzinfo=timezone.utc)
+    db = MagicMock()
+    monkeypatch.setattr(
+        "app.services.source_stream_service.get_stream_source_id",
+        lambda _db, _source_id: None,
+    )
+    monkeypatch.setattr(
+        "app.services.source_stream_service.resolve_active_stream_id",
+        lambda _db, source_id, timeout=2.0: source_id,
+    )
+    db.execute.side_effect = [
+        _EmptyResult(),
+        _ScalarResult((history_stream_id, history_seen_at)),
+    ]
+
+    assert resolve_latest_stream_id(db, DROGONSAT_SOURCE_ID) == history_stream_id
+
+
+def test_resolve_latest_stream_id_prefers_newer_history_stream_over_registry(monkeypatch) -> None:
+    registry_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-12-34Z"
+    history_stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-14T17-12-34Z"
+    registry_seen_at = datetime(2026, 3, 13, 17, 12, 34, tzinfo=timezone.utc)
+    history_seen_at = datetime(2026, 3, 14, 17, 12, 34, tzinfo=timezone.utc)
+    db = MagicMock()
+    monkeypatch.setattr(
+        "app.services.source_stream_service.get_stream_source_id",
+        lambda _db, _source_id: None,
+    )
+    monkeypatch.setattr(
+        "app.services.source_stream_service.resolve_active_stream_id",
+        lambda _db, source_id, timeout=2.0: source_id,
+    )
+    db.execute.side_effect = [
+        _ScalarResult((registry_stream_id, registry_seen_at)),
+        _ScalarResult((history_stream_id, history_seen_at)),
+    ]
+
+    assert resolve_latest_stream_id(db, DROGONSAT_SOURCE_ID) == history_stream_id
 
 
 def test_register_stream_rejects_reserved_source_collision() -> None:
