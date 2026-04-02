@@ -16,12 +16,21 @@ router = APIRouter()
 @router.get("/feed-status")
 def get_feed_status(source_id: str = "default"):
     """Get feed health status for a source."""
-    return get_feed_health_tracker().get_status(source_id)
+    status = get_feed_health_tracker().get_status(source_id)
+    return {
+        "source_id": status.get("source_id", source_id),
+        "connected": status.get("connected", False),
+        "state": status.get("state", "disconnected"),
+        "last_reception_time": status.get("last_reception_time"),
+        "approx_rate_hz": status.get("approx_rate_hz"),
+        "drop_count": status.get("drop_count"),
+    }
 
 
 @router.get("/events", response_model=OpsEventsResponse)
 def get_timeline_events(
     source_id: str = "default",
+    stream_id: Optional[str] = None,
     since_minutes: int = 60,
     until_minutes: Optional[int] = None,
     event_types: Optional[str] = None,
@@ -45,6 +54,7 @@ def get_timeline_events(
     events, total = query_events(
         db,
         source_id=source_id,
+        stream_id=stream_id,
         since=since,
         until=until,
         event_types=types_list,
@@ -59,6 +69,7 @@ def get_timeline_events(
             OpsEventSchema(
                 id=str(e.id),
                 source_id=e.source_id,
+                stream_id=e.stream_id,
                 event_time=e.event_time.isoformat(),
                 event_type=e.event_type,
                 severity=e.severity,

@@ -131,7 +131,12 @@ def main() -> None:
         subsystem = row[5] if len(row) > 5 else None
         red_low = row[6] if len(row) > 6 else None
         red_high = row[7] if len(row) > 7 else None
-        payload = {"name": name, "units": units, "description": desc}
+        payload = {
+            "source_id": DEFAULT_SOURCE_ID,
+            "name": name,
+            "units": units,
+            "description": desc,
+        }
         if subsystem:
             payload["subsystem_tag"] = subsystem
         if red_low is not None:
@@ -173,7 +178,12 @@ def main() -> None:
             try:
                 r = requests.post(
                     f"{base_url}/telemetry/data",
-                    json={"telemetry_name": name, "data": batch},
+                    json={
+                        "telemetry_name": name,
+                        "data": batch,
+                        "source_id": DEFAULT_SOURCE_ID,
+                        "stream_id": DEFAULT_SOURCE_ID,
+                    },
                     timeout=60,
                 )
                 if r.status_code == 200:

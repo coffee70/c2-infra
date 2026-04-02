@@ -21,15 +21,15 @@ export function Nav() {
   const pathname = usePathname();
 
   return (
-    <nav className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 px-4 sm:px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
-      <div className="flex items-center gap-6 min-w-0">
+    <nav className="bg-background/95 supports-[backdrop-filter]:bg-background/80 sticky top-0 z-40 flex flex-wrap items-center justify-between gap-4 border-b px-4 py-3 backdrop-blur sm:px-6">
+      <div className="flex min-w-0 items-center gap-6">
         {NAV_LINKS.map(({ href, label }) => {
           const isActive = pathname === href || (href !== "/overview" && pathname?.startsWith(href));
           return (
             <Link
               key={href}
               href={href}
-              className={`text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-md underline-offset-4 hover:underline ${
+              className={`focus-visible:ring-ring rounded-md text-sm font-medium underline-offset-4 transition-colors hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none ${
                 isActive
                   ? "text-foreground"
                   : "text-muted-foreground hover:text-foreground"
@@ -47,7 +47,7 @@ export function Nav() {
               asChild
               variant="ghost"
               size="sm"
-              className="h-8 text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground h-8"
             >
               <Link href="/docs" aria-label="Help and documentation">
                 <BookOpen className="h-4 w-4" />
@@ -61,7 +61,7 @@ export function Nav() {
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground h-8"
               onClick={() => window.dispatchEvent(new CustomEvent("show-keyboard-shortcuts"))}
             >
               <Keyboard className="h-4 w-4" />

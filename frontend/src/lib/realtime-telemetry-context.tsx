@@ -12,12 +12,14 @@ import {
 } from "react";
 import {
   RealtimeWsClient,
-  type FeedStatusMessage,
   type RealtimeChannelUpdate,
   type RealtimeMessage,
 } from "./realtime-ws-client";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import {
+  fetchFeedStatus,
+  normalizeFeedStatus,
+  type FeedStatus,
+} from "./feed-status";
 
 /** Single channel state: value, timestamp, state, and rolling live points for sparklines. */
 export interface LiveChannelState {
@@ -86,59 +88,14 @@ function toLiveState(
   };
 }
 
-type FeedState = "connected" | "degraded" | "disconnected";
-
-interface FeedStatusResponse {
-  source_id: string;
-  connected: boolean;
-  state?: FeedState;
-  last_reception_time: number | string | null;
-  approx_rate_hz?: number | null;
-}
-
-export interface FeedStatus {
-  source_id: string;
-  connected: boolean;
-  state: FeedState;
-  last_reception_time: string | null;
-  approx_rate_hz: number | null;
-}
-
-function deriveFeedState(status: {
-  connected: boolean;
-  state?: FeedState;
-  last_reception_time: number | string | null;
-}): FeedState {
-  if (status.state) return status.state;
-  if (status.connected) return "connected";
-  return status.last_reception_time != null ? "degraded" : "disconnected";
-}
-
-function normalizeFeedStatus(
-  status: FeedStatusMessage | FeedStatusResponse
-): FeedStatus {
-  const lastReceptionTime =
-    typeof status.last_reception_time === "number"
-      ? new Date(status.last_reception_time * 1000).toISOString()
-      : status.last_reception_time;
-
-  return {
-    source_id: status.source_id,
-    connected: status.connected,
-    state: deriveFeedState(status),
-    last_reception_time: lastReceptionTime,
-    approx_rate_hz: status.approx_rate_hz ?? null,
-  };
-}
-
 interface RealtimeTelemetryContextValue {
   /** Channel state by name (always reflects latest from stream or initial). */
   channelsByName: Record<string, LiveChannelState>;
   /** Channels as array (for overview list); order matches subscription order where possible. */
   channelsArray: LiveChannelState[];
-  /** Current backend feed health for the active source/run. */
+  /** Current backend feed health for the active source/stream. */
   feedStatus: FeedStatus | null;
-  /** True when backend feed health says the active source/run is connected. */
+  /** True when backend feed health says the active source/stream is connected. */
   isLive: boolean;
   /** Raw client for adding extra handlers (e.g. alerts, orbit). May be null before connect. */
   client: RealtimeWsClient | null;
@@ -151,8 +108,10 @@ const RealtimeTelemetryContext = createContext<RealtimeTelemetryContextValue | n
 export interface RealtimeTelemetryProviderProps {
   /** Channel names to subscribe to (watchlist). */
   channelNames: string[];
-  /** Source/run id for subscription. */
+  /** Logical source id for feed health lookups and status messages. */
   sourceId: string;
+  /** Optional explicit stream id for realtime subscription. */
+  streamId?: string | null;
   /** Optional initial state per channel (from API/snapshot). */
   initialChannels?: InitialChannelInput[];
   children: ReactNode;
@@ -160,26 +119,28 @@ export interface RealtimeTelemetryProviderProps {
 
 /**
  * Single place for live telemetry subscription and state.
- * Creates one WebSocket client, subscribes to channelNames for sourceId,
+ * Creates one WebSocket client, subscribes to channelNames for sourceId/streamId,
  * handles snapshot_watchlist and telemetry_update, and exposes channel state + isLive.
  * Consumers use useRealtimeTelemetry() or useRealtimeChannel(name).
  */
 export function RealtimeTelemetryProvider({
   channelNames,
   sourceId,
+  streamId = null,
   initialChannels = [],
   children,
 }: RealtimeTelemetryProviderProps) {
   const [client] = useState(() => new RealtimeWsClient());
+  const subscriptionKey = `${sourceId}::${streamId ?? ""}`;
   const initialChannelState = useMemo(
     () => buildInitialChannelState(initialChannels),
     [initialChannels]
   );
   const [channelStore, setChannelStore] = useState<{
-    sourceId: string;
+    subscriptionKey: string;
     channelsByName: Record<string, LiveChannelState>;
   }>(() => ({
-    sourceId,
+    subscriptionKey,
     channelsByName: initialChannelState,
   }));
   const [feedStatusStore, setFeedStatusStore] = useState<{
@@ -190,19 +151,21 @@ export function RealtimeTelemetryProvider({
     feedStatus: null,
   });
   const currentSourceIdRef = useRef(sourceId);
+  const currentSubscriptionKeyRef = useRef(subscriptionKey);
   const initialChannelStateRef = useRef(initialChannelState);
 
   useEffect(() => {
     currentSourceIdRef.current = sourceId;
+    currentSubscriptionKeyRef.current = subscriptionKey;
     initialChannelStateRef.current = initialChannelState;
-  }, [initialChannelState, sourceId]);
+  }, [initialChannelState, subscriptionKey, streamId, sourceId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setChannelStore((prev) => {
-        if (prev.sourceId !== sourceId) {
+        if (prev.subscriptionKey !== subscriptionKey) {
           return {
-            sourceId,
+            subscriptionKey,
             channelsByName: initialChannelState,
           };
         }
@@ -228,16 +191,16 @@ export function RealtimeTelemetryProvider({
         }
 
         return {
-          sourceId,
+          subscriptionKey,
           channelsByName: nextChannelsByName,
         };
       });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [channelNames, initialChannelState, sourceId]);
+  }, [channelNames, initialChannelState, subscriptionKey]);
 
   const channelsByName =
-    channelStore.sourceId === sourceId
+    channelStore.subscriptionKey === subscriptionKey
       ? channelStore.channelsByName
       : initialChannelState;
   const feedStatus =
@@ -248,10 +211,11 @@ export function RealtimeTelemetryProvider({
   const handleMessage = useCallback(
     (msg: RealtimeMessage) => {
       const activeSourceId = currentSourceIdRef.current;
+      const activeSubscriptionKey = currentSubscriptionKeyRef.current;
       if (msg.type === "snapshot_watchlist" && msg.channels) {
         setChannelStore((prev) => {
           const base =
-            prev.sourceId === activeSourceId
+            prev.subscriptionKey === activeSubscriptionKey
               ? prev.channelsByName
               : initialChannelStateRef.current;
           const next = { ...base };
@@ -260,7 +224,7 @@ export function RealtimeTelemetryProvider({
             next[ch.name] = toLiveState(ch, existing?.liveData);
           }
           return {
-            sourceId: activeSourceId,
+            subscriptionKey: activeSubscriptionKey,
             channelsByName: next,
           };
         });
@@ -268,7 +232,7 @@ export function RealtimeTelemetryProvider({
         const ch = msg.channel;
         setChannelStore((prev) => {
           const base =
-            prev.sourceId === activeSourceId
+            prev.subscriptionKey === activeSubscriptionKey
               ? prev.channelsByName
               : initialChannelStateRef.current;
           const existing = base[ch.name];
@@ -277,7 +241,7 @@ export function RealtimeTelemetryProvider({
             ? [...existing.liveData, newPoint].slice(-100)
             : [newPoint];
           return {
-            sourceId: activeSourceId,
+            subscriptionKey: activeSubscriptionKey,
             channelsByName: {
               ...base,
               [ch.name]: toLiveState(ch, liveData),
@@ -304,21 +268,18 @@ export function RealtimeTelemetryProvider({
   }, [client, handleMessage]);
 
   useEffect(() => {
-    client.subscribeWatchlist(channelNames, sourceId);
-  }, [client, channelNames, sourceId]);
+    client.subscribeWatchlist(channelNames, sourceId, streamId);
+  }, [client, channelNames, streamId, sourceId]);
 
   useEffect(() => {
     let cancelled = false;
 
-    fetch(`${API_URL}/ops/feed-status?source_id=${encodeURIComponent(sourceId)}`, {
-      cache: "no-store",
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: FeedStatusResponse | null) => {
+    fetchFeedStatus(sourceId)
+      .then((data) => {
         if (!cancelled && data) {
           setFeedStatusStore({
             sourceId,
-            feedStatus: normalizeFeedStatus(data),
+            feedStatus: data,
           });
         }
       })

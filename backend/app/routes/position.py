@@ -29,11 +29,11 @@ router = APIRouter()
     response_model=List[PositionChannelMappingSchema],
 )
 def get_position_config(
-    source_id: Optional[str] = None,
+    vehicle_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
-    """List active position channel mappings, optionally filtered by source."""
-    mappings = list_mappings(db, source_id=source_id)
+    """List active position channel mappings, optionally filtered by vehicle."""
+    mappings = list_mappings(db, vehicle_id=vehicle_id)
     return [PositionChannelMappingSchema.model_validate(m) for m in mappings]
 
 
@@ -74,16 +74,15 @@ def delete_position_config(
     response_model=List[PositionSample],
 )
 def latest_positions(
-    source_ids: Optional[List[str]] = Query(
+    vehicle_ids: Optional[List[str]] = Query(
         default=None,
-        description="Optional list of source IDs to filter by.",
+        description="Optional list of vehicle IDs to filter by.",
     ),
     db: Session = Depends(get_db),
 ):
-    """Resolve latest positions for all mapped sources (or a filtered subset)."""
+    """Resolve latest positions for all mapped vehicles (or a filtered subset)."""
     positions = get_latest_positions(
         db,
-        source_ids=source_ids,
+        vehicle_ids=vehicle_ids,
     )
     return positions
-

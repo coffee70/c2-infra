@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.telemetry import TelemetryChannelAlias, TelemetryMetadata
-from app.services.source_run_service import run_id_to_source_id
+from app.services.source_stream_service import get_stream_source_id, normalize_source_id
 
 
 def resolve_channel_metadata(
@@ -20,7 +20,7 @@ def resolve_channel_metadata(
     channel_name: str,
 ) -> TelemetryMetadata | None:
     """Resolve an exact canonical name or configured alias for one source."""
-    logical_source_id = run_id_to_source_id(source_id)
+    logical_source_id = get_stream_source_id(db, source_id) or normalize_source_id(source_id)
     meta = db.execute(
         select(TelemetryMetadata).where(
             TelemetryMetadata.source_id == logical_source_id,
@@ -58,7 +58,7 @@ def get_aliases_by_telemetry_ids(
     if not ids:
         return {}
 
-    logical_source_id = run_id_to_source_id(source_id)
+    logical_source_id = get_stream_source_id(db, source_id) or normalize_source_id(source_id)
     rows = db.execute(
         select(TelemetryChannelAlias.telemetry_id, TelemetryChannelAlias.alias_name)
         .where(TelemetryChannelAlias.source_id == logical_source_id)

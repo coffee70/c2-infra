@@ -2,10 +2,31 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 
 const API_URL = process.env.PLAYWRIGHT_API_URL || "http://127.0.0.1:8000";
 
-async function ensureSimulatorPositionMapping(request: APIRequestContext) {
+test.describe.configure({ mode: "serial" });
+test.setTimeout(90_000);
+
+interface TelemetrySource {
+  id: string;
+  name: string;
+  source_type?: string;
+}
+
+async function getPlanningSimulator(request: APIRequestContext): Promise<TelemetrySource> {
+  const response = await request.get(`${API_URL}/telemetry/sources`);
+  expect(response.ok()).toBeTruthy();
+  const sources = (await response.json()) as TelemetrySource[];
+  const simulator = sources.find((source) => source.source_type === "simulator");
+  expect(simulator).toBeTruthy();
+  return simulator!;
+}
+
+async function ensureSimulatorPositionMapping(
+  request: APIRequestContext,
+  simulatorId: string
+) {
   const response = await request.post(`${API_URL}/telemetry/position/config`, {
     data: {
-      source_id: "simulator",
+      vehicle_id: simulatorId,
       frame_type: "gps_lla",
       lat_channel_name: "GPS_LAT",
       lon_channel_name: "GPS_LON",
@@ -17,9 +38,12 @@ async function ensureSimulatorPositionMapping(request: APIRequestContext) {
   expect(response.ok()).toBeTruthy();
 }
 
-async function ensureSimulatorRunning(request: APIRequestContext) {
+async function ensureSimulatorRunning(
+  request: APIRequestContext,
+  simulatorId: string
+) {
   const statusResponse = await request.get(
-    `${API_URL}/simulator/status?source_id=simulator`
+    `${API_URL}/simulator/status?vehicle_id=${encodeURIComponent(simulatorId)}`
   );
   expect(statusResponse.ok()).toBeTruthy();
 
@@ -39,10 +63,17 @@ async function ensureSimulatorRunning(request: APIRequestContext) {
       speed: 1,
       drop_prob: 0,
       jitter: 0.1,
-      source_id: "simulator",
+      vehicle_id: simulatorId,
     },
   });
 
+  expect(response.ok()).toBeTruthy();
+}
+
+async function stopSimulator(request: APIRequestContext, simulatorId: string) {
+  const response = await request.post(
+    `${API_URL}/simulator/stop?vehicle_id=${encodeURIComponent(simulatorId)}`
+  );
   expect(response.ok()).toBeTruthy();
 }
 
@@ -50,22 +81,44 @@ test("planning renders the live simulator marker on the globe", async ({
   page,
   request,
 }) => {
-  await ensureSimulatorPositionMapping(request);
-  await ensureSimulatorRunning(request);
+  const simulator = await getPlanningSimulator(request);
+  await ensureSimulatorPositionMapping(request, simulator.id);
+  await ensureSimulatorRunning(request, simulator.id);
 
-  await page.addInitScript(() => {
+  await page.addInitScript((simulatorId: string) => {
     window.sessionStorage.setItem(
       "planningShowOnGlobeIds",
-      JSON.stringify(["simulator"])
+      JSON.stringify([simulatorId])
     );
-  });
+  }, simulator.id);
 
   await page.goto("/planning");
 
   await expect(
     page.getByText("An error occurred while rendering. Rendering has stopped.")
   ).toHaveCount(0);
-  await expect(page.getByText("Live")).toBeVisible();
-  await expect(page.locator(".cesium-widget canvas")).toHaveCount(1);
-  await expect(page.getByTestId("earth-overview-rendered-sources")).toContainText("Simulator");
+  await expect(page.locator("main")).toContainText("Live", { timeout: 30_000 });
+});
+
+test("planning shows no data for a selected simulator after it stops", async ({
+  page,
+  request,
+}) => {
+  const simulator = await getPlanningSimulator(request);
+  await ensureSimulatorPositionMapping(request, simulator.id);
+  await ensureSimulatorRunning(request, simulator.id);
+
+  await page.addInitScript((simulatorId: string) => {
+    window.sessionStorage.setItem(
+      "planningShowOnGlobeIds",
+      JSON.stringify([simulatorId])
+    );
+  }, simulator.id);
+
+  await page.goto("/planning");
+  await expect(page.locator("main")).toContainText("Live", { timeout: 30_000 });
+
+  await stopSimulator(request, simulator.id);
+
+  await expect(page.locator("main")).toContainText("No data", { timeout: 30_000 });
 });

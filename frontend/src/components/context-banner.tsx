@@ -1,9 +1,11 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
+import { FeedStatusBadge } from "@/components/feed-status-badge";
 import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
 import { useRealtimeFeedStatus } from "@/lib/realtime-telemetry-context";
-import { runIdToSourceId } from "@/lib/source-ids";
+import type { FeedState } from "@/lib/feed-status";
+import { resolveSourceAlias } from "@/lib/source-ids";
 import {
   useSimulatorRuntime,
   type SimulatorRuntimeStatus,
@@ -53,17 +55,16 @@ interface ContextBannerProps {
   initialSimulatorSourceId?: string;
   initialSimulatorStatus?: SimulatorRuntimeStatus | null;
   simulatorStatus?: SimulatorRuntimeStatus | null;
-  isSwitchingRuns?: boolean;
+  isSwitchingStreams?: boolean;
 }
 
 function scrollToAlerts(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 }
 
-/** Label when sourceId is not in sources list (e.g. legacy run id); prefer resolving to source. */
+/** Label when sourceId is not in sources list; prefer resolving configured aliases. */
 function fallbackSourceLabel(sourceId: string): string {
-  const source = runIdToSourceId(sourceId);
-  return source !== sourceId ? `${source} (run)` : sourceId;
+  return resolveSourceAlias(sourceId);
 }
 
 export function ContextBanner({
@@ -78,7 +79,7 @@ export function ContextBanner({
   initialSimulatorSourceId,
   initialSimulatorStatus,
   simulatorStatus,
-  isSwitchingRuns = false,
+  isSwitchingStreams = false,
 }: ContextBannerProps) {
   const feedStatus = useRealtimeFeedStatus();
   const isSimulator =
@@ -99,10 +100,10 @@ export function ContextBanner({
 
   const sourceLabel =
     sources.find((s) => s.id === sourceId)?.name ?? fallbackSourceLabel(sourceId);
-  const feedState = isSimulator && resolvedSimulatorStatus?.state === "idle"
+  const feedState: FeedState = isSimulator && resolvedSimulatorStatus?.state === "idle"
     ? "disconnected"
     :
-    (feedStatus?.state as "connected" | "degraded" | "disconnected" | undefined) ??
+    feedStatus?.state ??
     (feedStatus?.connected
       ? "connected"
       : feedStatus?.last_reception_time != null
@@ -110,12 +111,12 @@ export function ContextBanner({
         : "disconnected");
 
   return (
-    <div className="flex flex-wrap items-center gap-3 py-2 px-4 border-b bg-muted/30 text-sm">
+    <div className="bg-muted/30 flex flex-wrap items-center gap-3 border-b px-4 py-2 text-sm">
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground font-medium">Source:</span>
         {sources.length > 1 && onSourceChange ? (
           <Select
-            value={sources.some((s) => s.id === sourceId) ? sourceId : runIdToSourceId(sourceId)}
+            value={sources.some((s) => s.id === sourceId) ? sourceId : resolveSourceAlias(sourceId)}
             onValueChange={onSourceChange}
           >
             <SelectTrigger className="h-8 w-auto min-w-[120px] text-xs">
@@ -162,35 +163,15 @@ export function ContextBanner({
       </div>
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground">Feed:</span>
-        <Badge
-          variant={
-            feedState === "connected"
-              ? "success"
-              : feedState === "degraded"
-                ? "secondary"
-                : "destructive"
-          }
-          className="text-xs"
-        >
-          {feedState === "connected" ? (
-            <>
-              <span className="mr-1 inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-              Live
-            </>
-          ) : feedState === "degraded" ? (
-            "Degraded"
-          ) : (
-            "No data"
-          )}
-        </Badge>
+        <FeedStatusBadge state={feedState} />
         {feedStatus?.approx_rate_hz != null && feedStatus.approx_rate_hz > 0 && (
           <span className="text-muted-foreground text-xs">
             ~{feedStatus.approx_rate_hz.toFixed(1)} Hz
           </span>
         )}
-        {isSwitchingRuns && (
+        {isSwitchingStreams && (
           <Badge variant="outline" className="text-xs">
-            Switching run…
+            Switching stream…
           </Badge>
         )}
       </div>
@@ -211,13 +192,13 @@ export function ContextBanner({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="inline-flex cursor-pointer items-center gap-1 rounded-md outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+                  className="ring-offset-background focus-visible:ring-ring inline-flex cursor-pointer items-center gap-1 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-offset-1"
                   aria-label="View alerts"
                 >
                   <Badge variant="destructive" className="text-xs">
                     {activeAlertCount}
                   </Badge>
-                  <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+                  <ChevronDownIcon className="text-muted-foreground size-3.5" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="max-w-[280px]">
@@ -245,7 +226,7 @@ export function ContextBanner({
                 onAlertsClick?.();
                 scrollToAlerts(scrollToAlertsId);
               }}
-              className="inline-flex cursor-pointer items-center outline-none ring-offset-background hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+              className="ring-offset-background focus-visible:ring-ring inline-flex cursor-pointer items-center outline-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-offset-1"
               aria-label="Scroll to Events Console"
             >
               <Badge variant="destructive" className="text-xs">

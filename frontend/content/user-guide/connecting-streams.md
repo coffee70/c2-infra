@@ -4,6 +4,8 @@
 
 Once you have historical data or synthetic data loaded, you can connect a real-time telemetry stream. When a stream is active, the Overview shows a green **Live** badge and updates in real time.
 
+By default, live Overview and watchlist subscriptions stay **source-scoped**: if a source rolls from one stream to the next, the live UI follows the current stream automatically. Use an explicit stream selection only when you intentionally want a pinned historical or per-run view.
+
 ## Option A: In-app Simulator
 
 1. Go to the **Sources** page (nav link). The page lists Vehicles and Simulators. Add a simulator with **Add source** → choose **Simulator** → enter a name, a telemetry definition path (for example `simulators/drogonsat.yaml`), and a Base URL (for example `http://simulator:8001`). The server uses the definition file to seed the expected channel catalog and uses the Base URL to reach the simulator.

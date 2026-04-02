@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.telemetry import OpsEvent
@@ -15,9 +15,22 @@ logger = logging.getLogger(__name__)
 ENTITY_TYPES = ("telemetry_channel", "alert", "system", "operator_action")
 
 
+def _stream_scope_clause(stream_id: str):
+    """Include stream-scoped events plus the shared feed-status event."""
+    return or_(
+        OpsEvent.stream_id == stream_id,
+        and_(
+            OpsEvent.stream_id.is_(None),
+            OpsEvent.event_type == "system.feed_status",
+        ),
+    )
+
+
 def write_event(
     db: Session,
+    *,
     source_id: str,
+    stream_id: Optional[str] = None,
     event_time: datetime,
     event_type: str,
     severity: str,
@@ -30,6 +43,7 @@ def write_event(
     event = OpsEvent(
         id=uuid4(),
         source_id=source_id,
+        stream_id=stream_id,
         event_time=event_time,
         event_type=event_type,
         severity=severity,
@@ -45,7 +59,9 @@ def write_event(
 
 def query_events(
     db: Session,
+    *,
     source_id: str,
+    stream_id: Optional[str] = None,
     since: datetime,
     until: Optional[datetime] = None,
     event_types: Optional[list[str]] = None,
@@ -60,6 +76,8 @@ def query_events(
         .where(OpsEvent.source_id == source_id)
         .where(OpsEvent.event_time >= since)
     )
+    if stream_id is not None:
+        stmt = stmt.where(_stream_scope_clause(stream_id))
     if until is not None:
         stmt = stmt.where(OpsEvent.event_time <= until)
     if event_types:
@@ -73,6 +91,8 @@ def query_events(
         OpsEvent.source_id == source_id,
         OpsEvent.event_time >= since,
     )
+    if stream_id is not None:
+        count_stmt = count_stmt.where(_stream_scope_clause(stream_id))
     if until is not None:
         count_stmt = count_stmt.where(OpsEvent.event_time <= until)
     if event_types:

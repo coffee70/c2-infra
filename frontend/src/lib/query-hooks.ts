@@ -52,7 +52,7 @@ export interface SearchResult {
 }
 
 export interface ChannelSource {
-  source_id: string;
+  stream_id: string;
   label: string;
 }
 
@@ -74,6 +74,7 @@ export interface TelemetryRecentResponse {
 export interface OpsEventSchema {
   id: string;
   source_id: string;
+  stream_id?: string | null;
   event_time: string;
   event_type: string;
   severity: string;
@@ -364,14 +365,14 @@ export function useTelemetrySearchQuery(params: SearchParams, enabled: boolean) 
   });
 }
 
-export function useTelemetryChannelRunsQuery(channelName: string, sourceId: string, enabled = true) {
+export function useTelemetryChannelStreamsQuery(channelName: string, sourceId: string, enabled = true) {
   return useQuery<ChannelSource[]>({
     queryKey: queryKeys.telemetryChannelRuns(channelName, sourceId),
     enabled,
     staleTime: 5 * 60 * 1000,
     queryFn: async ({ signal }) => {
       const data = await fetchJson<{ sources?: ChannelSource[] }>(
-        `${buildTelemetryApiBase(sourceId, channelName)}/runs`,
+        `${buildTelemetryApiBase(sourceId, channelName)}/streams`,
         { signal }
       );
       return Array.isArray(data.sources) ? data.sources : [];
@@ -386,16 +387,13 @@ export function useTelemetryRecentQuery(
   const queryEntries = Object.entries(params).filter(
     ([key]) => key !== "channelName" && key !== "catalogSourceId"
   );
-  const normalizedEntries = params.catalogSourceId
-    ? queryEntries.map(([key, value]) => [key === "source_id" ? "run_id" : key, value] as [string, string])
-    : queryEntries;
   return useQuery<TelemetryRecentResponse>({
     queryKey: queryKeys.telemetryRecent(params),
     enabled,
     queryFn: async ({ signal }) =>
       fetchJson<TelemetryRecentResponse>(
         `${buildTelemetryApiBase(params.catalogSourceId ?? params.source_id, params.channelName)}/recent?${new URLSearchParams(
-          normalizedEntries
+          queryEntries
         ).toString()}`,
         { signal }
       ),
@@ -405,12 +403,12 @@ export function useTelemetryRecentQuery(
 export function useTelemetryExplanationQuery(
   channelName: string,
   sourceId: string,
-  runId?: string,
+  streamId?: string,
   enabled = true
 ) {
-  const suffix = runId && runId !== sourceId ? `?run_id=${encodeURIComponent(runId)}` : "";
+  const suffix = streamId ? `?stream_id=${encodeURIComponent(streamId)}` : "";
   return useQuery<ExplainResponse>({
-    queryKey: queryKeys.telemetryExplanation(channelName, runId ?? sourceId),
+    queryKey: queryKeys.telemetryExplanation(channelName, streamId ?? sourceId),
     enabled,
     retry: 0,
     queryFn: async ({ signal }) =>
@@ -441,7 +439,7 @@ export function useOpsEventsQuery(params: Record<string, string>, enabled = true
 
 export async function fetchSimulatorRuntimeStatus(sourceId: string): Promise<SimulatorRuntimeStatus> {
   const data = await fetchJson<SimulatorRuntimeStatus>(
-    `/simulator/status?source_id=${encodeURIComponent(sourceId)}`,
+    `/simulator/status?vehicle_id=${encodeURIComponent(sourceId)}`,
     { cache: "no-store", useFallback: true }
   );
   return data ?? { connected: false };
@@ -504,7 +502,7 @@ export function useSimulatorStartMutation() {
       fetchJson("/simulator/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, source_id: sourceId }),
+        body: JSON.stringify({ ...payload, vehicle_id: sourceId }),
         useFallback: true,
       }),
     onSettled: async (_data, _error, variables) => {
@@ -520,7 +518,7 @@ function createSimulatorActionMutation(path: string, actionName: string) {
     return useMutation({
       mutationFn: async ({ sourceId }: SimulatorActionInput) =>
         fetchJson(
-          `${path}?source_id=${encodeURIComponent(sourceId)}`,
+          `${path}?vehicle_id=${encodeURIComponent(sourceId)}`,
           { method: "POST", useFallback: true }
         ),
       onSuccess: (_data, variables) => {

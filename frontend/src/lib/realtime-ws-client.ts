@@ -17,7 +17,8 @@ function getWsUrl(): string {
 }
 
 export interface RealtimeChannelUpdate {
-  source_id?: string;
+  source_id: string;
+  stream_id: string;
   name: string;
   units?: string | null;
   description?: string | null;
@@ -34,6 +35,8 @@ export interface RealtimeChannelUpdate {
 
 export interface TelemetryAlert {
   id: string;
+  source_id: string;
+  stream_id: string;
   channel_name: string;
   telemetry_id: string;
   subsystem: string;
@@ -59,7 +62,7 @@ export interface TelemetryAlert {
 
 export interface OrbitStatusMessage {
   type: "orbit_status";
-  source_id: string;
+  vehicle_id: string;
   status: string;
   reason: string;
   orbit_type?: string | null;
@@ -104,7 +107,8 @@ export class RealtimeWsClient {
     watchlist: string[];
     alerts: boolean;
     sourceId: string;
-  } = { watchlist: [], alerts: true, sourceId: "default" };
+    streamId: string | null;
+  } = { watchlist: [], alerts: true, sourceId: "default", streamId: null };
 
   constructor(url?: string) {
     this.url = url || getWsUrl();
@@ -122,11 +126,17 @@ export class RealtimeWsClient {
           type: "subscribe_watchlist",
           channels: this.subscriptions.watchlist,
           source_id: this.subscriptions.sourceId,
+          ...(this.subscriptions.streamId
+            ? { stream_id: this.subscriptions.streamId }
+            : {}),
         });
         if (this.subscriptions.alerts) {
           this.send({
             type: "subscribe_alerts",
             source_id: this.subscriptions.sourceId,
+            ...(this.subscriptions.streamId
+              ? { stream_id: this.subscriptions.streamId }
+              : {}),
           });
         }
       };
@@ -186,20 +196,34 @@ export class RealtimeWsClient {
     return () => this.handlers.delete(handler);
   }
 
-  subscribeWatchlist(channels: string[], sourceId: string = "default"): void {
+  subscribeWatchlist(
+    channels: string[],
+    sourceId: string = "default",
+    streamId: string | null = null
+  ): void {
     this.subscriptions.watchlist = channels;
     this.subscriptions.sourceId = sourceId;
+    this.subscriptions.streamId = streamId;
     this.send({
       type: "subscribe_watchlist",
       channels,
       source_id: sourceId,
+      ...(streamId ? { stream_id: streamId } : {}),
     });
   }
 
-  subscribeAlerts(sourceId: string = "default"): void {
+  subscribeAlerts(
+    sourceId: string = "default",
+    streamId: string | null = null
+  ): void {
     this.subscriptions.alerts = true;
     this.subscriptions.sourceId = sourceId;
-    this.send({ type: "subscribe_alerts", source_id: sourceId });
+    this.subscriptions.streamId = streamId;
+    this.send({
+      type: "subscribe_alerts",
+      source_id: sourceId,
+      ...(streamId ? { stream_id: streamId } : {}),
+    });
   }
 
   ackAlert(alertId: string): void {

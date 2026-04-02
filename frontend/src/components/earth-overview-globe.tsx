@@ -84,15 +84,15 @@ export function EarthOverviewGlobe({
 
   if (!isClient) {
     return (
-      <div className="w-full h-full flex items-center justify-center bg-black/80">
-        <div className="text-sm text-muted-foreground">Preparing globe…</div>
+      <div className="flex h-full w-full items-center justify-center bg-black/80">
+        <div className="text-muted-foreground text-sm">Preparing globe…</div>
       </div>
     );
   }
 
   const renderedSources = positions
     .filter((p) => p.valid && p.lat_deg != null && p.lon_deg != null)
-    .map((p) => p.source_name);
+    .map((p) => p.vehicle_name);
 
   return (
     <div className="absolute inset-0 bg-black" style={{ width: "100%", height: "100%" }}>
@@ -121,14 +121,17 @@ export function EarthOverviewGlobe({
         {positions
           .filter((p) => p.valid && p.lat_deg != null && p.lon_deg != null)
           .map((p) => {
+            const sourceKey = p.vehicle_id;
+            const sourceName = p.vehicle_name;
+            const sourceType = p.vehicle_type ?? "vehicle";
             const lat = p.lat_deg!;
             const lon = p.lon_deg!;
             const alt = p.alt_m ?? 0;
             const position = Cesium.Cartesian3.fromDegrees(lon, lat, alt);
-            const isSimulator = p.source_type === "simulator";
+            const isSimulator = sourceType === "simulator";
             const color = isSimulator ? Cesium.Color.ORANGE : Cesium.Color.CYAN;
-            const labelText = `${p.source_name}`;
-            const history = positionHistoryBySource[p.source_id];
+            const labelText = `${sourceName}`;
+            const history = positionHistoryBySource[sourceKey];
             const polylinePositions =
               history && history.length >= 2
                 ? [
@@ -145,8 +148,8 @@ export function EarthOverviewGlobe({
 
             return (
               <Entity
-                key={p.source_id}
-                name={p.source_name}
+                key={sourceKey}
+                name={sourceName}
                 position={position}
                 point={{
                   pixelSize: 10,

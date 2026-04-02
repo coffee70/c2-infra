@@ -74,7 +74,7 @@ export function AnomaliesPanel({
     <Card
       className={
         totalCount > 0
-          ? "border-l-4 border-l-destructive/50"
+          ? "border-l-destructive/50 border-l-4"
           : undefined
       }
     >
@@ -82,12 +82,12 @@ export function AnomaliesPanel({
         <div className="flex items-center justify-between gap-2">
           <CardTitle>Anomalies Queue</CardTitle>
           {totalCount > 0 && (
-            <span className="rounded-full bg-destructive/20 px-2 py-0.5 text-xs font-medium text-destructive">
+            <span className="bg-destructive/20 text-destructive rounded-full px-2 py-0.5 text-xs font-medium">
               {totalCount}
             </span>
           )}
         </div>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-muted-foreground text-sm">
           {totalCount} anomaly{totalCount !== 1 ? "ies" : ""} (newest first)
         </p>
       </CardHeader>
@@ -104,7 +104,7 @@ export function AnomaliesPanel({
               ({ key, entries, label }) =>
                 entries.length > 0 && (
                   <div key={key}>
-                    <h4 className="text-sm font-medium text-muted-foreground mb-2">
+                    <h4 className="text-muted-foreground mb-2 text-sm font-medium">
                       {label}
                     </h4>
                     <ul className="space-y-2">
@@ -112,10 +112,10 @@ export function AnomaliesPanel({
                         <li key={entry.name}>
                           <Link
                             href={buildTelemetryDetailHref(sourceId, entry.name)}
-                            className="block p-2 rounded-md border hover:bg-accent transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 text-primary hover:underline underline-offset-4"
+                            className="hover:bg-accent focus-visible:ring-ring text-primary block rounded-md border p-2 underline-offset-4 transition-colors duration-200 hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
                           >
                             <div className="flex items-center justify-between gap-2">
-                              <span className="font-medium text-sm">
+                              <span className="text-sm font-medium">
                                 {entry.name}
                               </span>
                               <span className="text-sm">
@@ -125,7 +125,7 @@ export function AnomaliesPanel({
                                 )}
                               </span>
                             </div>
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+                            <div className="text-muted-foreground mt-1 flex items-center gap-2 text-xs">
                               <span>{formatTimeAgo(entry.last_timestamp)}</span>
                               {entry.state_reason && (
                                 <span>

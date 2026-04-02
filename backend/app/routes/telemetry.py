@@ -7,14 +7,21 @@ from typing import Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import desc, or_, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models.telemetry import TelemetryData, TelemetryMetadata, TelemetrySource, TelemetryStatistics
+from app.models.telemetry import (
+    TelemetryCurrent,
+    TelemetryData,
+    TelemetryMetadata,
+    TelemetrySource,
+    TelemetryStatistics,
+    TelemetryStream,
+)
 from app.models.schemas import (
-    ActiveRunUpdate,
+    ActiveStreamUpdate,
     AnomaliesResponse,
     ChannelSourceItem,
     ChannelSourcesResponse,
@@ -58,10 +65,16 @@ from app.services.realtime_service import (
 from app.utils.subsystem import infer_subsystem
 from app.services.statistics_service import StatisticsService
 from app.services.telemetry_service import TelemetryService, _compute_state
-from app.services.source_run_service import (
-    ensure_run_belongs_to_source,
+from app.services.source_stream_service import (
+    clear_active_stream,
     normalize_source_id,
-    run_id_to_source_id,
+    ensure_stream_belongs_to_source,
+    get_stream_source_id,
+    SourceNotFoundError,
+    register_stream,
+    StreamIdConflictError,
+    resolve_active_stream_id,
+    resolve_latest_stream_id,
 )
 from app.config import get_settings
 from app.lib.audit import audit_log
@@ -79,12 +92,65 @@ def _get_channel_meta(db: Session, source_id: str, name: str) -> TelemetryMetada
     return resolve_channel_metadata(db, source_id=source_id, channel_name=name)
 
 
-def _resolve_scoped_run_id(source_id: str, run_id: Optional[str] = None) -> str:
-    """Return a source or run id only if it belongs to the scoped source."""
+def _resolve_scoped_stream_id(db: Session, source_id: str, stream_id: Optional[str] = None) -> str:
+    """Return the active stream id or validate an explicit stream id for a source."""
+    if stream_id is None:
+        logical_source_id = normalize_source_id(source_id)
+        resolved_stream_id = resolve_active_stream_id(db, logical_source_id)
+        if resolved_stream_id == logical_source_id:
+            latest_stream_id = (
+                db.execute(
+                    select(TelemetryStream.id)
+                    .where(TelemetryStream.source_id == logical_source_id)
+                    .order_by(TelemetryStream.last_seen_at.desc(), TelemetryStream.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            if isinstance(latest_stream_id, str) and latest_stream_id:
+                return latest_stream_id
+        return resolved_stream_id
     try:
-        return ensure_run_belongs_to_source(source_id, run_id)
+        return ensure_stream_belongs_to_source(db, source_id, stream_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="Run not found for source")
+        raise HTTPException(status_code=404, detail="Stream not found for source")
+
+
+def _resolve_latest_stream_id_for_channel(db: Session, source_id: str, name: str) -> str:
+    """Resolve the latest stream for a source that actually contains the channel."""
+    logical_source_id = normalize_source_id(source_id)
+    meta = _get_channel_meta(db, logical_source_id, name)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Telemetry not found")
+
+    current_stream_id = (
+        db.execute(
+            select(TelemetryCurrent.stream_id)
+            .where(TelemetryCurrent.telemetry_id == meta.id)
+            .order_by(
+                TelemetryCurrent.reception_time.desc(),
+                TelemetryCurrent.generation_time.desc(),
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if isinstance(current_stream_id, str) and current_stream_id:
+        return current_stream_id
+
+    historical_stream_id = (
+        db.execute(
+            select(TelemetryData.stream_id)
+            .where(TelemetryData.telemetry_id == meta.id)
+            .order_by(TelemetryData.timestamp.desc())
+        )
+        .scalars()
+        .first()
+    )
+    if isinstance(historical_stream_id, str) and historical_stream_id:
+        return historical_stream_id
+
+    return _resolve_scoped_stream_id(db, logical_source_id)
 
 
 def get_embedding_provider() -> SentenceTransformerEmbeddingProvider:
@@ -129,7 +195,12 @@ def create_schema(
         )
     except IntegrityError:
         raise HTTPException(status_code=409, detail="Telemetry name already exists")
-    audit_log("schema.create", source_id=body.source_id, name=body.name, telemetry_id=str(telemetry_id))
+    audit_log(
+        "schema.create",
+        source_id=body.source_id,
+        name=body.name,
+        telemetry_id=str(telemetry_id),
+    )
     return TelemetrySchemaResponse(
         status="created",
         telemetry_id=telemetry_id,
@@ -150,7 +221,16 @@ def ingest_data(
         for pt in body.data:
             ts = datetime.fromisoformat(pt.timestamp.replace("Z", "+00:00"))
             data.append((ts, pt.value))
-        rows = service.insert_data(body.source_id, body.telemetry_name, data)
+        rows = service.insert_data(
+            body.stream_id,
+            body.telemetry_name,
+            data,
+            source_id=body.source_id,
+            packet_source=body.packet_source,
+            receiver_id=body.receiver_id,
+        )
+    except StreamIdConflictError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     audit_log(
@@ -158,6 +238,7 @@ def ingest_data(
         telemetry_name=body.telemetry_name,
         count=rows,
         source_id=body.source_id,
+        stream_id=body.stream_id,
     )
     return TelemetryDataResponse(rows_inserted=rows)
 
@@ -256,65 +337,48 @@ def update_source_route(
     return result
 
 
-@router.get("/sources/{source_id}/runs", response_model=ChannelSourcesResponse)
-def get_source_runs(
+@router.get("/sources/{source_id}/streams", response_model=ChannelSourcesResponse)
+def get_source_streams(
     source_id: str,
     db: Session = Depends(get_db),
 ):
-    """List run ids for a source (any channel). Newest first.
-
-    Works for simulators, vehicles, and any future source type.
-    If only base-source data exists, the logical source id is returned as a single item.
-    """
+    """List stream ids for a source (any channel). Newest first."""
     logical_source_id = normalize_source_id(source_id)
-
-    reg = db.execute(
-        select(TelemetrySource).where(TelemetrySource.id == logical_source_id)
-    ).scalars().first()
-
-    # Preserve legacy default behavior if the source is truly unknown.
-    if reg is None and logical_source_id == normalize_source_id("default"):
-        return ChannelSourcesResponse(
-            sources=[ChannelSourceItem(source_id=logical_source_id, label=logical_source_id)]
+    registry_rows = db.execute(
+        select(
+            TelemetryStream.id,
+            TelemetryStream.last_seen_at,
+        ).where(TelemetryStream.source_id == logical_source_id)
+    ).fetchall()
+    history_rows = db.execute(
+        select(
+            TelemetryData.stream_id,
+            func.max(TelemetryData.timestamp).label("last_seen_at"),
         )
+        .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
+        .where(TelemetryMetadata.source_id == logical_source_id)
+        .group_by(TelemetryData.stream_id)
+    ).fetchall()
 
-    prefix = f"{logical_source_id}-"
-    stmt = (
-        select(TelemetryData.source_id)
-        .where(
-            or_(
-                TelemetryData.source_id == logical_source_id,
-                TelemetryData.source_id.like(f"{prefix}%"),
-            )
-        )
-        .distinct()
+    stream_seen_at: dict[str, datetime | None] = {}
+    for stream_id, seen_at in registry_rows:
+        stream_seen_at[stream_id] = seen_at
+    for stream_id, seen_at in history_rows:
+        prior = stream_seen_at.get(stream_id)
+        if prior is None or (seen_at is not None and seen_at > prior):
+            stream_seen_at[stream_id] = seen_at
+
+    rows = sorted(
+        stream_seen_at.items(),
+        key=lambda item: (item[1].timestamp() if item[1] is not None else float("-inf"), item[0]),
+        reverse=True,
     )
-
-    rows = db.execute(stmt).fetchall()
-    run_ids = [r[0] for r in rows]
-
-    # If no telemetry exists yet, still return the logical source so the UI has something stable.
-    if not run_ids:
-        label = reg.name if reg else logical_source_id
-        return ChannelSourcesResponse(
-            sources=[ChannelSourceItem(source_id=logical_source_id, label=label)]
-        )
-
-    registered = {
-        r[0]: r[1]
-        for r in db.execute(select(TelemetrySource.id, TelemetrySource.name)).fetchall()
-    }
-
-    items = []
-    for rid in run_ids:
-        if rid == logical_source_id:
-            label = reg.name if reg else "Base stream"
-        else:
-            label = _format_source_label(rid, registered.get(rid))
-        items.append(ChannelSourceItem(source_id=rid, label=label))
-
-    items.sort(key=lambda x: x.source_id, reverse=True)
-    return ChannelSourcesResponse(sources=items)
+    return ChannelSourcesResponse(
+        sources=[
+            ChannelSourceItem(stream_id=stream_id, label=_format_source_label(stream_id))
+            for stream_id, _seen_at in rows
+        ]
+    )
 
 
 @router.get("/watchlist", response_model=WatchlistResponse)
@@ -348,7 +412,11 @@ def add_watchlist(
     try:
         add_to_watchlist(db, body.source_id, body.telemetry_name)
         db.flush()
-        audit_log("watchlist.add", source_id=body.source_id, telemetry_name=body.telemetry_name)
+        audit_log(
+            "watchlist.add",
+            source_id=body.source_id,
+            telemetry_name=body.telemetry_name,
+        )
         return {"status": "added"}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -386,7 +454,7 @@ def list_subsystems(
     db: Session = Depends(get_db),
 ):
     """Get distinct subsystem tags for filter dropdown."""
-    logical_source_id = run_id_to_source_id(source_id)
+    logical_source_id = normalize_source_id(source_id)
     stmt = (
         select(TelemetryMetadata)
         .where(TelemetryMetadata.source_id == logical_source_id)
@@ -405,7 +473,7 @@ def list_units(
     db: Session = Depends(get_db),
 ):
     """Get distinct units for filter dropdown."""
-    logical_source_id = run_id_to_source_id(source_id)
+    logical_source_id = normalize_source_id(source_id)
     stmt = (
         select(TelemetryMetadata.units)
         .where(TelemetryMetadata.source_id == logical_source_id)
@@ -491,7 +559,11 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
 
     return ExplainResponse(
         name=meta.name,
-        aliases=get_aliases_by_telemetry_ids(db, source_id=source_id, telemetry_ids=[meta.id]).get(meta.id, []),
+        aliases=get_aliases_by_telemetry_ids(
+            db,
+            source_id=source_id,
+            telemetry_ids=[meta.id],
+        ).get(meta.id, []),
         description=meta.description,
         units=meta.units,
         channel_origin=meta.channel_origin or "catalog",
@@ -539,12 +611,16 @@ def get_summary(
 def get_summary_for_source(
     source_id: str,
     name: str,
-    run_id: Optional[str] = None,
+    stream_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    scoped_run_id = _resolve_scoped_run_id(source_id, run_id)
-    return get_summary(name=name, source_id=scoped_run_id, db=db)
+    scoped_stream_id = (
+        _resolve_scoped_stream_id(db, source_id, stream_id)
+        if stream_id is not None
+        else _resolve_latest_stream_id_for_channel(db, source_id, name)
+    )
+    return get_summary(name=name, source_id=scoped_stream_id, db=db)
 
 
 @router.get("/{name}/explain", response_model=ExplainResponse)
@@ -569,18 +645,22 @@ def explain(
 def explain_for_source(
     source_id: str,
     name: str,
-    run_id: Optional[str] = None,
+    stream_id: Optional[str] = None,
     skip_llm: bool = False,
     db: Session = Depends(get_db),
     embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
     llm: object = Depends(get_llm_provider),
 ):
     name = unquote(name)
-    scoped_run_id = _resolve_scoped_run_id(source_id, run_id)
+    scoped_stream_id = (
+        _resolve_scoped_stream_id(db, source_id, stream_id)
+        if stream_id is not None
+        else _resolve_latest_stream_id_for_channel(db, source_id, name)
+    )
     return explain(
         name=name,
         skip_llm=skip_llm,
-        source_id=scoped_run_id,
+        source_id=scoped_stream_id,
         db=db,
         embedding=embedding,
         llm=llm,
@@ -588,28 +668,28 @@ def explain_for_source(
 
 
 def _format_source_label(source_id: str, registered_name: Optional[str] = None) -> str:
-    """Human-readable label for a source or run id."""
+    """Human-readable label for a source or stream id."""
     if registered_name:
         return registered_name
 
     match = re.search(r"-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})Z?$", source_id)
     if match:
         date_part, h, m, s = match.groups()
-        return f"Run started at {date_part} {h}:{m} UTC"
+        return f"Stream started at {date_part} {h}:{m} UTC"
 
     return source_id
 
 
-@router.get("/{name}/runs", response_model=ChannelSourcesResponse)
-def get_channel_runs(
+@router.get("/{name}/streams", response_model=ChannelSourcesResponse)
+def get_channel_streams(
     name: str,
     source_id: str,
     db: Session = Depends(get_db),
 ):
-    """List runs for a source that have data for this channel.
+    """List streams for a source that have data for this channel.
 
     Works for simulators, vehicles, and any future source type.
-    Returns run ids with labels, newest first.
+    Returns stream ids with labels, newest first.
     """
     name = unquote(name)
 
@@ -618,44 +698,28 @@ def get_channel_runs(
         raise HTTPException(status_code=404, detail="Telemetry not found")
 
     logical_source_id = normalize_source_id(source_id)
-    reg = db.execute(
-        select(TelemetrySource).where(TelemetrySource.id == logical_source_id)
-    ).scalars().first()
-
-    prefix = f"{logical_source_id}-"
-    stmt = (
-        select(TelemetryData.source_id)
-        .where(
-            TelemetryData.telemetry_id == meta.id,
-            or_(
-                TelemetryData.source_id == logical_source_id,
-                TelemetryData.source_id.like(f"{prefix}%"),
-            ),
+    rows = db.execute(
+        select(
+            TelemetryData.stream_id,
+            func.max(TelemetryData.timestamp).label("last_seen_at"),
         )
-        .distinct()
+        .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
+        .where(
+            TelemetryMetadata.source_id == logical_source_id,
+            TelemetryData.telemetry_id == meta.id,
+        )
+        .group_by(TelemetryData.stream_id)
+        .order_by(
+            desc(func.max(TelemetryData.timestamp)),
+            TelemetryData.stream_id.desc(),
+        )
+    ).fetchall()
+    return ChannelSourcesResponse(
+        sources=[
+            ChannelSourceItem(stream_id=row[0], label=_format_source_label(row[0]))
+            for row in rows
+        ]
     )
-
-    rows = db.execute(stmt).fetchall()
-    run_ids = [r[0] for r in rows]
-
-    if not run_ids:
-        return ChannelSourcesResponse(sources=[])
-
-    registered = {
-        r[0]: r[1]
-        for r in db.execute(select(TelemetrySource.id, TelemetrySource.name)).fetchall()
-    }
-
-    items = []
-    for rid in run_ids:
-        if rid == logical_source_id:
-            label = reg.name if reg else "Base stream"
-        else:
-            label = _format_source_label(rid, registered.get(rid))
-        items.append(ChannelSourceItem(source_id=rid, label=label))
-
-    items.sort(key=lambda x: x.source_id, reverse=True)
-    return ChannelSourcesResponse(sources=items)
 
 
 def _get_recent_values_db_only(
@@ -667,7 +731,7 @@ def _get_recent_values_db_only(
     source_id: str = "default",
 ) -> list[tuple[datetime, float]]:
     """Get recent values using only DB—no embedding/LLM cold start. source_id filters when telemetry_data is source-aware."""
-    data_source_id = normalize_source_id(source_id)
+    data_source_id = resolve_latest_stream_id(db, source_id)
     meta = _get_channel_meta(db, source_id, name)
     if not meta:
         raise ValueError(f"Telemetry not found: {name}")
@@ -675,7 +739,7 @@ def _get_recent_values_db_only(
         select(TelemetryData.timestamp, TelemetryData.value)
         .where(
             TelemetryData.telemetry_id == meta.id,
-            TelemetryData.source_id == data_source_id,
+            TelemetryData.stream_id == data_source_id,
         )
         .order_by(desc(TelemetryData.timestamp))
         .limit(limit)
@@ -760,66 +824,78 @@ def get_recent(
 def get_recent_for_source(
     source_id: str,
     name: str,
-    run_id: Optional[str] = None,
+    stream_id: Optional[str] = None,
     limit: int = 100,
     since: Optional[str] = None,
     until: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    scoped_run_id = _resolve_scoped_run_id(source_id, run_id)
+    scoped_stream_id = (
+        _resolve_scoped_stream_id(db, source_id, stream_id)
+        if stream_id is not None
+        else _resolve_latest_stream_id_for_channel(db, source_id, name)
+    )
     return get_recent(
         name=name,
         limit=limit,
         since=since,
         until=until,
-        source_id=scoped_run_id,
+        source_id=scoped_stream_id,
         db=db,
     )
 
 
-@router.get("/sources/{source_id}/channels/{name}/runs", response_model=ChannelSourcesResponse)
-def get_channel_runs_for_source(
+@router.get("/sources/{source_id}/channels/{name}/streams", response_model=ChannelSourcesResponse)
+def get_channel_streams_for_source(
     source_id: str,
     name: str,
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    return get_channel_runs(name=name, source_id=source_id, db=db)
+    return get_channel_streams(name=name, source_id=source_id, db=db)
 
 
-@router.post("/sources/active-run")
-def set_active_run(body: ActiveRunUpdate):
-    """Set or clear the active run for any logical source.
+@router.post("/sources/active-stream")
+def set_active_stream(
+    body: ActiveStreamUpdate,
+    db: Session = Depends(get_db),
+):
+    """Set or clear the active stream for any logical source.
 
     External adapters (e.g. SatNOGS/FUNcube-1) use this to mark AOS/LOS
     without needing simulator-specific /status polling.
     """
-    logical_source_id = run_id_to_source_id(body.source_id)
+    logical_source_id = normalize_source_id(body.source_id)
 
     if body.state == "active":
-        if not body.run_id:
-            raise HTTPException(status_code=400, detail="run_id is required when state=active")
-        if run_id_to_source_id(body.run_id) != logical_source_id:
-            raise HTTPException(status_code=400, detail="run_id does not belong to source")
-
-        register_active_run(body.run_id)
+        if not body.stream_id:
+            raise HTTPException(status_code=400, detail="stream_id is required when state=active")
+        existing_owner = get_stream_source_id(db, body.stream_id)
+        if existing_owner is not None and normalize_source_id(existing_owner) != logical_source_id:
+            raise HTTPException(status_code=404, detail="stream_id does not belong to source")
+        try:
+            register_stream(db, source_id=logical_source_id, stream_id=body.stream_id)
+        except StreamIdConflictError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except SourceNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
         audit_log(
-            "sources.active_run.set",
+            "sources.active_stream.set",
             source_id=logical_source_id,
-            run_id=body.run_id,
+            stream_id=body.stream_id,
             state="active",
         )
         return {
             "status": "active",
             "source_id": logical_source_id,
-            "run_id": body.run_id,
+            "stream_id": body.stream_id,
         }
 
     if body.state == "idle":
-        clear_active_run(logical_source_id)
+        clear_active_stream(logical_source_id, db=db)
         audit_log(
-            "sources.active_run.set",
+            "sources.active_stream.set",
             source_id=logical_source_id,
             state="idle",
         )

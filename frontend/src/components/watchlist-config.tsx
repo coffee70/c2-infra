@@ -94,14 +94,14 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-lg max-h-[80vh] overflow-hidden flex flex-col">
+        <DialogContent className="flex max-h-[80vh] max-w-lg flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle id="watchlist-config-title">Configure Watchlist</DialogTitle>
             <DialogDescription id="watchlist-config-description">
               Add or remove channels shown on the Overview. Order here matches the cards.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-5 overflow-y-auto max-h-[60vh] pr-2">
+          <div className="max-h-[60vh] space-y-5 overflow-y-auto pr-2">
             {error && (
               <Alert variant="destructive" role="alert">
                 <AlertDescription>{error}</AlertDescription>
@@ -109,13 +109,13 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
             )}
 
             <section aria-labelledby="current-watchlist-heading">
-              <h4 id="current-watchlist-heading" className="text-sm font-medium mb-2">
+              <h4 id="current-watchlist-heading" className="mb-2 text-sm font-medium">
                 Current watchlist ({entries.length})
               </h4>
               {loading ? (
                 <div className="flex items-center gap-2 py-4">
                   <Spinner size="sm" />
-                  <span className="text-sm text-muted-foreground">Loading...</span>
+                  <span className="text-muted-foreground text-sm">Loading...</span>
                 </div>
               ) : entries.length === 0 ? (
                 <EmptyState
@@ -128,9 +128,9 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
                   {entries.map((e) => (
                     <li
                       key={e.name}
-                      className="flex items-center justify-between gap-2 p-2 rounded border"
+                      className="flex items-center justify-between gap-2 rounded border p-2"
                     >
-                      <span className="text-sm font-medium truncate">
+                      <span className="truncate text-sm font-medium">
                         {e.name}
                       </span>
                       {e.channel_origin === "discovered" && (
@@ -141,7 +141,7 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
                       <Button
                         variant="outline"
                         size="icon"
-                        className="shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
                         onClick={() => handleRemove(e.name)}
                         disabled={removeMutation.isPending}
                         aria-label={`Remove ${e.name} from watchlist`}
@@ -161,7 +161,7 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
             <Separator />
 
             <section aria-labelledby="add-channel-heading">
-              <h4 id="add-channel-heading" className="text-sm font-medium mb-2">
+              <h4 id="add-channel-heading" className="mb-2 text-sm font-medium">
                 Add channel — {availableToAdd.length} of {allChannels.length} available
               </h4>
               <Label htmlFor="watchlist-search" className="sr-only">
@@ -176,11 +176,11 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
                 aria-describedby={availableToAdd.length > ADD_RESULTS_CAP ? "add-channel-hint" : undefined}
               />
               {availableToAdd.length > ADD_RESULTS_CAP && (
-                <p id="add-channel-hint" className="text-xs text-muted-foreground mb-2">
+                <p id="add-channel-hint" className="text-muted-foreground mb-2 text-xs">
                   Showing up to {ADD_RESULTS_CAP} matches. Narrow your search to see fewer.
                 </p>
               )}
-              <ul className="space-y-1 max-h-48 overflow-y-auto" role="list">
+              <ul className="max-h-48 space-y-1 overflow-y-auto" role="list">
                 {displayedAvailable.map((channel) => (
                   <li key={channel.name}>
                     <Button
@@ -217,7 +217,7 @@ export function WatchlistConfig({ sourceId, onChanged }: WatchlistConfigProps) {
               )}
             </section>
           </div>
-          <DialogFooter className="border-t pt-4 mt-2">
+          <DialogFooter className="mt-2 border-t pt-4">
             <Button onClick={() => setOpen(false)}>Done</Button>
           </DialogFooter>
         </DialogContent>

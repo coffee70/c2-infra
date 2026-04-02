@@ -48,7 +48,7 @@ export default async function DocsPage({
     <div className="flex min-h-0 gap-12 px-4 py-8 sm:px-6">
       <aside className="sticky top-16 shrink-0 self-start">
         <nav
-          className="flex flex-col gap-1 text-sm text-muted-foreground"
+          className="text-muted-foreground flex flex-col gap-1 text-sm"
           aria-label="Documentation"
         >
           {DOC_PAGES.map((p) => {
@@ -75,7 +75,7 @@ export default async function DocsPage({
       </aside>
 
       <div className="flex min-w-0 flex-1 justify-center">
-        <article className="w-full max-w-3xl prose prose-invert prose-slate dark:prose-invert">
+        <article className="prose prose-invert prose-slate dark:prose-invert w-full max-w-3xl">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
@@ -83,10 +83,10 @@ export default async function DocsPage({
               <h1 className="mb-6 text-2xl font-bold tracking-tight">{children}</h1>
             ),
             h2: ({ children }) => (
-              <h2 className="mb-4 mt-8 text-xl font-semibold">{children}</h2>
+              <h2 className="mt-8 mb-4 text-xl font-semibold">{children}</h2>
             ),
             h3: ({ children }) => (
-              <h3 className="mb-3 mt-6 text-lg font-medium">{children}</h3>
+              <h3 className="mt-6 mb-3 text-lg font-medium">{children}</h3>
             ),
             p: ({ children }) => <p className="mb-4 leading-7">{children}</p>,
             ul: ({ children }) => (
@@ -99,17 +99,17 @@ export default async function DocsPage({
             code: ({ children, className }) =>
               className ? (
                 <code
-                  className={`rounded bg-muted px-1.5 py-0.5 font-mono text-sm ${className}`}
+                  className={`bg-muted rounded px-1.5 py-0.5 font-mono text-sm ${className}`}
                 >
                   {children}
                 </code>
               ) : (
-                <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-sm">
+                <code className="bg-muted rounded px-1.5 py-0.5 font-mono text-sm">
                   {children}
                 </code>
               ),
             pre: ({ children }) => (
-              <pre className="mb-4 overflow-x-auto rounded-lg border border-border bg-muted/50 p-4 text-sm">
+              <pre className="border-border bg-muted/50 mb-4 overflow-x-auto rounded-lg border p-4 text-sm">
                 {children}
               </pre>
             ),
@@ -135,7 +135,7 @@ export default async function DocsPage({
               );
             },
             blockquote: ({ children }) => (
-              <blockquote className="border-l-4 border-muted-foreground/50 pl-4 italic text-muted-foreground">
+              <blockquote className="border-muted-foreground/50 text-muted-foreground border-l-4 pl-4 italic">
                 {children}
               </blockquote>
             ),

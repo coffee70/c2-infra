@@ -9,7 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Runtime identity contract cleanup** — Runtime telemetry APIs now use `source_id + stream_id` consistently across ingest, telemetry, realtime, and ops. `run` / `run_id` compatibility routes and wrappers were removed, explicit `stream_id` is authoritative at route boundaries, and the frontend now carries `stream_id` instead of `run_id` in telemetry detail links and queries.
+- **Schema and migration reset** — The SQLAlchemy runtime models now expose canonical `source_id` and `stream_id` fields directly without compatibility synonyms, and Alembic history was collapsed to one baseline migration for clean rebuilds.
+- **Explicit vehicle and stream identity** — Realtime ingest and simulator runtime now distinguish logical `vehicle_id` from per-session `stream_id`, with first-class packet-path metadata for `packet_source` and `receiver_id`. The backend now tracks active telemetry streams explicitly instead of inferring them from overloaded `source_id-run` strings.
+- **Stream-aware run links** — Run listing endpoints now enumerate registered telemetry stream IDs directly, and the Ops event history detail links preserve the selected stream context when opening channel pages.
+- **Telemetry detail routing** — Channel detail pages now keep the vehicle in the path and carry the selected run in `?run=...`, so opaque stream IDs no longer break navigation or summary lookups.
+- **WebSocket default stream following** — Realtime WebSocket subscriptions now stay vehicle-scoped when the client omits `stream_id`, while snapshots still resolve against the vehicle's current stream at subscribe time.
 - **Realtime ingest timestamp fallback** — `POST /telemetry/realtime/ingest` now accepts packets that provide only `reception_time`. When `generation_time` is absent, the backend synthesizes `generation_time = reception_time`, which allows APRS-style decoder traffic to flow through realtime ingest while keeping downstream timestamps populated.
+
+### Fixed
+
+- **Planning per-source feed health** — The Planning Earth view no longer shows one global `Live` banner for all selected sources. Each selected source now renders its own `Live` / `Degraded` / `No data` badge, and stopped simulators switch to `No data` immediately instead of inheriting another source’s live state.
+- **Simulator realtime runtime contract** — The simulator now sends `source_id` in realtime ingest payloads instead of the legacy runtime `vehicle_id`, restoring compatibility with `POST /telemetry/realtime/ingest`.
+- **Source-wide stream following and explicit stream pinning** — WebSocket subscriptions that omit `stream_id` now keep following the source’s active/latest stream across rollover, while explicitly selected streams remain pinned exactly, including explicit base-stream selections.
+- **History and overview stream selection** — The history table now sends the selected stream as `stream_id`, and Overview bootstrap/refresh requests keep the selected stream scope when reloading data.
+- **Historical stream ownership and activation** — Realtime batch validation now checks `stream_id` ownership from registry/data instead of alias collisions, historical stream listings now include data-backed streams without registry rows, and replay/backfill ingest no longer promotes touched streams to active/latest automatically.
+- **Channel-scoped fallback resolution** — Channel summary, explain, and recent endpoints now fall back to the latest stream that actually contains the requested channel instead of the source’s unrelated latest stream.
+- **Position mapping serialization and rollover consistency** — Position config responses serialize correctly from `source_id`-backed mappings again, and position assembly now resolves one stream per source so coordinates cannot mix across a rollover.
+- **Baseline schema integrity** — The baseline migration restores Timescale hypertable creation for `telemetry_data` and enforces `watchlist(source_id, telemetry_name)` uniqueness on fresh installs.
+- **Overview source resolution crash** — The overview service now imports `normalize_source_id` correctly, so `/telemetry/overview` returns data instead of throwing a `NameError` on the local stack.
+- **Overview bootstrap failure handling** — When the initial overview snapshot request fails, the page now shows an error state with a retry action instead of staying on the loading spinner forever.
+- **Realtime ingest phantom runs** — `POST /telemetry/realtime/ingest` no longer reserves `telemetry_streams` rows before a batch is accepted, so dropped or rejected realtime traffic does not leave behind user-visible empty runs.
+- **Explicit base-stream realtime selection** — realtime snapshots, alerts, and live websocket updates now keep an explicitly selected base stream stable instead of silently rewiring it to the currently active stream when the stream id matches the vehicle id.
+- **History run ordering** — the history run dropdown now preserves the backend ordering for opaque `stream_id` values instead of re-sorting them lexicographically on the client.
+- **Stream resolution freshness** — `resolve_active_stream_id()` now prefers live simulator `/status` data before trusting persisted active stream rows, and ignores stale active rows when runtime state is unavailable.
+- **Historical stream backfill** — migration `015` now seeds discovered telemetry streams as `idle` so old runs do not become current immediately after upgrade.
+- **Default follow vs explicit stream pinning** — Overview live subscriptions and ops history now stay source-scoped by default across stream rollover, telemetry detail pages no longer pin themselves to a concrete stream unless `stream_id` was explicitly requested, explicit stream history requests remain pinned through fallback paths, and latest-stream resolution now includes history-backed streams that are visible even without current registry rows.
 
 ### Added
 
@@ -39,12 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Add-source wizard: add vehicles or simulators with a telemetry definition path; simulators also include a Base URL (server-reachable URL)
   - Edit sources: update name, Base URL, and telemetry definition path from the Sources page
   - Overview source selector grouped by **Vehicles** and **Simulators**
-  - Per-simulator backend proxy: all simulator routes require `source_id` and resolve URL from DB
+  - Per-simulator backend proxy: simulator routes resolve URL from DB using the selected vehicle context
   - Two simulator containers (`simulator`, `simulator2`) in docker-compose for testing multi-sim
 - Simulator dual status: connection (reachable vs disconnected) and runtime state (idle/running/paused)
   - Sources page (Manage panel): connection pill, Status card shows state and elapsed time; faster status polling (~2 s) and client-side elapsed tick
   - Overview: when selected source is a simulator, Context Banner shows simulator connection pill and runtime state (Running, Paused, Idle)
-- Unified simulator status endpoint (`GET /simulator/status?source_id=...`): always returns 200 with `connected` and optional `state`/`config`/`sim_elapsed`; no 503 when simulator is unreachable
+- Unified simulator status endpoint (`GET /simulator/status?vehicle_id=...`): always returns 200 with `connected` and optional `state`/`config`/`sim_elapsed`; runtime `config.stream_id` is the active stream identity; no 503 when simulator is unreachable
 - Stronger audit logs for simulator start flow to trace requests end-to-end:
   - `simulator.start.received` (backend): backend received start request from frontend
   - `simulator.start.proxied` (backend): backend successfully forwarded to simulator
@@ -85,6 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Run-scoped live feed health and vehicle-scoped position APIs** — Realtime feed badges now resolve feed status by logical `vehicle_id` even when telemetry subscriptions follow a run `stream_id`, and the position APIs now use `vehicle_id`/`vehicle_ids` consistently across the backend routes and frontend client.
+- **Run-scoped ops history and packet provenance persistence** — Stream-scoped event history now keeps vehicle-level `system.feed_status` transitions visible for the active vehicle, `/telemetry/data` now persists `packet_source` and `receiver_id`, and active stream resolution can recover from current run-scoped telemetry rows after a backend restart.
 - **Search and watchlist access for runtime-discovered channels** — Newly discovered live fields are now searchable from Overview and visible in watchlist/source pickers with a `Discovered` badge, so operators can inspect and pin dynamic payload telemetry without waiting for a catalog update.
 - **Cross-source watchlist adds** — Adding the same channel name to different sources now persists correctly. A leftover legacy unique index on `watchlist.telemetry_name` was blocking source-scoped watchlists and causing add-to-watchlist actions to appear successful before the database commit failed.
 - Switching from a valid channel detail page to a source that does not expose that channel no longer leads operators into invalid channel pages or 404s. The app now redirects to the selected source’s Overview with an unavailable notice.

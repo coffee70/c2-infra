@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -24,7 +24,7 @@ import { CustomTimestampPicker } from "@/components/custom-timestamp-picker";
 import { CheckIcon, CopyIcon, FlagIcon, FlagOffIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  useTelemetryChannelRunsQuery,
+  useTelemetryChannelStreamsQuery,
   useTelemetryRecentQuery,
   type HistoryPoint,
 } from "@/lib/query-hooks";
@@ -38,12 +38,14 @@ const RANGE_PRESETS: { label: string; minutes: TimePreset }[] = [
   { label: "24 hr", minutes: 1440 },
 ];
 
+const ACTIVE_LATEST_VALUE = "__active_latest__";
+
 interface TelemetryHistoryTableProps {
   channelName: string;
-  /** Source (banner source id); runs dropdown is scoped to this source. */
+  /** Source (banner source id); streams dropdown is scoped to this source. */
   sourceId: string;
-  /** Default run to select (e.g. current run for Summary/Live); table and exports use selected run. */
-  defaultRunId?: string;
+  /** Default stream to select (e.g. current stream for Summary/Live); table and exports use selected stream. */
+  defaultStreamId?: string;
   units?: string | null;
 }
 
@@ -109,26 +111,21 @@ function triggerDownload(filename: string, mime: string, data: BlobPart) {
 export function TelemetryHistoryTable({
   channelName,
   sourceId,
-  defaultRunId,
+  defaultStreamId,
   units,
 }: TelemetryHistoryTableProps) {
-  const effectiveDefaultRun = defaultRunId ?? sourceId;
   const [rangeMinutes, setRangeMinutes] = useState<TimePreset>(60);
   const [customSince, setCustomSince] = useState<string | null>(null);
   const [useCustom, setUseCustom] = useState(false);
   const [useUTC, setUseUTC] = useState(true);
   const [valueFilter, setValueFilter] = useState("");
-  const [downloadMeta, setDownloadMeta] = useState<DownloadMeta>({});
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<string>(effectiveDefaultRun);
+  const [selectedStreamOverride, setSelectedStreamOverride] = useState<string | null>(null);
+  const selectedStreamId = selectedStreamOverride ?? defaultStreamId ?? "";
 
-  useEffect(() => {
-    setSelectedRunId(effectiveDefaultRun);
-  }, [effectiveDefaultRun]);
-
-  const runsQuery = useTelemetryChannelRunsQuery(channelName, sourceId);
-  const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
+  const streamsQuery = useTelemetryChannelStreamsQuery(channelName, sourceId);
+  const streams = useMemo(() => streamsQuery.data ?? [], [streamsQuery.data]);
 
   const sinceIso = useMemo(
     () => (useCustom && customSince ? customSince : toIsoMinutesAgo(rangeMinutes)),
@@ -154,25 +151,28 @@ export function TelemetryHistoryTable({
     catalogSourceId: sourceId,
     limit: String(limit),
     since: sinceIso,
-    source_id: selectedRunId,
+    ...(selectedStreamId ? { stream_id: selectedStreamId } : {}),
   });
   const rows = useMemo(() => historyQuery.data?.data ?? [], [historyQuery.data]);
   const loading = historyQuery.isLoading || historyQuery.isFetching;
   const error = historyQuery.isError ? historyQuery.error.message : null;
 
-  useEffect(() => {
-    if (!historyQuery.data) return;
-    setDownloadMeta({
-      sinceIso,
-      untilIso: undefined,
-      requestedSince: historyQuery.data.requested_since ?? null,
-      requestedUntil: historyQuery.data.requested_until ?? null,
-      effectiveSince: historyQuery.data.effective_since ?? null,
-      effectiveUntil: historyQuery.data.effective_until ?? null,
-      appliedTimeFilter: Boolean(historyQuery.data.applied_time_filter),
-      fallbackToRecent: Boolean(historyQuery.data.fallback_to_recent),
-    });
-  }, [historyQuery.data, sinceIso]);
+  const downloadMeta = useMemo<DownloadMeta>(
+    () =>
+      historyQuery.data
+        ? {
+            sinceIso,
+            untilIso: undefined,
+            requestedSince: historyQuery.data.requested_since ?? null,
+            requestedUntil: historyQuery.data.requested_until ?? null,
+            effectiveSince: historyQuery.data.effective_since ?? null,
+            effectiveUntil: historyQuery.data.effective_until ?? null,
+            appliedTimeFilter: Boolean(historyQuery.data.applied_time_filter),
+            fallbackToRecent: Boolean(historyQuery.data.fallback_to_recent),
+        }
+        : {},
+    [historyQuery.data, sinceIso]
+  );
 
   /** Parse ">10", "< 0", ">=5", "<=", "42" etc. and filter rows by numeric comparison or substring. */
   const filteredRows = useMemo(() => {
@@ -223,10 +223,11 @@ export function TelemetryHistoryTable({
 
   const handleExportCsv = () => {
     if (!filteredRows.length) return;
-    const csv = buildCsv(filteredRows, channelName, selectedRunId);
+    const exportSourceId = selectedStreamId || sourceId;
+    const csv = buildCsv(filteredRows, channelName, exportSourceId);
     const { sinceIso, untilIso } = downloadMeta;
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = selectedRunId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = exportSourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
     const suffix =
       sinceIso && untilIso
         ? `${sinceIso}_${untilIso}`
@@ -239,13 +240,14 @@ export function TelemetryHistoryTable({
 
   const handleExportJson = () => {
     if (!filteredRows.length) return;
+    const exportSourceId = selectedStreamId || sourceId;
     const payload = {
       channel_name: channelName,
-      source_id: selectedRunId,
+      source_id: exportSourceId,
       points: filteredRows,
     };
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = selectedRunId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = exportSourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
     const filename = `${safeChannel}_${safeSource}_history.json`;
     triggerDownload(
       filename,
@@ -256,7 +258,7 @@ export function TelemetryHistoryTable({
 
   const handleExportParquet = () => {
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = selectedRunId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = (selectedStreamId || sourceId).replace(/[^a-zA-Z0-9_-]+/g, "_");
     const filename = `${safeChannel}_${safeSource}_history.parquet.txt`;
     const note =
       "# Parquet export\n" +
@@ -272,32 +274,37 @@ export function TelemetryHistoryTable({
   const visible = filteredRows.length;
   const fallbackToRecent = downloadMeta.fallbackToRecent ?? false;
 
-  const runOptions = useMemo(() => {
-    const byId = new Map(runs.map((s) => [s.source_id, s]));
-    if (selectedRunId && !byId.has(selectedRunId)) {
-      byId.set(selectedRunId, {
-        source_id: selectedRunId,
+  const streamOptions = useMemo(() => {
+    const getStreamKey = (stream: { stream_id?: string }) => stream.stream_id ?? "";
+    const byId = new Map<string, { stream_id?: string; label: string }>();
+    for (const stream of streams) {
+      const key = getStreamKey(stream);
+      if (!byId.has(key)) {
+        byId.set(key, stream);
+      }
+    }
+    if (selectedStreamId && !byId.has(selectedStreamId)) {
+      byId.set(selectedStreamId, {
+        stream_id: selectedStreamId,
         label:
-          /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/.test(selectedRunId)
+          /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/.test(selectedStreamId)
             ? (() => {
-                const m = selectedRunId.match(
+                const m = selectedStreamId.match(
                   /-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/,
                 );
                 return m
-                  ? `Run started at ${m[1]} ${m[2]}:${m[3]} UTC`
-                  : selectedRunId;
+                  ? `Stream started at ${m[1]} ${m[2]}:${m[3]} UTC`
+                  : selectedStreamId;
               })()
-            : selectedRunId,
+            : selectedStreamId,
       });
     }
-    // Preserve newest-first order (by source_id desc) to match backend; label sort would put older dates first.
-    return Array.from(byId.values()).sort((a, b) =>
-      b.source_id.localeCompare(a.source_id, undefined, { sensitivity: "base" }),
-    );
-  }, [runs, selectedRunId]);
+    return Array.from(byId.values());
+  }, [selectedStreamId, streams]);
 
   const handleCopyRow = async (point: HistoryPoint) => {
-    const line = `channel=${channelName} source=${selectedRunId} timestamp=${point.timestamp} value=${point.value}`;
+    const exportSourceId = selectedStreamId || sourceId;
+    const line = `channel=${channelName} source=${exportSourceId} timestamp=${point.timestamp} value=${point.value}`;
     await navigator.clipboard.writeText(line);
     setCopiedKey(point.timestamp);
     setTimeout(() => {
@@ -322,10 +329,10 @@ export function TelemetryHistoryTable({
       <CardHeader>
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <CardTitle className="text-sm font-medium text-muted-foreground">
+            <CardTitle className="text-muted-foreground text-sm font-medium">
               History
             </CardTitle>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="text-muted-foreground mt-1 text-xs">
               Logged samples for this telemetry channel from the archive.
             </p>
           </div>
@@ -388,27 +395,32 @@ export function TelemetryHistoryTable({
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <div className="flex flex-col gap-1">
-            <Label htmlFor="history-run" className="text-[11px] text-muted-foreground">
-              Run
+            <Label htmlFor="history-stream" className="text-muted-foreground text-[11px]">
+              Stream
             </Label>
             <Select
-              value={selectedRunId}
-              onValueChange={setSelectedRunId}
+              value={selectedStreamId || ACTIVE_LATEST_VALUE}
+              onValueChange={(value) => {
+                setSelectedStreamOverride(
+                  value === ACTIVE_LATEST_VALUE ? null : value
+                );
+              }}
             >
-              <SelectTrigger id="history-run" className="h-8 w-[200px] text-xs">
-                <SelectValue placeholder="Run" />
+              <SelectTrigger id="history-stream" className="h-8 w-[200px] text-xs">
+                <SelectValue placeholder="Stream" />
               </SelectTrigger>
               <SelectContent>
-                {runOptions.map((s) => (
-                  <SelectItem key={s.source_id} value={s.source_id}>
-                    {s.label || s.source_id}
+                <SelectItem value={ACTIVE_LATEST_VALUE}>Active / latest</SelectItem>
+                {streamOptions.map((s) => (
+                  <SelectItem key={s.stream_id ?? ""} value={s.stream_id ?? ""}>
+                    {s.label || s.stream_id}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="flex flex-col gap-1">
-            <Label htmlFor="history-value-filter" className="text-[11px] text-muted-foreground">
+            <Label htmlFor="history-value-filter" className="text-muted-foreground text-[11px]">
               Filter by value
             </Label>
             <Input
@@ -464,14 +476,14 @@ export function TelemetryHistoryTable({
       </CardHeader>
       <CardContent>
         {loading && !rows.length ? (
-          <div className="flex h-[200px] items-center justify-center gap-2 text-muted-foreground">
+          <div className="text-muted-foreground flex h-[200px] items-center justify-center gap-2">
             <Spinner size="default" />
             <span className="text-sm">Loading history…</span>
           </div>
         ) : error ? (
-          <div className="text-sm text-destructive">{error}</div>
+          <div className="text-destructive text-sm">{error}</div>
         ) : !rows.length ? (
-          <p className="text-sm text-muted-foreground">
+          <p className="text-muted-foreground text-sm">
             No history available in the selected range.
           </p>
         ) : (
@@ -499,7 +511,7 @@ export function TelemetryHistoryTable({
               </div>
             )}
             {!fallbackToRecent && (downloadMeta.effectiveSince || downloadMeta.effectiveUntil) && (
-              <div className="mb-2 text-xs text-muted-foreground">
+              <div className="text-muted-foreground mb-2 text-xs">
                 Showing{" "}
                 <strong className="text-foreground">{visible}</strong> of{" "}
                 <strong className="text-foreground">{total}</strong> samples between{" "}
@@ -527,7 +539,7 @@ export function TelemetryHistoryTable({
             )}
             <div className="max-h-[320px] overflow-auto rounded-md border">
               <table className="min-w-full text-left text-xs">
-                <thead className="sticky top-0 bg-muted">
+                <thead className="bg-muted sticky top-0">
                   <tr>
                     <th className="px-3 py-2 font-medium">
                       Timestamp ({useUTC ? "UTC" : "local"})
@@ -553,7 +565,7 @@ export function TelemetryHistoryTable({
                       return (
                         <tr
                           key={r.timestamp}
-                          className={`border-t border-border/60 ${
+                          className={`border-border/60 border-t ${
                             isFlagged ? "bg-muted/40" : ""
                           }`}
                         >
@@ -563,7 +575,7 @@ export function TelemetryHistoryTable({
                           <td className="px-3 py-1.5 align-middle">
                             {r.value}
                           </td>
-                          <td className="px-3 py-1.5 align-middle text-right">
+                          <td className="px-3 py-1.5 text-right align-middle">
                             <div className="inline-flex items-center gap-1">
                               <Tooltip>
                                 <TooltipTrigger asChild>

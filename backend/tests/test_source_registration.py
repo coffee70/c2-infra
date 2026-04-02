@@ -513,6 +513,12 @@ def test_merge_builtin_duplicate_source_moves_channel_aliases() -> None:
 
     assert any("INSERT INTO telemetry_channel_aliases" in stmt for stmt in statements)
     assert any("DELETE FROM telemetry_channel_aliases" in stmt for stmt in statements)
+    assert any("CREATE TEMP TABLE tmp_builtin_stream_scope" in stmt for stmt in statements)
+    assert any("UPDATE telemetry_streams" in stmt for stmt in statements)
+    assert any("packet_source" in stmt and "receiver_id" in stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt or "INSERT INTO telemetry_current" in stmt)
+    assert "packet_source" in next(stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt)
+    assert "receiver_id" in next(stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt)
+    assert all("LIKE :old_run_prefix" not in stmt for stmt in statements)
 
 
 def test_bootstrap_builtin_sources_skips_invalid_catalogs_without_aborting(monkeypatch) -> None:
@@ -817,6 +823,13 @@ def test_seed_metadata_merges_discovered_alias_conflict_into_canonical_channel(m
     assert any("INSERT INTO telemetry_current" in stmt for stmt in statements)
     assert any("INSERT INTO telemetry_statistics" in stmt for stmt in statements)
     assert any("UPDATE telemetry_alerts" in stmt for stmt in statements)
+    assert any("tmp_same_source_stream_scope" in stmt for stmt in statements)
+    data_merge_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt)
+    current_merge_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_current" in stmt)
+    assert "packet_source" in data_merge_sql
+    assert "receiver_id" in data_merge_sql
+    assert "packet_source" in current_merge_sql
+    assert "receiver_id" in current_merge_sql
     current_merge_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_current" in stmt)
     assert "EXCLUDED.generation_time > telemetry_current.generation_time" in current_merge_sql
     assert "EXCLUDED.generation_time = telemetry_current.generation_time" in current_merge_sql
@@ -1304,6 +1317,7 @@ def test_create_discovered_channel_metadata_recovers_from_concurrent_insert() ->
     existing = MagicMock()
     existing.channel_origin = "discovered"
     existing.discovery_namespace = None
+    savepoint = MagicMock()
 
     class ScalarResult:
         def __init__(self, rows):
@@ -1319,6 +1333,7 @@ def test_create_discovered_channel_metadata_recovers_from_concurrent_insert() ->
         ScalarResult([]),
         ScalarResult([existing]),
     ]
+    db.begin_nested.return_value = savepoint
     db.flush.side_effect = IntegrityError("insert", {}, Exception("duplicate key"))
 
     meta = create_discovered_channel_metadata(
@@ -1329,22 +1344,31 @@ def test_create_discovered_channel_metadata_recovers_from_concurrent_insert() ->
     )
 
     assert meta is existing
-    db.rollback.assert_called_once()
+    savepoint.rollback.assert_called_once()
+    savepoint.commit.assert_not_called()
+    db.rollback.assert_not_called()
 
 
-def test_source_has_telemetry_history_checks_custom_source_ids() -> None:
-    """Custom source ids should be checked directly for historical telemetry rows."""
+def test_source_has_telemetry_history_uses_stream_registry() -> None:
+    """Historical telemetry checks should include owned stream ids from the registry."""
 
     db = MagicMock()
-    counts = iter([1, 0])
+    statements: list[str] = []
 
     class ScalarOneResult:
         def scalar_one(self):
-            return next(counts)
+            return 1
 
-    db.execute.side_effect = lambda _statement: ScalarOneResult()
+    def fake_execute(statement):
+        statements.append(str(statement))
+        return ScalarOneResult()
+
+    db.execute.side_effect = fake_execute
 
     assert source_has_telemetry_history(db, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") is True
+    assert len(statements) == 1
+    assert "telemetry_streams" in statements[0]
+    assert "LIKE" not in statements[0]
 
 
 def test_update_source_rejects_simulator_definition_path_changes() -> None:

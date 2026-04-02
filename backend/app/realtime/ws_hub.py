@@ -21,6 +21,8 @@ from app.models.schemas import (
 logger = logging.getLogger(__name__)
 
 BROADCAST_QUEUE_MAXSIZE = 50  # Drop oldest when full to avoid event loop starvation
+SUBSCRIPTION_MODE_SOURCE_WIDE = "source_wide"
+SUBSCRIPTION_MODE_EXPLICIT_STREAM = "explicit_stream"
 
 
 class RealtimeWsHub:
@@ -45,6 +47,8 @@ class RealtimeWsHub:
         async with self._lock:
             self._connections[ws] = {
                 "active_source_id": "default",
+                "active_stream_id": None,
+                "stream_subscription_mode": SUBSCRIPTION_MODE_SOURCE_WIDE,
                 "watchlist_channels": set(),
                 "channel_detail": set(),
                 "alerts_subscribed": True,
@@ -66,20 +70,32 @@ class RealtimeWsHub:
         channel_name: str | None = None,
         for_alerts: bool = False,
         source_id: str | None = None,
-        alert_source_id: str | None = None,
+        stream_id: str | None = None,
     ) -> list[WebSocket]:
         """Get connections that should receive this update."""
         result = []
         for ws, subs in self._connections.items():
-            conn_source = subs.get("active_source_id", "default")
+            conn_source_id = subs.get("active_source_id", "default")
+            conn_stream_id = subs.get("active_stream_id")
+            subscription_mode = subs.get(
+                "stream_subscription_mode",
+                SUBSCRIPTION_MODE_SOURCE_WIDE
+                if conn_stream_id is None
+                else SUBSCRIPTION_MODE_EXPLICIT_STREAM,
+            )
+            scope_matches = (
+                conn_source_id == source_id
+                if subscription_mode == SUBSCRIPTION_MODE_SOURCE_WIDE
+                else conn_stream_id == stream_id
+            )
             if for_alerts and subs.get("alerts_subscribed"):
-                if alert_source_id is None or conn_source == alert_source_id:
+                if scope_matches:
                     result.append(ws)
             elif channel_name and channel_name in subs.get("watchlist_channels", set()):
-                if source_id is None or conn_source == source_id:
+                if scope_matches:
                     result.append(ws)
             elif channel_name and channel_name in subs.get("channel_detail", set()):
-                if source_id is None or conn_source == source_id:
+                if scope_matches:
                     result.append(ws)
         return result
 
@@ -161,21 +177,21 @@ class RealtimeWsHub:
             self._loop,
         )
 
-    def schedule_orbit_status(self, source_id: str, payload: dict) -> None:
+    def schedule_orbit_status(self, vehicle_id: str, payload: dict) -> None:
         """Schedule orbit status broadcast from sync context."""
         if self._loop is None:
             return
         asyncio.run_coroutine_threadsafe(
-            self.broadcast_orbit_status(source_id, payload),
+            self.broadcast_orbit_status(vehicle_id, payload),
             self._loop,
         )
 
-    async def broadcast_orbit_status(self, source_id: str, payload: dict) -> None:
+    async def broadcast_orbit_status(self, vehicle_id: str, payload: dict) -> None:
         """Broadcast orbit status to all connected clients."""
         if not self._connections:
             return
         msg = WsOrbitStatus(
-            source_id=source_id,
+            vehicle_id=vehicle_id,
             status=payload.get("status", ""),
             reason=payload.get("reason", ""),
             orbit_type=payload.get("orbit_type"),
@@ -200,6 +216,7 @@ class RealtimeWsHub:
         targets = self._get_subscribed_connections(
             channel_name=update.name,
             source_id=update.source_id,
+            stream_id=update.stream_id,
         )
         if not targets:
             return
@@ -230,7 +247,8 @@ class RealtimeWsHub:
             alert_obj = alert
         targets = self._get_subscribed_connections(
             for_alerts=True,
-            alert_source_id=alert_obj.source_id,
+            source_id=alert_obj.source_id,
+            stream_id=alert_obj.stream_id,
         )
         if not targets:
             return
@@ -250,22 +268,36 @@ class RealtimeWsHub:
         ws: WebSocket,
         channels: list[str],
         source_id: str = "default",
+        stream_id: str | None = None,
     ) -> None:
         """Subscribe client to watchlist channels for a source."""
         async with self._lock:
             if ws in self._connections:
                 self._connections[ws]["active_source_id"] = source_id
+                self._connections[ws]["active_stream_id"] = stream_id
+                self._connections[ws]["stream_subscription_mode"] = (
+                    SUBSCRIPTION_MODE_SOURCE_WIDE
+                    if stream_id is None
+                    else SUBSCRIPTION_MODE_EXPLICIT_STREAM
+                )
                 self._connections[ws]["watchlist_channels"] = set(channels)
 
     async def subscribe_alerts(
         self,
         ws: WebSocket,
         source_id: str = "default",
+        stream_id: str | None = None,
     ) -> None:
         """Subscribe client to alert stream for a source."""
         async with self._lock:
             if ws in self._connections:
                 self._connections[ws]["active_source_id"] = source_id
+                self._connections[ws]["active_stream_id"] = stream_id
+                self._connections[ws]["stream_subscription_mode"] = (
+                    SUBSCRIPTION_MODE_SOURCE_WIDE
+                    if stream_id is None
+                    else SUBSCRIPTION_MODE_EXPLICIT_STREAM
+                )
                 self._connections[ws]["alerts_subscribed"] = True
 
     async def subscribe_channel(
@@ -273,11 +305,18 @@ class RealtimeWsHub:
         ws: WebSocket,
         name: str,
         source_id: str = "default",
+        stream_id: str | None = None,
     ) -> None:
         """Subscribe client to single channel detail for a source."""
         async with self._lock:
             if ws in self._connections:
                 self._connections[ws]["active_source_id"] = source_id
+                self._connections[ws]["active_stream_id"] = stream_id
+                self._connections[ws]["stream_subscription_mode"] = (
+                    SUBSCRIPTION_MODE_SOURCE_WIDE
+                    if stream_id is None
+                    else SUBSCRIPTION_MODE_EXPLICIT_STREAM
+                )
                 self._connections[ws]["channel_detail"].add(name)
 
     async def unsubscribe_channel(self, ws: WebSocket, name: str) -> None:

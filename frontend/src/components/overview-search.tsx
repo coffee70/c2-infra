@@ -367,18 +367,18 @@ export function OverviewSearch({
               "hover:border-border hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             )}
           >
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <div className="bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-full">
               <SearchIcon className="size-4" />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-foreground">
+              <div className="text-foreground truncate text-sm font-medium">
                 {query.trim() || "Search telemetry by meaning, anomaly, subsystem, or units"}
               </div>
-              <div className="truncate text-xs text-muted-foreground">
+              <div className="text-muted-foreground truncate text-xs">
                 Scoped to {sourceName} • Opens results under the search bar
               </div>
             </div>
-            <div className="hidden shrink-0 items-center gap-1 rounded-full border bg-background px-2 py-1 text-[11px] text-muted-foreground sm:flex">
+            <div className="bg-background text-muted-foreground hidden shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-[11px] sm:flex">
               <span>/</span>
               <span>⌘K</span>
             </div>
@@ -388,13 +388,13 @@ export function OverviewSearch({
           align="start"
           side="bottom"
           sideOffset={10}
-          className="w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-trigger-width)] rounded-3xl border border-border/70 bg-background p-0 shadow-2xl"
+          className="border-border/70 bg-background w-[var(--radix-popover-trigger-width)] max-w-[var(--radix-popover-trigger-width)] rounded-3xl border p-0 shadow-2xl"
         >
-          <div className="border-b border-border/60 px-4 py-4 sm:px-5">
+          <div className="border-border/60 border-b px-4 py-4 sm:px-5">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold">Telemetry search</h2>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-muted-foreground text-sm">
                   Search within {sourceName}, then jump straight into channel detail.
                 </p>
               </div>
@@ -415,7 +415,7 @@ export function OverviewSearch({
                   onChange={(event) => setQuery(event.target.value)}
                   className="h-11 rounded-xl"
                 />
-                <Button type="submit" disabled={loading} className="h-11 rounded-xl px-5 text-primary-foreground">
+                <Button type="submit" disabled={loading} className="text-primary-foreground h-11 rounded-xl px-5">
                   {loading && (
                     <Spinner
                       size="sm"
@@ -427,7 +427,7 @@ export function OverviewSearch({
               </div>
 
               <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-                <div className="rounded-2xl border border-border/60 bg-muted/20">
+                <div className="border-border/60 bg-muted/20 rounded-2xl border">
                   <CollapsibleTrigger asChild>
                     <button
                       type="button"
@@ -436,7 +436,7 @@ export function OverviewSearch({
                       <span className="text-left">
                         Advanced filters
                         {hasActiveFilters && (
-                          <span className="ml-2 text-xs text-muted-foreground">
+                          <span className="text-muted-foreground ml-2 text-xs">
                             {[
                               filterSubsystem && "subsystem",
                               filterUnits && "units",
@@ -456,7 +456,7 @@ export function OverviewSearch({
                       />
                     </button>
                   </CollapsibleTrigger>
-                  <CollapsibleContent className="border-t border-border/60 px-3 py-3">
+                  <CollapsibleContent className="border-border/60 border-t px-3 py-3">
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="space-y-1.5">
                         <Label htmlFor="overview-search-subsystem">Subsystem</Label>
@@ -498,15 +498,15 @@ export function OverviewSearch({
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="md:col-span-2 flex flex-wrap items-center gap-2">
-                        <label className="inline-flex min-h-10 items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-2 md:col-span-2">
+                        <label className="border-border/60 bg-background inline-flex min-h-10 items-center gap-2 rounded-full border px-3 py-2">
                           <Checkbox
                             checked={filterAnomalousOnly}
                             onCheckedChange={(checked) => setFilterAnomalousOnly(!!checked)}
                           />
                           <span className="text-sm">Only anomalous</span>
                         </label>
-                        <div className="inline-flex min-h-10 flex-wrap items-center gap-2 rounded-full border border-border/60 bg-background px-3 py-2">
+                        <div className="border-border/60 bg-background inline-flex min-h-10 flex-wrap items-center gap-2 rounded-full border px-3 py-2">
                           <label className="inline-flex items-center gap-2">
                             <Checkbox
                               checked={filterRecentOnly}
@@ -536,7 +536,7 @@ export function OverviewSearch({
                                   }
                                   className="h-8 w-16 rounded-lg px-2 text-sm"
                                 />
-                                <span className="text-sm text-muted-foreground">hours</span>
+                                <span className="text-muted-foreground text-sm">hours</span>
                               </div>
                             </>
                           )}
@@ -562,14 +562,14 @@ export function OverviewSearch({
                   <section className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="text-sm font-semibold">Recent channels</h3>
-                      <span className="text-xs text-muted-foreground">Quick return</span>
+                      <span className="text-muted-foreground text-xs">Quick return</span>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {recentForSource.map((entry) => (
                         <Link
                           key={`${entry.sourceId}:${entry.name}`}
                           href={buildDetailHref(entry.name, entry.sourceId)}
-                          className="rounded-full border px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+                          className="hover:bg-accent rounded-full border px-3 py-1.5 text-sm transition-colors"
                         >
                           {entry.name}
                         </Link>
@@ -582,7 +582,7 @@ export function OverviewSearch({
                   <section className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="text-sm font-semibold">Watchlist favorites</h3>
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-muted-foreground text-xs">
                         Add from results with the star
                       </span>
                     </div>
@@ -591,7 +591,7 @@ export function OverviewSearch({
                         <Link
                           key={name}
                           href={buildDetailHref(name, sourceId)}
-                          className="rounded-full border px-3 py-1.5 text-sm transition-colors hover:bg-accent"
+                          className="hover:bg-accent rounded-full border px-3 py-1.5 text-sm transition-colors"
                         >
                           {name}
                         </Link>
@@ -623,7 +623,7 @@ export function OverviewSearch({
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h3 className="text-sm font-semibold">Results</h3>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-muted-foreground text-xs">
                       {results.length} match{results.length === 1 ? "" : "es"} in {sourceName}
                     </p>
                   </div>
@@ -635,7 +635,7 @@ export function OverviewSearch({
                     return (
                       <div
                         key={result.name}
-                        className="rounded-2xl border border-border/60 bg-card/60 p-3"
+                        className="border-border/60 bg-card/60 rounded-2xl border p-3"
                       >
                         <div className="flex items-start gap-3">
                           <Tooltip>
@@ -643,7 +643,7 @@ export function OverviewSearch({
                               <button
                                 type="button"
                                 onClick={() => toggleFavorite(result.name)}
-                                className="mt-0.5 rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                className="text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-ring mt-0.5 rounded-full p-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
                                 aria-label={
                                   isFavorite
                                     ? `Remove ${result.name} from favorites`
@@ -668,7 +668,7 @@ export function OverviewSearch({
                             <div className="mb-1 flex flex-wrap items-center gap-2">
                               <Link
                                 href={buildDetailHref(result.name, sourceId)}
-                                className="font-medium text-primary hover:underline"
+                                className="text-primary font-medium hover:underline"
                               >
                                 {result.name}
                               </Link>
@@ -685,11 +685,11 @@ export function OverviewSearch({
                               )}
                             </div>
 
-                            <p className="mb-2 line-clamp-2 text-sm text-muted-foreground">
+                            <p className="text-muted-foreground mb-2 line-clamp-2 text-sm">
                               {result.description || "No description available."}
                             </p>
 
-                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                            <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                               <span>
                                 Confidence: {matchConfidenceLabel(result.match_confidence)} (
                                 {(result.match_confidence * 100).toFixed(0)}%)

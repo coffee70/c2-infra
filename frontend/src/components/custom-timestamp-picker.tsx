@@ -123,7 +123,7 @@ export function CustomTimestampPicker({
         />
         <div className="flex items-center gap-2">
           <Label
-            className="text-[11px] text-muted-foreground"
+            className="text-muted-foreground text-[11px]"
             id={`${id}-time-label`}
           >
             Time (UTC)

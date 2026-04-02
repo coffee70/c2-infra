@@ -57,7 +57,7 @@ export function SimilarTelemetryCard({ detailSourceId, channels }: SimilarTeleme
     <Card>
       <CardHeader>
         <CardTitle>Similar / Related Telemetry</CardTitle>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-muted-foreground text-sm">
           Same subsystem or semantically related — triage without extra clicks
         </p>
       </CardHeader>
@@ -67,11 +67,11 @@ export function SimilarTelemetryCard({ detailSourceId, channels }: SimilarTeleme
             <li key={r.name}>
               <Link
                 href={buildTelemetryDetailHref(detailSourceId, r.name)}
-                className="block p-2 rounded-md border hover:bg-accent transition-colors duration-200 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 text-primary hover:underline underline-offset-4"
+                className="hover:bg-accent focus-visible:ring-ring text-primary block rounded-md border p-2 text-sm underline-offset-4 transition-colors duration-200 hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
               >
-                <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium">{r.name}</span>
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex flex-wrap items-center gap-2">
                     {r.current_value != null && (
                       <span className="tabular-nums">
                         {formatWithUnits(r.current_value, r.units)}
@@ -84,7 +84,7 @@ export function SimilarTelemetryCard({ detailSourceId, channels }: SimilarTeleme
                     )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1 flex-wrap">
+                <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-2 text-xs">
                   <span>{r.link_reason}</span>
                   {r.last_timestamp && (
                     <>

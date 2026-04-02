@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 import { buildTelemetryApiBase } from "@/lib/telemetry-routes";
-import { runIdToSourceId } from "@/lib/source-ids";
 import {
   Line,
   XAxis,
@@ -136,13 +135,15 @@ function downsampleByWidth<T extends { timestamp: string; value: number }>(
 
 export function TrendChartAnalysis({
   channelName,
-  sourceId = "default",
+  vehicleId = "default",
+  streamId = null,
   units,
   bounds,
   lastTimestamp,
 }: {
   channelName: string;
-  sourceId?: string;
+  vehicleId?: string;
+  streamId?: string | null;
   units?: string | null;
   bounds?: Bounds;
   lastTimestamp?: string | null;
@@ -206,28 +207,21 @@ export function TrendChartAnalysis({
     return 1000;
   }, [zoomRefetch, useCustomRange, rangeMinutes]);
 
-  const canonicalSourceId = useMemo(
-    () => runIdToSourceId(sourceId),
-    [sourceId]
-  );
-
   const fetchData = useCallback(
     async (name: string, since: string, until: string | null) => {
-      const runIdParam =
-        canonicalSourceId === sourceId ? undefined : sourceId;
       const params = new URLSearchParams({
         limit: `${fetchLimit}`,
         since,
       });
       if (until) params.set("until", until);
-      if (runIdParam) params.set("run_id", runIdParam);
-      const url = `${API_URL}${buildTelemetryApiBase(canonicalSourceId, name)}/recent?${params.toString()}`;
+      if (streamId) params.set("stream_id", streamId);
+      const url = `${API_URL}${buildTelemetryApiBase(vehicleId, name)}/recent?${params.toString()}`;
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`Failed to fetch ${name}`);
       const json = await res.json();
       return (json.data || []) as DataPoint[];
     },
-    [fetchLimit, sourceId, canonicalSourceId]
+    [fetchLimit, streamId, vehicleId]
   );
 
   useEffect(() => {
@@ -270,11 +264,11 @@ export function TrendChartAnalysis({
   }, []);
 
   useEffect(() => {
-    fetch(`${API_URL}/telemetry/list?source_id=${encodeURIComponent(canonicalSourceId)}`, { cache: "no-store" })
+    fetch(`${API_URL}/telemetry/list?source_id=${encodeURIComponent(vehicleId)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((json) => setChannelList(json.names || []))
       .catch(() => setChannelList([]));
-  }, [canonicalSourceId]);
+  }, [vehicleId]);
 
   useEffect(() => {
     const client = new RealtimeWsClient();
@@ -306,9 +300,9 @@ export function TrendChartAnalysis({
       }
     });
     client.connect();
-    client.subscribeWatchlist([channelName], sourceId);
+    client.subscribeWatchlist([channelName], vehicleId, streamId);
     return () => client.disconnect();
-  }, [channelName, sourceId, fetchLimit]);
+  }, [channelName, fetchLimit, streamId, vehicleId]);
 
   useEffect(() => {
     const id = setInterval(() => setNowTs(Date.now()), 1000);
@@ -430,7 +424,7 @@ export function TrendChartAnalysis({
       const p = payload[0].payload;
       return (
         <div
-          className="rounded-md border bg-card p-3 text-sm shadow-md"
+          className="bg-card rounded-md border p-3 text-sm shadow-md"
           style={{
             backgroundColor: "var(--card)",
             color: "var(--card-foreground)",
@@ -456,7 +450,7 @@ export function TrendChartAnalysis({
 
   if (loading && data.length === 0) {
     return (
-      <div className="flex h-[300px] items-center justify-center gap-2 text-muted-foreground">
+      <div className="text-muted-foreground flex h-[300px] items-center justify-center gap-2">
         <Spinner size="default" />
         <span className="text-sm">Loading chart…</span>
       </div>
@@ -488,7 +482,7 @@ export function TrendChartAnalysis({
     <div className="space-y-3 overflow-visible">
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <span className="w-14 shrink-0 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          <span className="text-muted-foreground w-14 shrink-0 text-xs font-medium tracking-wider uppercase">
             Range
           </span>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -528,7 +522,7 @@ export function TrendChartAnalysis({
                 placeholder="Start"
                 id="trend-custom-start"
                 aria-label="Custom range start"
-                className="h-8 w-48 justify-start text-left font-normal text-xs"
+                className="h-8 w-48 justify-start text-left text-xs font-normal"
               />
               <span className="text-muted-foreground">to</span>
               <CustomTimestampPicker
@@ -537,15 +531,15 @@ export function TrendChartAnalysis({
                 placeholder="End"
                 id="trend-custom-end"
                 aria-label="Custom range end"
-                className="h-8 w-48 justify-start text-left font-normal text-xs"
+                className="h-8 w-48 justify-start text-left text-xs font-normal"
               />
             </span>
           )}
           </div>
         </div>
-        <Collapsible className="border-t border-border pt-3">
+        <Collapsible className="border-border border-t pt-3">
           <div className="flex flex-col gap-2">
-            <CollapsibleTrigger className="flex w-fit items-center gap-2 text-xs font-medium text-muted-foreground uppercase tracking-wider hover:text-foreground cursor-pointer data-[state=open]:[&_svg]:rotate-180">
+            <CollapsibleTrigger className="text-muted-foreground hover:text-foreground flex w-fit cursor-pointer items-center gap-2 text-xs font-medium tracking-wider uppercase data-[state=open]:[&_svg]:rotate-180">
               Display options
               <ChevronDownIcon className="size-3.5 transition-transform duration-200" />
             </CollapsibleTrigger>
@@ -576,7 +570,7 @@ export function TrendChartAnalysis({
                     onCheckedChange={(c) => setShowMeanP50(!!c)}
                     aria-label="Show mean and P50 overlay lines"
                   />
-                  <Label htmlFor="show-mean-p50" className="text-sm font-normal cursor-pointer">
+                  <Label htmlFor="show-mean-p50" className="cursor-pointer text-sm font-normal">
                     Mean/P50
                   </Label>
                 </div>
@@ -587,7 +581,7 @@ export function TrendChartAnalysis({
                     onCheckedChange={(c) => setShowP5P95(!!c)}
                     aria-label="Show P5 and P95 overlay lines"
                   />
-                  <Label htmlFor="show-p5-p95" className="text-sm font-normal cursor-pointer">
+                  <Label htmlFor="show-p5-p95" className="cursor-pointer text-sm font-normal">
                     P5/P95
                   </Label>
                 </div>
@@ -627,8 +621,8 @@ export function TrendChartAnalysis({
         </Collapsible>
 
         {chartData.length > 10 && (
-          <div className="flex flex-wrap items-center gap-3 border-t border-border pt-3">
-            <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+          <div className="border-border flex flex-wrap items-center gap-3 border-t pt-3">
+            <span className="text-muted-foreground text-xs font-medium tracking-wider uppercase">
               Time window
             </span>
             <Slider
@@ -677,7 +671,7 @@ export function TrendChartAnalysis({
       </div>
 
       {sampleInterval != null && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+        <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
           <span>Sample interval: {formatInterval(sampleInterval)}</span>
           {lastPoint && (
             <>
@@ -688,7 +682,7 @@ export function TrendChartAnalysis({
             </>
           )}
           {possibleGap && gapMs != null && (
-            <Badge variant="destructive" className="shrink-0 ml-1">
+            <Badge variant="destructive" className="ml-1 shrink-0">
               Possible gap: last sample {formatInterval(gapMs)} ago
             </Badge>
           )}

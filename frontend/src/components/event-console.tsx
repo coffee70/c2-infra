@@ -131,19 +131,19 @@ export function EventConsole({
       <Card
         id="events-console"
         className={
-          totalCount > 0 ? "border-l-4 border-l-destructive/50" : undefined
+          totalCount > 0 ? "border-l-destructive/50 border-l-4" : undefined
         }
       >
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
             <CardTitle>Events Console</CardTitle>
             {totalCount > 0 && (
-              <span className="rounded-full bg-destructive/20 px-2 py-0.5 text-xs font-medium text-destructive">
+              <span className="bg-destructive/20 text-destructive rounded-full px-2 py-0.5 text-xs font-medium">
                 {totalCount}
               </span>
             )}
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-muted-foreground text-sm">
             {totalCount} active alert{totalCount !== 1 ? "s" : ""} (newest first)
           </p>
         </CardHeader>
@@ -160,7 +160,7 @@ export function EventConsole({
                 ({ key, entries, label }) =>
                   entries.length > 0 && (
                     <div key={key}>
-                      <h4 className="text-sm font-medium text-muted-foreground mb-2">
+                      <h4 className="text-muted-foreground mb-2 text-sm font-medium">
                         {label}
                       </h4>
                       <ul className="space-y-2">
@@ -180,7 +180,7 @@ export function EventConsole({
 
                           return (
                             <li key={entry.name + (entry.id ?? "")}>
-                              <div className="p-2 rounded-md border hover:bg-accent/50 transition-colors">
+                              <div className="hover:bg-accent/50 rounded-md border p-2 transition-colors">
                                 <div className="flex items-center justify-between gap-2">
                                   <Link
                                     href={
@@ -188,18 +188,18 @@ export function EventConsole({
                                         ? "/planning"
                                         : buildTelemetryDetailHref(sourceId || DEFAULT_SOURCE_ID, entry.name)
                                     }
-                                    className="font-medium text-sm text-primary hover:underline underline-offset-4 truncate flex-1 min-w-0"
+                                    className="text-primary min-w-0 flex-1 truncate text-sm font-medium underline-offset-4 hover:underline"
                                   >
                                     {entry.name}
                                   </Link>
-                                  <span className="text-sm shrink-0">
+                                  <span className="shrink-0 text-sm">
                                     {formatWithUnits(
                                       entry.current_value,
                                       entry.units
                                     )}
                                   </span>
                                 </div>
-                                <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1 flex-wrap">
+                                <div className="text-muted-foreground mt-1 flex flex-wrap items-center gap-2 text-xs">
                                   <span>{formatTimeAgo(entry.last_timestamp)}</span>
                                   {entry.state_reason && (
                                     <span>

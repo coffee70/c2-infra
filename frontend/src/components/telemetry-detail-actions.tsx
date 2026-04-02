@@ -56,7 +56,7 @@ export function TelemetryDetailActions({ name, sourceId }: TelemetryDetailAction
             size="sm"
             onClick={toggleFavorite}
             disabled={loading}
-            className="h-8 text-xs gap-1.5"
+            className="h-8 gap-1.5 text-xs"
             aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
           >
         {loading ? (

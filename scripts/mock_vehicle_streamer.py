@@ -102,7 +102,12 @@ def backfill_historical(
             try:
                 r = requests.post(
                     data_url,
-                    json={"telemetry_name": name, "data": batch, "source_id": MOCK_VEHICLE_SOURCE_ID},
+                    json={
+                        "telemetry_name": name,
+                        "data": batch,
+                        "source_id": MOCK_VEHICLE_SOURCE_ID,
+                        "stream_id": MOCK_VEHICLE_SOURCE_ID,
+                    },
                     timeout=30,
                 )
                 if r.status_code != 200:
@@ -200,6 +205,7 @@ def main() -> None:
                 seq += 1
                 batch.append({
                     "source_id": MOCK_VEHICLE_SOURCE_ID,
+                    "stream_id": MOCK_VEHICLE_SOURCE_ID,
                     "channel_name": name,
                     "generation_time": now.isoformat(),
                     "value": value,

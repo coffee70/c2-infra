@@ -1,19 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { WatchlistConfig } from "@/components/watchlist-config";
 import { RealtimeOverviewWrapper } from "@/components/realtime-overview-wrapper";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import {
   useSimulatorRuntime,
   type SimulatorRuntimeStatus,
 } from "@/lib/simulator-runtime";
-import { DEFAULT_SOURCE_ID, resolveSourceAlias, runIdToSourceId } from "@/lib/source-ids";
+import { DEFAULT_SOURCE_ID, resolveSourceAlias } from "@/lib/source-ids";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
+const BOOTSTRAP_REQUEST_TIMEOUT_MS = 10_000;
 
 async function fetchWithTimeoutAndFallback(path: string): Promise<Response> {
   const bases = [API_URL, API_FALLBACK_URL].filter(
@@ -21,16 +23,26 @@ async function fetchWithTimeoutAndFallback(path: string): Promise<Response> {
   );
   let lastError: unknown = null;
   for (const base of bases) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, BOOTSTRAP_REQUEST_TIMEOUT_MS);
     try {
       const res = await fetch(`${base}${path}`, {
         cache: "no-store",
+        signal: controller.signal,
       });
       if (res.ok) {
         return res;
       }
       lastError = new Error(`HTTP ${res.status} from ${base}${path}`);
     } catch (e) {
-      lastError = e;
+      lastError =
+        controller.signal.aborted && e instanceof DOMException && e.name === "AbortError"
+          ? new Error(`Request timed out after ${BOOTSTRAP_REQUEST_TIMEOUT_MS}ms for ${base}${path}`)
+          : e;
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }
   throw lastError ?? new Error("All API paths failed");
@@ -75,6 +87,34 @@ interface OverviewSnapshot {
   hasPartialFailure: boolean;
 }
 
+async function readJsonResponse<T>(
+  response: Response,
+  label: string
+): Promise<T> {
+  const contentType = response.headers.get("content-type") ?? "unknown content type";
+  const body = await response.text();
+
+  if (!contentType.includes("application/json")) {
+    const snippet = body.slice(0, 120).replace(/\s+/g, " ").trim();
+    throw new Error(
+      `Expected JSON from ${label}, got ${contentType}${snippet ? ` (${snippet})` : ""}`
+    );
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    const snippet = body.slice(0, 120).replace(/\s+/g, " ").trim();
+    console.error(`[Overview] Invalid JSON from ${label}`, {
+      contentType,
+      snippet,
+    });
+    throw new Error(
+      `Invalid JSON from ${label}${snippet ? ` (${snippet})` : ""}`
+    );
+  }
+}
+
 const OVERVIEW_SOURCE_STORAGE_KEY = "overviewSourceId";
 const EMPTY_ANOMALIES: AnomaliesData = {
   power: [],
@@ -108,23 +148,37 @@ function mergeWatchlistChannels(
 }
 
 async function fetchOverviewSnapshot(
-  runId: string
+  sourceId: string,
+  streamId?: string | null,
 ): Promise<OverviewSnapshot> {
+  const overviewScopeId = streamId || sourceId;
   const [overviewRes, anomaliesRes, watchlistRes] = await Promise.all([
     fetchWithTimeoutAndFallback(
-      `/telemetry/overview?source_id=${encodeURIComponent(runId)}`
+      `/telemetry/overview?source_id=${encodeURIComponent(overviewScopeId)}`
     ),
     fetchWithTimeoutAndFallback(
-      `/telemetry/anomalies?source_id=${encodeURIComponent(runId)}`
+      `/telemetry/anomalies?source_id=${encodeURIComponent(overviewScopeId)}`
     ),
-    fetchWithTimeoutAndFallback(`/telemetry/watchlist?source_id=${encodeURIComponent(runId)}`),
+    fetchWithTimeoutAndFallback(
+      `/telemetry/watchlist?source_id=${encodeURIComponent(sourceId)}`
+    ),
   ]);
 
-  const overviewData = overviewRes.ok ? await overviewRes.json() : { channels: [] };
+  const overviewData = overviewRes.ok
+    ? await readJsonResponse<{ channels?: OverviewChannel[] }>(
+        overviewRes,
+        "/telemetry/overview"
+      )
+    : { channels: [] };
   const anomaliesData = anomaliesRes.ok
-    ? await anomaliesRes.json()
+    ? await readJsonResponse<AnomaliesData>(anomaliesRes, "/telemetry/anomalies")
     : EMPTY_ANOMALIES;
-  const watchlistData = watchlistRes.ok ? await watchlistRes.json() : { entries: [] };
+  const watchlistData = watchlistRes.ok
+    ? await readJsonResponse<{ entries?: WatchlistEntry[] }>(
+        watchlistRes,
+        "/telemetry/watchlist"
+      )
+    : { entries: [] };
   const watchlistEntries = Array.isArray(watchlistData.entries)
     ? watchlistData.entries
     : [];
@@ -146,7 +200,6 @@ async function fetchOverviewSnapshot(
 }
 
 export function OverviewContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const sourceFromUrl = searchParams.get("source");
   const unavailableChannel = searchParams.get("channel_unavailable");
@@ -167,11 +220,11 @@ export function OverviewContent() {
   const [initialSimulatorStatus, setInitialSimulatorStatus] = useState<
     SimulatorRuntimeStatus | null
   >(null);
-  const [latestSimulatorRunId, setLatestSimulatorRunId] = useState<string | null>(
+  const [latestSimulatorStreamId, setLatestSimulatorStreamId] = useState<string | null>(
     null
   );
-  const [committedRunId, setCommittedRunId] = useState<string | null>(null);
-  const [desiredRunId, setDesiredRunId] = useState<string | null>(null);
+  const [committedStreamId, setCommittedStreamId] = useState<string | null>(null);
+  const [desiredStreamId, setDesiredStreamId] = useState<string | null>(null);
   const [showSwitchingIndicator, setShowSwitchingIndicator] = useState(false);
   const [watchlistVersion, setWatchlistVersion] = useState(0);
 
@@ -180,21 +233,9 @@ export function OverviewContent() {
     setError(unavailableMessage);
   }, [unavailableChannel, unavailableMessage]);
 
-  let effectiveSource = resolveSourceAlias(
+  const effectiveSource = resolveSourceAlias(
     sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID
   );
-  if (effectiveSource && /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z?$/.test(effectiveSource)) {
-    effectiveSource = runIdToSourceId(effectiveSource);
-    if (typeof window !== "undefined") {
-      try {
-        sessionStorage.setItem(OVERVIEW_SOURCE_STORAGE_KEY, effectiveSource);
-      } catch {}
-      const params = new URLSearchParams(window.location.search);
-      params.set("source", effectiveSource);
-      const next = params.toString();
-      router.replace(next ? `/overview?${next}` : "/overview");
-    }
-  }
   const sourceReady = sourceFromUrl !== null || storageChecked;
   const sourceType = useMemo(
     () => sources.find((s) => s.id === effectiveSource)?.source_type,
@@ -207,27 +248,28 @@ export function OverviewContent() {
     initialStatus:
       initialSimulatorSourceId === effectiveSource ? initialSimulatorStatus : null,
   });
-  const isSwitchingRuns =
+  const isSwitchingStreams =
     !bootstrapLoading &&
-    desiredRunId != null &&
-    committedRunId != null &&
-    desiredRunId !== committedRunId;
+    desiredStreamId != null &&
+    committedStreamId != null &&
+    desiredStreamId !== committedStreamId;
 
   const refreshCommittedSnapshot = useCallback(async () => {
-    if (!committedRunId) return;
+    if (!committedStreamId) return;
 
     try {
       setError(unavailableMessage);
-      const snapshot = await fetchOverviewSnapshot(committedRunId);
+      const snapshot = await fetchOverviewSnapshot(effectiveSource, committedStreamId);
       setChannels(snapshot.channels);
       setAnomalies(snapshot.anomalies);
       if (snapshot.hasPartialFailure) {
         setError("Some data failed to load");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load overview");
+      console.error("[Overview] refresh committed snapshot failed", e);
+      setError("Failed to load overview");
     }
-  }, [committedRunId, unavailableMessage]);
+  }, [committedStreamId, effectiveSource, unavailableMessage]);
 
   const handleWatchlistChanged = useCallback(async () => {
     try {
@@ -256,16 +298,16 @@ export function OverviewContent() {
       try {
         setBootstrapLoading(true);
         setError(unavailableMessage);
-        setCommittedRunId(null);
-        setDesiredRunId(null);
+        setCommittedStreamId(null);
+        setDesiredStreamId(null);
         setShowSwitchingIndicator(false);
-        setLatestSimulatorRunId(null);
+        setLatestSimulatorStreamId(null);
 
         const sourcesPromise = fetchWithTimeoutAndFallback(
           "/telemetry/sources"
         );
         const runsPromise = fetchWithTimeoutAndFallback(
-          `/telemetry/sources/${encodeURIComponent(effectiveSource)}/runs`
+          `/telemetry/sources/${encodeURIComponent(effectiveSource)}/streams`
         );
 
         const [sourcesRes, runsRes] = await Promise.all([
@@ -275,10 +317,20 @@ export function OverviewContent() {
 
         if (cancelled) return;
 
-        const sourcesList = sourcesRes.ok ? await sourcesRes.json() : [];
-        const runsData = runsRes.ok ? await runsRes.json() : { sources: [] };
-        const runsList = Array.isArray(runsData.sources)
-          ? runsData.sources
+        const sourcesList = sourcesRes.ok
+          ? await readJsonResponse<TelemetrySource[]>(
+              sourcesRes,
+              "/telemetry/sources"
+            )
+          : [];
+        const streamsData = runsRes.ok
+          ? await readJsonResponse<{ sources?: Array<{ stream_id?: string }> }>(
+              runsRes,
+              `/telemetry/sources/${encodeURIComponent(effectiveSource)}/streams`
+            )
+          : { sources: [] };
+        const streamsList = Array.isArray(streamsData.sources)
+          ? streamsData.sources
           : [];
 
         const isSimulatorSource = Array.isArray(sourcesList)
@@ -292,9 +344,14 @@ export function OverviewContent() {
         if (isSimulatorSource) {
           try {
             const simRes = await fetchWithTimeoutAndFallback(
-              `/simulator/status?source_id=${encodeURIComponent(effectiveSource)}`
+              `/simulator/status?vehicle_id=${encodeURIComponent(effectiveSource)}`
             );
-            simStatus = simRes.ok ? await simRes.json() : { connected: false };
+            simStatus = simRes.ok
+              ? await readJsonResponse<SimulatorRuntimeStatus>(
+                  simRes,
+                  `/simulator/status?vehicle_id=${encodeURIComponent(effectiveSource)}`
+                )
+              : { connected: false };
             simSourceId = effectiveSource;
           } catch {
             simStatus = { connected: false };
@@ -302,33 +359,34 @@ export function OverviewContent() {
           }
         }
 
-        const runtimeRunId =
+        const runtimeStreamId =
           simStatus?.connected && simStatus.state !== "idle"
-            ? simStatus.config?.source_id ?? null
+            ? simStatus.config?.stream_id ?? null
             : null;
-        const effectiveRunId = isSimulatorSource
-          ? runtimeRunId ?? runsList[0]?.source_id ?? effectiveSource
-          : runsList[0]?.source_id ?? effectiveSource;
-        const snapshot = await fetchOverviewSnapshot(effectiveRunId);
+        const effectiveStreamId = isSimulatorSource
+          ? runtimeStreamId ?? streamsList[0]?.stream_id ?? effectiveSource
+          : streamsList[0]?.stream_id ?? effectiveSource;
+        const snapshot = await fetchOverviewSnapshot(effectiveSource, effectiveStreamId);
 
         if (cancelled) return;
 
         setSources(Array.isArray(sourcesList) ? sourcesList : []);
         setChannels(snapshot.channels);
         setAnomalies(snapshot.anomalies);
-        setCommittedRunId(effectiveRunId);
-        setDesiredRunId(effectiveRunId);
+        setCommittedStreamId(effectiveStreamId);
+        setDesiredStreamId(effectiveStreamId);
         setInitialSimulatorSourceId(simSourceId);
         setInitialSimulatorStatus(simStatus);
-        setLatestSimulatorRunId(
-          isSimulatorSource ? runtimeRunId ?? runsList[0]?.source_id ?? null : null
+        setLatestSimulatorStreamId(
+          isSimulatorSource ? runtimeStreamId ?? streamsList[0]?.stream_id ?? null : null
         );
         if (snapshot.hasPartialFailure) {
           setError("Some data failed to load");
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load overview");
+          console.error("[Overview] bootstrap load failed", e);
+          setError("Failed to load overview");
         }
       } finally {
         if (!cancelled) {
@@ -344,26 +402,26 @@ export function OverviewContent() {
   }, [effectiveSource, sourceReady, unavailableMessage]);
 
   useEffect(() => {
-    if (!isSimulatorSource || !simulatorRuntime.activeRunId) return;
-    setLatestSimulatorRunId((current) =>
-      current === simulatorRuntime.activeRunId ? current : simulatorRuntime.activeRunId
+    if (!isSimulatorSource || !simulatorRuntime.activeStreamId) return;
+    setLatestSimulatorStreamId((current) =>
+      current === simulatorRuntime.activeStreamId ? current : simulatorRuntime.activeStreamId
     );
-  }, [isSimulatorSource, simulatorRuntime.activeRunId]);
+  }, [isSimulatorSource, simulatorRuntime.activeStreamId]);
 
   useEffect(() => {
     if (!sourceReady || !isSimulatorSource) return;
 
-    const nextRunId = simulatorRuntime.isActive
-      ? simulatorRuntime.activeRunId ?? desiredRunId ?? effectiveSource
-      : latestSimulatorRunId ?? effectiveSource;
-    if (!nextRunId || nextRunId === desiredRunId) return;
-    setDesiredRunId(nextRunId);
+    const nextStreamId = simulatorRuntime.isActive
+      ? simulatorRuntime.activeStreamId ?? desiredStreamId ?? effectiveSource
+      : latestSimulatorStreamId ?? effectiveSource;
+    if (!nextStreamId || nextStreamId === desiredStreamId) return;
+    setDesiredStreamId(nextStreamId);
   }, [
-    desiredRunId,
+    desiredStreamId,
     effectiveSource,
     isSimulatorSource,
-    latestSimulatorRunId,
-    simulatorRuntime.activeRunId,
+    latestSimulatorStreamId,
+    simulatorRuntime.activeStreamId,
     simulatorRuntime.isActive,
     sourceReady,
   ]);
@@ -372,34 +430,35 @@ export function OverviewContent() {
     if (
       !sourceReady ||
       bootstrapLoading ||
-      !committedRunId ||
-      !desiredRunId ||
-      desiredRunId === committedRunId
+      !committedStreamId ||
+      !desiredStreamId ||
+      desiredStreamId === committedStreamId
     ) {
       return;
     }
 
     let cancelled = false;
-    const runId = desiredRunId;
+    const streamId = desiredStreamId;
 
     async function switchSnapshot() {
       try {
         setShowSwitchingIndicator(true);
         setError(unavailableMessage);
 
-        const snapshot = await fetchOverviewSnapshot(runId);
+        const snapshot = await fetchOverviewSnapshot(effectiveSource, streamId);
 
         if (cancelled) return;
 
         setChannels(snapshot.channels);
         setAnomalies(snapshot.anomalies);
-        setCommittedRunId(runId);
+        setCommittedStreamId(streamId);
         if (snapshot.hasPartialFailure) {
           setError("Some data failed to load");
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load overview");
+          console.error("[Overview] snapshot switch failed", e);
+          setError("Failed to load overview");
         }
       }
     }
@@ -408,10 +467,17 @@ export function OverviewContent() {
     return () => {
       cancelled = true;
     };
-  }, [bootstrapLoading, committedRunId, desiredRunId, sourceReady, unavailableMessage]);
+  }, [
+    bootstrapLoading,
+    committedStreamId,
+    desiredStreamId,
+    effectiveSource,
+    sourceReady,
+    unavailableMessage,
+  ]);
 
   useEffect(() => {
-    if (isSwitchingRuns || !showSwitchingIndicator) return;
+    if (isSwitchingStreams || !showSwitchingIndicator) return;
 
     const timeoutId = window.setTimeout(() => {
       setShowSwitchingIndicator(false);
@@ -420,21 +486,23 @@ export function OverviewContent() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [isSwitchingRuns, showSwitchingIndicator]);
+  }, [isSwitchingStreams, showSwitchingIndicator]);
 
-  if (!sourceReady || bootstrapLoading || !committedRunId) {
+  const bootstrapFailed = !bootstrapLoading && !committedStreamId;
+
+  if (!sourceReady || bootstrapLoading) {
     return (
       <div className="min-h-full p-4 sm:p-6 lg:p-8">
-        <div className="max-w-6xl mx-auto space-y-8">
+        <div className="mx-auto max-w-6xl space-y-8">
           <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               Operator Overview
             </h1>
           </div>
-          <div className="flex min-h-[16rem] items-center justify-center">
+          <div className="flex min-h-64 items-center justify-center">
             <div className="flex flex-col items-center gap-4">
               <Spinner size="lg" className="h-10 w-10" />
-              <p className="text-sm text-muted-foreground">Loading overview…</p>
+              <p className="text-muted-foreground text-sm">Loading overview…</p>
             </div>
           </div>
         </div>
@@ -442,9 +510,37 @@ export function OverviewContent() {
     );
   }
 
+  if (bootstrapFailed) {
+    return (
+      <div className="min-h-full p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto max-w-6xl space-y-8">
+          <div className="space-y-1">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              Operator Overview
+            </h1>
+          </div>
+          <Alert variant="destructive">
+            <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>{error ?? "Failed to load overview"} — Check your connection and try again.</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="sm:self-start"
+                onClick={() => window.location.reload()}
+              >
+                Retry loading overview
+              </Button>
+            </AlertDescription>
+          </Alert>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8">
-      <div className="max-w-6xl mx-auto space-y-8">
+      <div className="mx-auto max-w-6xl space-y-8">
         {error && (
           <Alert variant="destructive">
             <AlertDescription>
@@ -454,7 +550,7 @@ export function OverviewContent() {
         )}
         <div className="flex items-center justify-between gap-4">
           <div className="space-y-1">
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight">
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
               Operator Overview
             </h1>
           </div>
@@ -465,14 +561,14 @@ export function OverviewContent() {
           initialAnomalies={anomalies}
           hasError={!!error}
           sources={sources}
-          initialSourceId={effectiveSource || DEFAULT_SOURCE_ID}
-          feedSourceId={committedRunId ?? undefined}
+          sourceId={effectiveSource || DEFAULT_SOURCE_ID}
+          feedSourceId={committedStreamId ?? undefined}
           defaultSourceId={DEFAULT_SOURCE_ID}
           initialSimulatorSourceId={initialSimulatorSourceId}
           initialSimulatorStatus={initialSimulatorStatus}
           simulatorStatus={simulatorRuntime.status}
-          isSwitchingRuns={isSwitchingRuns}
-          showSwitchingIndicator={showSwitchingIndicator || isSwitchingRuns}
+          isSwitchingStreams={isSwitchingStreams}
+          showSwitchingIndicator={showSwitchingIndicator || isSwitchingStreams}
           onWatchlistChanged={handleWatchlistChanged}
           watchlistVersion={watchlistVersion}
         />

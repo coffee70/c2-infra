@@ -21,7 +21,6 @@ import app.orbit as orbit_module
 from app.orbit import submit_position_sample, get_status
 from app.orbit.state import get_orbit_state
 from app.realtime.processor import RealtimeProcessor
-from app.services.source_run_service import clear_active_run, register_active_run
 from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID, RHAEGALSAT_SOURCE_ID
 from telemetry_catalog.coordinates import ecef_to_eci_m
 
@@ -197,7 +196,7 @@ class TestSubmitAndGetStatus:
 
 
 class TestRealtimeProcessorOrbitHandoff:
-    def test_submit_orbit_sample_uses_logical_source_for_run_ids(
+    def test_submit_orbit_sample_uses_logical_source_for_stream_ids(
         self,
         monkeypatch,
     ) -> None:
@@ -225,25 +224,34 @@ class TestRealtimeProcessorOrbitHandoff:
                 (source_id, timestamp, lat, lon, alt)
             ),
         )
+        monkeypatch.setattr(
+            "app.realtime.processor.resolve_active_stream_id",
+            lambda _db, _vehicle_id: stream_id,
+        )
 
         ts = datetime(2026, 3, 13, 17, 29, 17, tzinfo=timezone.utc)
+        db = MagicMock()
+        stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z"
         processor._maybe_submit_orbit_sample(
-            MagicMock(),
-            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
+            db,
+            DROGONSAT_SOURCE_ID,
+            stream_id,
             "GPS_LAT",
             1.0,
             ts,
         )
         processor._maybe_submit_orbit_sample(
-            MagicMock(),
-            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
+            db,
+            DROGONSAT_SOURCE_ID,
+            stream_id,
             "GPS_LON",
             2.0,
             ts,
         )
         processor._maybe_submit_orbit_sample(
-            MagicMock(),
-            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
+            db,
+            DROGONSAT_SOURCE_ID,
+            stream_id,
             "GPS_ALT",
             400_000.0,
             ts,
@@ -281,33 +289,43 @@ class TestRealtimeProcessorOrbitHandoff:
                 (source_id, timestamp, lat, lon, alt)
             ),
         )
+        monkeypatch.setattr(
+            "app.realtime.processor.resolve_active_stream_id",
+            lambda _db, _vehicle_id: stream_id,
+        )
 
         ts1 = datetime(2026, 3, 13, 17, 29, 17, tzinfo=timezone.utc)
         ts2 = datetime(2026, 3, 13, 17, 29, 18, tzinfo=timezone.utc)
+        db = MagicMock()
+        stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z"
         processor._maybe_submit_orbit_sample(
-            MagicMock(),
-            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
+            db,
+            DROGONSAT_SOURCE_ID,
+            stream_id,
             "GPS_LAT",
             1.0,
             ts1,
         )
         processor._maybe_submit_orbit_sample(
-            MagicMock(),
-            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
+            db,
+            DROGONSAT_SOURCE_ID,
+            stream_id,
             "GPS_LON",
             2.0,
             ts2,
         )
         processor._maybe_submit_orbit_sample(
-            MagicMock(),
-            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
+            db,
+            DROGONSAT_SOURCE_ID,
+            stream_id,
             "GPS_ALT",
             400_000.0,
             ts1,
         )
         processor._maybe_submit_orbit_sample(
-            MagicMock(),
-            f"{DROGONSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
+            db,
+            DROGONSAT_SOURCE_ID,
+            stream_id,
             "GPS_LON",
             2.1,
             ts1,
@@ -321,8 +339,6 @@ class TestRealtimeProcessorOrbitHandoff:
         self,
         monkeypatch,
     ) -> None:
-        clear_active_run(DROGONSAT_SOURCE_ID)
-        register_active_run(f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-26-42Z")
         monkeypatch.setattr(
             "app.realtime.processor.get_realtime_bus",
             lambda: MagicMock(),
@@ -346,23 +362,29 @@ class TestRealtimeProcessorOrbitHandoff:
                 (source_id, timestamp, lat, lon, alt)
             ),
         )
+        monkeypatch.setattr(
+            "app.realtime.processor.resolve_active_stream_id",
+            lambda _db, _vehicle_id: f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-26-42Z",
+        )
 
         ts = datetime(2026, 3, 13, 19, 26, 16, tzinfo=timezone.utc)
+        db = MagicMock()
+        stream_id = f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-26-16Z"
         for channel_name, value in (
             ("GPS_LAT", 1.0),
             ("GPS_LON", 2.0),
             ("GPS_ALT", 400_000.0),
         ):
             processor._maybe_submit_orbit_sample(
-                MagicMock(),
-                f"{DROGONSAT_SOURCE_ID}-2026-03-13T19-26-16Z",
+                db,
+                DROGONSAT_SOURCE_ID,
+                stream_id,
                 channel_name,
                 value,
                 ts,
             )
 
         assert submitted == []
-        clear_active_run(DROGONSAT_SOURCE_ID)
 
     def test_submit_orbit_sample_converts_ecef_mapping(
         self,
@@ -391,16 +413,23 @@ class TestRealtimeProcessorOrbitHandoff:
                 (source_id, timestamp, lat, lon, alt)
             ),
         )
+        monkeypatch.setattr(
+            "app.realtime.processor.resolve_active_stream_id",
+            lambda _db, _vehicle_id: stream_id,
+        )
 
         ts = datetime(2026, 3, 13, 17, 29, 17, tzinfo=timezone.utc)
+        db = MagicMock()
+        stream_id = f"{RHAEGALSAT_SOURCE_ID}-2026-03-13T17-29-17Z"
         for channel_name, value in (
             ("POS_ECEF_X", 6778137.0),
             ("POS_ECEF_Y", 0.0),
             ("POS_ECEF_Z", 0.0),
         ):
             processor._maybe_submit_orbit_sample(
-                MagicMock(),
-                f"{RHAEGALSAT_SOURCE_ID}-2026-03-13T17-29-17Z",
+                db,
+                RHAEGALSAT_SOURCE_ID,
+                stream_id,
                 channel_name,
                 value,
                 ts,
@@ -436,17 +465,24 @@ class TestRealtimeProcessorOrbitHandoff:
                 (source_id, timestamp, lat, lon, alt)
             ),
         )
+        monkeypatch.setattr(
+            "app.realtime.processor.resolve_active_stream_id",
+            lambda _db, _vehicle_id: stream_id,
+        )
 
         ts = datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc)
         x_eci, y_eci, z_eci = ecef_to_eci_m(6778137.0, 0.0, 0.0, ts)
+        db = MagicMock()
+        stream_id = f"{RHAEGALSAT_SOURCE_ID}-2026-03-15T12-00-00Z"
         for channel_name, value in (
             ("POS_ECI_X", x_eci),
             ("POS_ECI_Y", y_eci),
             ("POS_ECI_Z", z_eci),
         ):
             processor._maybe_submit_orbit_sample(
-                MagicMock(),
-                f"{RHAEGALSAT_SOURCE_ID}-2026-03-15T12-00-00Z",
+                db,
+                RHAEGALSAT_SOURCE_ID,
+                stream_id,
                 channel_name,
                 value,
                 ts,

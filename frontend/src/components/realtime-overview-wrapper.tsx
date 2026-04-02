@@ -190,16 +190,16 @@ interface RealtimeOverviewWrapperProps {
   initialAnomalies: AnomaliesData;
   hasError: boolean;
   sources: TelemetrySource[];
-  initialSourceId: string;
-  /** Current run id for feed status and live subscription (when source has multiple runs). */
+  sourceId: string;
+  /** Current stream id for feed status and live subscription (when source has multiple streams). */
   feedSourceId?: string;
-  /** When set, we never sync sourceId to initialSourceId when it equals this (avoids reverting user selection to fallback while data loads). */
+  /** When set, we never sync the selected source to this fallback while data loads. */
   defaultSourceId?: string;
   /** Pre-fetched simulator status for the initial source to avoid "Disconnected" flash. */
   initialSimulatorSourceId?: string | null;
   initialSimulatorStatus?: SimulatorRuntimeStatus | null;
   simulatorStatus?: SimulatorRuntimeStatus | null;
-  isSwitchingRuns?: boolean;
+  isSwitchingStreams?: boolean;
   showSwitchingIndicator?: boolean;
   onWatchlistChanged?: () => void | Promise<void>;
   watchlistVersion?: number;
@@ -214,10 +214,8 @@ function isOverviewTabId(value: string | null): value is OverviewTabId {
 export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
   const {
     initialChannels,
-    initialSourceId,
-    feedSourceId,
+    sourceId,
   } = props;
-  const effectiveRunId = feedSourceId ?? initialSourceId;
   const channelNames = useMemo(
     () => initialChannels.map((ch) => ch.name),
     [initialChannels]
@@ -242,7 +240,8 @@ export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
   return (
     <RealtimeTelemetryProvider
       channelNames={channelNames}
-      sourceId={effectiveRunId}
+      sourceId={sourceId}
+      streamId={null}
       initialChannels={initialChannelsForProvider}
     >
       <RealtimeOverviewContent {...props} />
@@ -253,12 +252,11 @@ export function RealtimeOverviewWrapper(props: RealtimeOverviewWrapperProps) {
 function RealtimeOverviewContent({
   initialAnomalies,
   sources,
-  initialSourceId,
-  feedSourceId,
+  sourceId,
   initialSimulatorSourceId = null,
   initialSimulatorStatus = null,
   simulatorStatus = null,
-  isSwitchingRuns = false,
+  isSwitchingStreams = false,
   showSwitchingIndicator = false,
   onWatchlistChanged,
   watchlistVersion = 0,
@@ -268,14 +266,14 @@ function RealtimeOverviewContent({
   const [currentHash, setCurrentHash] = useState<string>(
     typeof window !== "undefined" ? window.location.hash : ""
   );
-  const effectiveRunId = feedSourceId ?? initialSourceId;
-  const activeRunRef = useRef(effectiveRunId);
+  const activeScopeId = sourceId;
+  const activeStreamRef = useRef(activeScopeId);
   const [alertStore, setAlertStore] = useState<{
-    runId: string;
+    streamId: string;
     alerts: TelemetryAlert[];
     hasLoaded: boolean;
   }>({
-    runId: effectiveRunId,
+    streamId: activeScopeId,
     alerts: [],
     hasLoaded: false,
   });
@@ -284,12 +282,11 @@ function RealtimeOverviewContent({
   const router = useRouter();
   const pathname = usePathname();
   const { channelsArray, isLive: live, client } = useRealtimeTelemetry();
-  const sourceId = initialSourceId;
   const visibleAlertStore =
-    alertStore.runId === effectiveRunId
+    alertStore.streamId === activeScopeId
       ? alertStore
       : {
-          runId: effectiveRunId,
+          streamId: activeScopeId,
           alerts: [],
           hasLoaded: false,
         };
@@ -310,8 +307,8 @@ function RealtimeOverviewContent({
     ?? (isOverviewTabId(requestedTab) ? requestedTab : "watchlist");
 
   useEffect(() => {
-    activeRunRef.current = effectiveRunId;
-  }, [effectiveRunId]);
+    activeStreamRef.current = activeScopeId;
+  }, [activeScopeId]);
 
   const selectTab = useCallback(
     (tab: OverviewTabId, options?: { preserveHash?: boolean }) => {
@@ -364,20 +361,20 @@ function RealtimeOverviewContent({
   );
 
   const handleAlertsAndOrbit = useCallback((msg: RealtimeMessage) => {
-    const runId = activeRunRef.current;
+    const streamId = activeStreamRef.current;
     if (msg.type === "snapshot_alerts" && msg.active) {
       setAlertStore({
-        runId,
+        streamId,
         alerts: msg.active,
         hasLoaded: true,
       });
     } else if (msg.type === "alert_event" && msg.alert) {
       const a = msg.alert;
       setAlertStore((prev) => {
-        const baseAlerts = prev.runId === runId ? prev.alerts : [];
+        const baseAlerts = prev.streamId === streamId ? prev.alerts : [];
         const filtered = baseAlerts.filter((x) => x.id !== a.id);
         return {
-          runId,
+          streamId,
           alerts: [...filtered, a],
           hasLoaded: true,
         };
@@ -385,8 +382,8 @@ function RealtimeOverviewContent({
     } else if (msg.type === "orbit_status") {
       setOrbitStatusBySource((prev) => ({
         ...prev,
-        [msg.source_id]: {
-          source_id: msg.source_id,
+        [msg.vehicle_id]: {
+          vehicle_id: msg.vehicle_id,
           status: msg.status,
           reason: msg.reason,
           orbit_type: msg.orbit_type ?? null,
@@ -404,11 +401,11 @@ function RealtimeOverviewContent({
   useEffect(() => {
     if (!client) return;
     const unsub = client.subscribe(handleAlertsAndOrbit);
-    client.subscribeAlerts(feedSourceId ?? sourceId);
+    client.subscribeAlerts(sourceId, null);
     return () => {
       unsub();
     };
-  }, [client, feedSourceId, sourceId, handleAlertsAndOrbit]);
+  }, [client, sourceId, handleAlertsAndOrbit]);
 
   useEffect(() => {
     let cancelled = false;
@@ -483,7 +480,7 @@ function RealtimeOverviewContent({
         initialSimulatorSourceId={initialSimulatorSourceId ?? undefined}
         initialSimulatorStatus={initialSimulatorStatus ?? undefined}
         simulatorStatus={simulatorStatus ?? undefined}
-        isSwitchingRuns={showSwitchingIndicator}
+        isSwitchingStreams={showSwitchingIndicator}
       />
       <OverviewSearch
         sourceId={sourceId}
@@ -494,7 +491,7 @@ function RealtimeOverviewContent({
       <div className="flex min-h-0 flex-col gap-6 md:flex-row md:gap-12">
         <aside className="shrink-0 md:sticky md:top-20 md:self-start">
           <nav
-            className="flex gap-2 overflow-x-auto pb-1 text-sm text-muted-foreground md:flex-col md:gap-1 md:overflow-visible md:pb-0"
+            className="text-muted-foreground flex gap-2 overflow-x-auto pb-1 text-sm md:flex-col md:gap-1 md:overflow-visible md:pb-0"
             aria-label="Overview sections"
             role="tablist"
           >
@@ -537,18 +534,18 @@ function RealtimeOverviewContent({
                           </span>
                         )}
                         {showSwitchingIndicator && (
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                          <span className="bg-muted text-muted-foreground inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium">
                             <Spinner className="size-3" />
                             Switching…
                           </span>
                         )}
                       </div>
                     </div>
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-muted-foreground text-sm">
                       Key channels: power, thermal, ADCS, comms
                     </p>
                   </CardHeader>
-                  <CardContent className={isSwitchingRuns ? "opacity-80 transition-opacity" : undefined}>
+                  <CardContent className={isSwitchingStreams ? "opacity-80 transition-opacity" : undefined}>
                     {channels.length === 0 ? (
                       <EmptyState
                         icon="chart"
@@ -584,7 +581,7 @@ function RealtimeOverviewContent({
                   alerts={visibleAlertStore.alerts}
                   sourceId={sourceId}
                   onAck={
-                    client && !isSwitchingRuns
+                    client && !isSwitchingStreams
                       ? (id) => {
                           auditLog("alert.acked", { alert_id: id });
                           client.ackAlert(id);
@@ -592,7 +589,7 @@ function RealtimeOverviewContent({
                       : undefined
                   }
                   onResolve={
-                    client && !isSwitchingRuns
+                    client && !isSwitchingStreams
                       ? (id, text, code) => {
                           auditLog("alert.resolved", {
                             alert_id: id,
@@ -609,7 +606,7 @@ function RealtimeOverviewContent({
 
             {activeTab === "event-history" && (
               <div role="tabpanel" aria-label="Event History" className="w-full">
-                <OpsEventHistory sourceId={sourceId} />
+                <OpsEventHistory vehicleId={sourceId} />
               </div>
             )}
           </div>

@@ -111,7 +111,7 @@ export function Calendar({ className, selected, onSelect }: CalendarProps) {
 
   return (
     <div className={cn("p-2 rounded-md border bg-popover", className)}>
-      <div className="flex items-center justify-between mb-2 px-1">
+      <div className="mb-2 flex items-center justify-between px-1">
         <button
           type="button"
           className={cn(
@@ -142,7 +142,7 @@ export function Calendar({ className, selected, onSelect }: CalendarProps) {
           <ChevronRightIcon className="h-4 w-4" />
         </button>
       </div>
-      <div className="grid grid-cols-7 gap-1 text-[0.7rem] text-muted-foreground px-1">
+      <div className="text-muted-foreground grid grid-cols-7 gap-1 px-1 text-[0.7rem]">
         {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((d) => (
           <div key={d} className="h-5 text-center">
             {d}

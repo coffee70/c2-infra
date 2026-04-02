@@ -25,19 +25,19 @@ export default function SimulatorManagePage() {
 
   return (
     <div className="min-h-full p-4 sm:p-6 lg:p-8">
-      <div className="max-w-2xl mx-auto space-y-6">
+      <div className="mx-auto max-w-2xl space-y-6">
         <Breadcrumb>
           <BreadcrumbList>
             <BreadcrumbItem>
               <BreadcrumbLink asChild>
-                <Link href="/sources" className="text-primary hover:underline underline-offset-4">
+                <Link href="/sources" className="text-primary underline-offset-4 hover:underline">
                   Sources
                 </Link>
               </BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbPage className="truncate max-w-[200px]" title={sourceName ?? sourceId}>
+              <BreadcrumbPage className="max-w-[200px] truncate" title={sourceName ?? sourceId}>
                 {sourceName ?? sourceId}
               </BreadcrumbPage>
             </BreadcrumbItem>

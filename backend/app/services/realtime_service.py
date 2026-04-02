@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from sqlalchemy import delete, desc, func, select, text
+from sqlalchemy import delete, desc, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,10 +19,15 @@ from app.models.telemetry import (
     TelemetryData,
     TelemetryMetadata,
     TelemetrySource,
+    TelemetryStream,
     WatchlistEntry,
 )
 from app.services.channel_alias_service import get_aliases_by_telemetry_ids
-from app.services.source_run_service import normalize_source_id, run_id_to_source_id
+from app.services.source_stream_service import (
+    get_stream_source_id,
+    normalize_source_id,
+    resolve_latest_stream_id,
+)
 from app.utils.subsystem import infer_subsystem
 from telemetry_catalog.builtins import BUILT_IN_SOURCES
 from telemetry_catalog.builtins import LEGACY_SOURCE_ID_ALIASES
@@ -37,6 +42,24 @@ logger = logging.getLogger(__name__)
 SPARKLINE_POINTS = 30
 CHANNEL_ORIGIN_CATALOG = "catalog"
 CHANNEL_ORIGIN_DISCOVERED = "discovered"
+
+
+def _resolve_stream_source_id(db: Session, source_id: str) -> str:
+    """Resolve a stream-scoped request to the owning source id."""
+    return get_stream_source_id(db, source_id) or normalize_source_id(source_id)
+
+
+def _resolve_realtime_stream_scope(
+    db: Session,
+    *,
+    source_id: str,
+    stream_id: str | None = None,
+) -> tuple[str, str]:
+    """Return the concrete stream id and logical source id for realtime lookups."""
+    logical_source_id = _resolve_stream_source_id(db, source_id)
+    if stream_id is not None:
+        return stream_id, logical_source_id
+    return resolve_latest_stream_id(db, logical_source_id), logical_source_id
 
 
 def _source_to_dict(src: TelemetrySource) -> dict:
@@ -82,13 +105,15 @@ def create_discovered_channel_metadata(
             discovered_at=seen_at,
             last_seen_at=seen_at,
         )
-        db.add(meta)
+        savepoint = db.begin_nested()
         try:
+            db.add(meta)
             db.flush()
+            savepoint.commit()
             return meta
         except IntegrityError:
             # Another ingest worker won the race to create the same discovered channel.
-            db.rollback()
+            savepoint.rollback()
             meta = db.execute(
                 select(TelemetryMetadata).where(
                     TelemetryMetadata.source_id == source_id,
@@ -155,6 +180,23 @@ def _retarget_watchlist_entries(
     )
 
 
+def _create_stream_scope_table(db: Session, *, table_name: str, source_id: str) -> None:
+    db.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+    db.execute(
+        text(
+            f"""
+            CREATE TEMP TABLE {table_name} ON COMMIT DROP AS
+            SELECT :source_id AS stream_id
+            UNION
+            SELECT ts.id AS stream_id
+            FROM telemetry_streams AS ts
+            WHERE ts.source_id = :source_id
+            """
+        ),
+        {"source_id": source_id},
+    )
+
+
 def _merge_same_source_metadata(
     db: Session,
     *,
@@ -167,10 +209,12 @@ def _merge_same_source_metadata(
 
     params = {
         "source_id": source_id,
-        "run_prefix": f"{source_id}-%",
         "old_id": old_meta.id,
         "new_id": new_meta.id,
     }
+    scope_table = "tmp_same_source_stream_scope"
+
+    _create_stream_scope_table(db, table_name=scope_table, source_id=source_id)
 
     db.execute(
         text(
@@ -208,14 +252,26 @@ def _merge_same_source_metadata(
     db.execute(
         text(
             """
-            INSERT INTO telemetry_data (source_id, telemetry_id, timestamp, value)
+            INSERT INTO telemetry_data (
+              source_id,
+              telemetry_id,
+              timestamp,
+              value,
+              packet_source,
+              receiver_id
+            )
             SELECT
               td.source_id,
               :new_id,
               td.timestamp,
-              td.value
+              td.value,
+              td.packet_source,
+              td.receiver_id
             FROM telemetry_data AS td
-            WHERE (td.source_id = :source_id OR td.source_id LIKE :run_prefix)
+            WHERE (
+              td.source_id = :source_id
+              OR td.source_id IN (SELECT stream_id FROM tmp_same_source_stream_scope)
+            )
               AND td.telemetry_id = :old_id
             ON CONFLICT (source_id, telemetry_id, timestamp) DO NOTHING
             """
@@ -226,7 +282,10 @@ def _merge_same_source_metadata(
         text(
             """
             DELETE FROM telemetry_data
-            WHERE (source_id = :source_id OR source_id LIKE :run_prefix)
+            WHERE (
+              source_id = :source_id
+              OR source_id IN (SELECT stream_id FROM tmp_same_source_stream_scope)
+            )
               AND telemetry_id = :old_id
             """
         ),
@@ -245,7 +304,9 @@ def _merge_same_source_metadata(
               state_reason,
               z_score,
               quality,
-              sequence
+              sequence,
+              packet_source,
+              receiver_id
             )
             SELECT
               tc.source_id,
@@ -257,9 +318,14 @@ def _merge_same_source_metadata(
               tc.state_reason,
               tc.z_score,
               tc.quality,
-              tc.sequence
+              tc.sequence,
+              tc.packet_source,
+              tc.receiver_id
             FROM telemetry_current AS tc
-            WHERE (tc.source_id = :source_id OR tc.source_id LIKE :run_prefix)
+            WHERE (
+              tc.source_id = :source_id
+              OR tc.source_id IN (SELECT stream_id FROM tmp_same_source_stream_scope)
+            )
               AND tc.telemetry_id = :old_id
             ON CONFLICT (source_id, telemetry_id) DO UPDATE
             SET
@@ -326,6 +392,22 @@ def _merge_same_source_metadata(
                   AND EXCLUDED.reception_time >= telemetry_current.reception_time
                   THEN EXCLUDED.sequence
                 ELSE telemetry_current.sequence
+              END,
+              packet_source = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.packet_source
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.packet_source
+                ELSE telemetry_current.packet_source
+              END,
+              receiver_id = CASE
+                WHEN EXCLUDED.generation_time > telemetry_current.generation_time
+                  THEN EXCLUDED.receiver_id
+                WHEN EXCLUDED.generation_time = telemetry_current.generation_time
+                  AND EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.receiver_id
+                ELSE telemetry_current.receiver_id
               END
             """
         ),
@@ -335,7 +417,10 @@ def _merge_same_source_metadata(
         text(
             """
             DELETE FROM telemetry_current
-            WHERE (source_id = :source_id OR source_id LIKE :run_prefix)
+            WHERE (
+              source_id = :source_id
+              OR source_id IN (SELECT stream_id FROM tmp_same_source_stream_scope)
+            )
               AND telemetry_id = :old_id
             """
         ),
@@ -345,7 +430,10 @@ def _merge_same_source_metadata(
         text(
             """
             DELETE FROM telemetry_statistics
-            WHERE (source_id = :source_id OR source_id LIKE :run_prefix)
+            WHERE (
+              source_id = :source_id
+              OR source_id IN (SELECT stream_id FROM tmp_same_source_stream_scope)
+            )
               AND telemetry_id IN (:old_id, :new_id)
             """
         ),
@@ -380,7 +468,10 @@ def _merge_same_source_metadata(
               COUNT(*),
               NOW()
             FROM telemetry_data AS td
-            WHERE (td.source_id = :source_id OR td.source_id LIKE :run_prefix)
+            WHERE (
+              td.source_id = :source_id
+              OR td.source_id IN (SELECT stream_id FROM tmp_same_source_stream_scope)
+            )
               AND td.telemetry_id = :new_id
             GROUP BY td.source_id
             """
@@ -393,7 +484,10 @@ def _merge_same_source_metadata(
             UPDATE telemetry_alerts
             SET telemetry_id = :new_id
             WHERE telemetry_id = :old_id
-              AND (source_id = :source_id OR source_id LIKE :run_prefix)
+              AND (
+                source_id = :source_id
+                OR source_id IN (SELECT stream_id FROM tmp_same_source_stream_scope)
+              )
             """
         ),
         params,
@@ -470,6 +564,7 @@ def _seed_metadata_for_source(
 
     for channel in definition.channels:
         meta = existing_by_name.get(channel.name)
+        created_meta = False
         if meta is None:
             renamed_alias = next(
                 (
@@ -501,6 +596,7 @@ def _seed_metadata_for_source(
                 channel_origin=CHANNEL_ORIGIN_CATALOG,
             )
             db.add(meta)
+            created_meta = True
         elif meta.channel_origin == CHANNEL_ORIGIN_DISCOVERED:
             meta.channel_origin = CHANNEL_ORIGIN_CATALOG
             if meta.embedding is None:
@@ -516,6 +612,10 @@ def _seed_metadata_for_source(
         meta.discovery_namespace = None
         meta.red_low = Decimal(str(channel.red_low)) if channel.red_low is not None else None
         meta.red_high = Decimal(str(channel.red_high)) if channel.red_high is not None else None
+        if created_meta:
+            # Flush new metadata rows before inserting alias rows that reference them
+            # so clean baseline bootstraps satisfy FK constraints on first startup.
+            db.flush()
         for alias_name in channel.aliases:
             conflicting_meta = existing_by_name.get(alias_name)
             if conflicting_meta is not None and conflicting_meta.name != channel.name:
@@ -570,6 +670,8 @@ def _seed_metadata_for_source(
     existing_mapping.z_channel_name = mapping.z_channel_name
     existing_mapping.active = True
     return needs_embedding_backfill
+
+
 def _merge_builtin_duplicate_source(
     db: Session,
     *,
@@ -577,14 +679,13 @@ def _merge_builtin_duplicate_source(
     new_source_id: str,
 ) -> None:
     """Merge an obsolete built-in source row into the canonical built-in source id."""
-    old_run_prefix = f"{old_source_id}-%"
-    source_suffix_start = len(old_source_id) + 1
     params = {
         "old_source_id": old_source_id,
         "new_source_id": new_source_id,
-        "old_run_prefix": old_run_prefix,
-        "source_suffix_start": source_suffix_start,
     }
+    scope_table = "tmp_builtin_stream_scope"
+
+    _create_stream_scope_table(db, table_name=scope_table, source_id=old_source_id)
 
     db.execute(text("DROP TABLE IF EXISTS tmp_builtin_meta_map"))
     db.execute(
@@ -676,20 +777,28 @@ def _merge_builtin_duplicate_source(
     db.execute(
         text(
             """
-            INSERT INTO telemetry_data (source_id, telemetry_id, timestamp, value)
+            INSERT INTO telemetry_data (
+              source_id,
+              telemetry_id,
+              timestamp,
+              value,
+              packet_source,
+              receiver_id
+            )
             SELECT
-              CASE
-                WHEN td.source_id = :old_source_id THEN :new_source_id
-                ELSE :new_source_id || substring(td.source_id from :source_suffix_start)
-              END,
+              CASE WHEN td.source_id = :old_source_id THEN :new_source_id ELSE td.source_id END,
               map.new_id,
               td.timestamp,
-              td.value
+              td.value,
+              td.packet_source,
+              td.receiver_id
             FROM telemetry_data AS td
             JOIN tmp_builtin_meta_map AS map
               ON map.old_id = td.telemetry_id
-            WHERE td.source_id = :old_source_id
-               OR td.source_id LIKE :old_run_prefix
+            WHERE (
+              td.source_id = :old_source_id
+              OR td.source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
+            )
             ON CONFLICT (source_id, telemetry_id, timestamp) DO NOTHING
             """
         ),
@@ -699,7 +808,10 @@ def _merge_builtin_duplicate_source(
         text(
             """
             DELETE FROM telemetry_data
-            WHERE (source_id = :old_source_id OR source_id LIKE :old_run_prefix)
+            WHERE (
+              source_id = :old_source_id
+              OR source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
+            )
               AND telemetry_id IN (SELECT old_id FROM tmp_builtin_meta_map)
             """
         ),
@@ -719,13 +831,12 @@ def _merge_builtin_duplicate_source(
               state_reason,
               z_score,
               quality,
-              sequence
+              sequence,
+              packet_source,
+              receiver_id
             )
             SELECT
-              CASE
-                WHEN tc.source_id = :old_source_id THEN :new_source_id
-                ELSE :new_source_id || substring(tc.source_id from :source_suffix_start)
-              END,
+              CASE WHEN tc.source_id = :old_source_id THEN :new_source_id ELSE tc.source_id END,
               map.new_id,
               tc.generation_time,
               tc.reception_time,
@@ -734,12 +845,16 @@ def _merge_builtin_duplicate_source(
               tc.state_reason,
               tc.z_score,
               tc.quality,
-              tc.sequence
+              tc.sequence,
+              tc.packet_source,
+              tc.receiver_id
             FROM telemetry_current AS tc
             JOIN tmp_builtin_meta_map AS map
               ON map.old_id = tc.telemetry_id
-            WHERE tc.source_id = :old_source_id
-               OR tc.source_id LIKE :old_run_prefix
+            WHERE (
+              tc.source_id = :old_source_id
+              OR tc.source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
+            )
             ON CONFLICT (source_id, telemetry_id) DO UPDATE
             SET
               generation_time = CASE
@@ -777,6 +892,16 @@ def _merge_builtin_duplicate_source(
                 WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
                   THEN EXCLUDED.sequence
                 ELSE telemetry_current.sequence
+              END,
+              packet_source = CASE
+                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.packet_source
+                ELSE telemetry_current.packet_source
+              END,
+              receiver_id = CASE
+                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
+                  THEN EXCLUDED.receiver_id
+                ELSE telemetry_current.receiver_id
               END
             """
         ),
@@ -786,7 +911,10 @@ def _merge_builtin_duplicate_source(
         text(
             """
             DELETE FROM telemetry_current
-            WHERE (source_id = :old_source_id OR source_id LIKE :old_run_prefix)
+            WHERE (
+              source_id = :old_source_id
+              OR source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
+            )
               AND telemetry_id IN (SELECT old_id FROM tmp_builtin_meta_map)
             """
         ),
@@ -810,10 +938,7 @@ def _merge_builtin_duplicate_source(
               last_computed_at
             )
             SELECT
-              CASE
-                WHEN ts.source_id = :old_source_id THEN :new_source_id
-                ELSE :new_source_id || substring(ts.source_id from :source_suffix_start)
-              END,
+              CASE WHEN ts.source_id = :old_source_id THEN :new_source_id ELSE ts.source_id END,
               map.new_id,
               ts.mean,
               ts.std_dev,
@@ -827,8 +952,10 @@ def _merge_builtin_duplicate_source(
             FROM telemetry_statistics AS ts
             JOIN tmp_builtin_meta_map AS map
               ON map.old_id = ts.telemetry_id
-            WHERE ts.source_id = :old_source_id
-               OR ts.source_id LIKE :old_run_prefix
+            WHERE (
+              ts.source_id = :old_source_id
+              OR ts.source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
+            )
             ON CONFLICT (source_id, telemetry_id) DO UPDATE
             SET
               mean = CASE
@@ -871,7 +998,10 @@ def _merge_builtin_duplicate_source(
         text(
             """
             DELETE FROM telemetry_statistics
-            WHERE (source_id = :old_source_id OR source_id LIKE :old_run_prefix)
+            WHERE (
+              source_id = :old_source_id
+              OR source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
+            )
               AND telemetry_id IN (SELECT old_id FROM tmp_builtin_meta_map)
             """
         ),
@@ -883,14 +1013,25 @@ def _merge_builtin_duplicate_source(
             """
             UPDATE telemetry_alerts AS ta
             SET
-              source_id = CASE
-                WHEN ta.source_id = :old_source_id THEN :new_source_id
-                ELSE :new_source_id || substring(ta.source_id from :source_suffix_start)
-              END,
+              source_id = CASE WHEN ta.source_id = :old_source_id THEN :new_source_id ELSE ta.source_id END,
               telemetry_id = map.new_id
             FROM tmp_builtin_meta_map AS map
             WHERE ta.telemetry_id = map.old_id
-              AND (ta.source_id = :old_source_id OR ta.source_id LIKE :old_run_prefix)
+              AND (
+                ta.source_id = :old_source_id
+                OR ta.source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
+              )
+            """
+        ),
+        params,
+    )
+
+    db.execute(
+        text(
+            """
+            UPDATE telemetry_streams
+            SET source_id = :new_source_id
+            WHERE id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
             """
         ),
         params,
@@ -949,19 +1090,12 @@ def _merge_builtin_duplicate_source(
             """
             UPDATE ops_events
             SET
-              source_id = CASE
-                WHEN source_id = :old_source_id THEN :new_source_id
-                ELSE :new_source_id || substring(source_id from :source_suffix_start)
-              END,
-              entity_id = CASE
-                WHEN entity_id = :old_source_id THEN :new_source_id
-                WHEN entity_id LIKE :old_run_prefix THEN :new_source_id || substring(entity_id from :source_suffix_start)
-                ELSE entity_id
-              END
+              source_id = CASE WHEN source_id = :old_source_id THEN :new_source_id ELSE source_id END,
+              entity_id = CASE WHEN entity_id = :old_source_id THEN :new_source_id ELSE entity_id END
             WHERE source_id = :old_source_id
-               OR source_id LIKE :old_run_prefix
+               OR source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
                OR entity_id = :old_source_id
-               OR entity_id LIKE :old_run_prefix
+               OR entity_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
             """
         ),
         params,
@@ -1017,36 +1151,42 @@ def reconcile_builtin_source_duplicates(db: Session) -> None:
 
 def source_has_telemetry_history(db: Session, source_id: str) -> bool:
     resolved_source_id = resolve_source_id_alias(source_id) or source_id
-    direct_history = db.execute(
+    owned_stream_ids = select(TelemetryStream.id).where(
+        TelemetryStream.source_id == resolved_source_id
+    )
+    history_count = db.execute(
         select(func.count())
         .select_from(TelemetryData)
-        .where(TelemetryData.source_id == resolved_source_id)
+        .where(
+            or_(
+                TelemetryData.stream_id == resolved_source_id,
+                TelemetryData.stream_id.in_(owned_stream_ids),
+            )
+        )
     ).scalar_one()
-    if direct_history > 0:
-        return True
-    run_history = db.execute(
-        select(func.count())
-        .select_from(TelemetryData)
-        .where(TelemetryData.source_id.like(f"{resolved_source_id}-%"))
-    ).scalar_one()
-    return run_history > 0
+    return history_count > 0
 
 
 def get_realtime_snapshot_for_channels(
     db: Session,
     channel_names: list[str],
+    *,
     source_id: str = "default",
+    stream_id: str | None = None,
 ) -> list[RealtimeChannelUpdate]:
     """Get current values from telemetry_current for given channels and source."""
     if not channel_names:
         return []
-    data_source_id = normalize_source_id(source_id)
-    logical_source_id = run_id_to_source_id(source_id)
+    data_source_id, logical_source_id = _resolve_realtime_stream_scope(
+        db,
+        source_id=source_id,
+        stream_id=stream_id,
+    )
 
     stmt = (
         select(TelemetryMetadata, TelemetryCurrent)
         .join(TelemetryCurrent, TelemetryMetadata.id == TelemetryCurrent.telemetry_id)
-        .where(TelemetryCurrent.source_id == data_source_id)
+        .where(TelemetryCurrent.stream_id == data_source_id)
         .where(TelemetryMetadata.source_id == logical_source_id)
         .where(TelemetryMetadata.name.in_(channel_names))
     )
@@ -1059,7 +1199,7 @@ def get_realtime_snapshot_for_channels(
             select(TelemetryData.timestamp, TelemetryData.value)
             .where(
                 TelemetryData.telemetry_id == meta.id,
-                TelemetryData.source_id == data_source_id,
+                TelemetryData.stream_id == data_source_id,
             )
             .order_by(desc(TelemetryData.timestamp))
             .limit(SPARKLINE_POINTS)
@@ -1072,7 +1212,8 @@ def get_realtime_snapshot_for_channels(
 
         result.append(
             RealtimeChannelUpdate(
-                source_id=data_source_id,
+                source_id=logical_source_id,
+                stream_id=data_source_id,
                 name=meta.name,
                 units=meta.units,
                 description=meta.description,
@@ -1094,7 +1235,7 @@ def get_realtime_snapshot_for_channels(
 
 def get_watchlist_channel_names(db: Session, source_id: str) -> list[str]:
     """Get watchlist channel names in display order."""
-    logical_source_id = run_id_to_source_id(source_id)
+    logical_source_id = _resolve_stream_source_id(db, source_id)
     stmt = (
         select(WatchlistEntry.telemetry_name)
         .where(WatchlistEntry.source_id == logical_source_id)
@@ -1105,17 +1246,22 @@ def get_watchlist_channel_names(db: Session, source_id: str) -> list[str]:
 
 def get_active_alerts(
     db: Session,
+    *,
     source_id: str = "default",
+    stream_id: str | None = None,
     subsystems: list[str] | None = None,
     severities: list[str] | None = None,
 ) -> list[TelemetryAlertSchema]:
     """Get active (non-resolved, non-cleared) alerts for a source."""
-    data_source_id = normalize_source_id(source_id)
-    logical_source_id = run_id_to_source_id(source_id)
+    data_source_id, logical_source_id = _resolve_realtime_stream_scope(
+        db,
+        source_id=source_id,
+        stream_id=stream_id,
+    )
     stmt = (
         select(TelemetryAlert, TelemetryMetadata)
         .join(TelemetryMetadata, TelemetryAlert.telemetry_id == TelemetryMetadata.id)
-        .where(TelemetryAlert.source_id == data_source_id)
+        .where(TelemetryAlert.stream_id == data_source_id)
         .where(TelemetryMetadata.source_id == logical_source_id)
         .where(TelemetryAlert.cleared_at.is_(None))
         .where(TelemetryAlert.resolved_at.is_(None))
@@ -1134,7 +1280,8 @@ def get_active_alerts(
         result.append(
             TelemetryAlertSchema(
                 id=str(alert.id),
-                source_id=alert.source_id,
+                source_id=logical_source_id,
+                stream_id=alert.stream_id,
                 channel_name=meta.name,
                 telemetry_id=str(meta.id),
                 subsystem=subsys,

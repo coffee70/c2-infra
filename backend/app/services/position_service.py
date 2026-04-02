@@ -22,7 +22,7 @@ from app.models.schemas import (
 )
 from app.services.channel_alias_service import resolve_channel_metadata, resolve_channel_name
 from app.services.overview_service import _get_latest_value_and_ts
-from app.services.source_run_service import normalize_source_id, resolve_active_run_id, run_id_to_source_id
+from app.services.source_stream_service import resolve_latest_stream_id
 from app.utils.coordinates import ecef_to_lla, eci_to_lla
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ def _get_latest_for_channel(
     *,
     source_id: str,
     channel_name: Optional[str],
+    data_source_id: str | None = None,
 ) -> tuple[Optional[float], Optional[datetime]]:
     """Get latest value and timestamp for a named channel for a source."""
     if not channel_name:
@@ -57,12 +58,12 @@ def _get_latest_for_channel(
     if not meta:
         return None, None
 
-    data_source_id = normalize_source_id(source_id)
-    current = db.get(TelemetryCurrent, (data_source_id, meta.id))
+    resolved_stream_id = data_source_id or resolve_latest_stream_id(db, source_id)
+    current = db.get(TelemetryCurrent, (resolved_stream_id, meta.id))
     if current:
         return float(current.value), current.generation_time
 
-    latest = _get_latest_value_and_ts(db, meta.id, source_id=data_source_id)
+    latest = _get_latest_value_and_ts(db, meta.id, source_id=resolved_stream_id)
     if not latest:
         return None, None
     value, ts = latest
@@ -71,12 +72,12 @@ def _get_latest_for_channel(
 
 def list_mappings(
     db: Session,
-    source_id: Optional[str] = None,
+    vehicle_id: Optional[str] = None,
 ) -> list[PositionChannelMapping]:
-    """List active position mappings, optionally filtered by source."""
+    """List active position mappings, optionally filtered by vehicle."""
     stmt = select(PositionChannelMapping).where(PositionChannelMapping.active.is_(True))
-    if source_id:
-        stmt = stmt.where(PositionChannelMapping.source_id == source_id)
+    if vehicle_id:
+        stmt = stmt.where(PositionChannelMapping.source_id == vehicle_id)
     return db.execute(stmt).scalars().all()
 
 
@@ -92,14 +93,14 @@ def upsert_mapping(
     src = (
         db.execute(
             select(TelemetrySource)
-            .where(TelemetrySource.id == body.source_id)
+            .where(TelemetrySource.id == body.vehicle_id)
             .with_for_update()
         )
         .scalars()
         .first()
     )
     if not src:
-        raise ValueError(f"Source not found: {body.source_id}")
+        raise ValueError(f"Source not found: {body.vehicle_id}")
 
     if body.frame_type == "gps_lla":
         if not body.lat_channel_name or not body.lon_channel_name:
@@ -108,17 +109,17 @@ def upsert_mapping(
         if not body.x_channel_name or not body.y_channel_name or not body.z_channel_name:
             raise ValueError(f"{body.frame_type} mappings require x/y/z channel names")
 
-    body.lat_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.lat_channel_name)
-    body.lon_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.lon_channel_name)
-    body.alt_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.alt_channel_name)
-    body.x_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.x_channel_name)
-    body.y_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.y_channel_name)
-    body.z_channel_name = _resolve_mapping_channel_name(db, body.source_id, body.z_channel_name)
+    body.lat_channel_name = _resolve_mapping_channel_name(db, body.vehicle_id, body.lat_channel_name)
+    body.lon_channel_name = _resolve_mapping_channel_name(db, body.vehicle_id, body.lon_channel_name)
+    body.alt_channel_name = _resolve_mapping_channel_name(db, body.vehicle_id, body.alt_channel_name)
+    body.x_channel_name = _resolve_mapping_channel_name(db, body.vehicle_id, body.x_channel_name)
+    body.y_channel_name = _resolve_mapping_channel_name(db, body.vehicle_id, body.y_channel_name)
+    body.z_channel_name = _resolve_mapping_channel_name(db, body.vehicle_id, body.z_channel_name)
 
     existing = (
         db.execute(
             select(PositionChannelMapping).where(
-                PositionChannelMapping.source_id == body.source_id,
+                PositionChannelMapping.source_id == body.vehicle_id,
                 PositionChannelMapping.active.is_(True),
             )
         )
@@ -129,7 +130,7 @@ def upsert_mapping(
     if existing:
         mapping = existing
     else:
-        mapping = PositionChannelMapping(source_id=body.source_id)
+        mapping = PositionChannelMapping(source_id=body.vehicle_id)
         db.add(mapping)
 
     mapping.frame_type = body.frame_type
@@ -177,16 +178,19 @@ def _build_sample_for_mapping(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.lat_channel_name,
+                data_source_id=data_source_id,
             )
             lon, ts_lon = _get_latest_for_channel(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.lon_channel_name,
+                data_source_id=data_source_id,
             )
             alt, ts_alt = _get_latest_for_channel(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.alt_channel_name,
+                data_source_id=data_source_id,
             )
             raw_channels = {
                 "lat": lat,
@@ -196,9 +200,9 @@ def _build_sample_for_mapping(
             if lat is None or lon is None:
                 # Not enough information to produce a point
                 return PositionSample(
-                    source_id=source.id,
-                    source_name=source.name,
-                    source_type=source.source_type,
+                    vehicle_id=source.id,
+                    vehicle_name=source.name,
+                    vehicle_type=source.source_type,
                     lat_deg=None,
                     lon_deg=None,
                     alt_m=None,
@@ -219,23 +223,26 @@ def _build_sample_for_mapping(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.x_channel_name,
+                data_source_id=data_source_id,
             )
             y, ts_y = _get_latest_for_channel(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.y_channel_name,
+                data_source_id=data_source_id,
             )
             z, ts_z = _get_latest_for_channel(
                 db,
                 source_id=data_source_id,
                 channel_name=mapping.z_channel_name,
+                data_source_id=data_source_id,
             )
             raw_channels = {"x": x, "y": y, "z": z}
             if x is None or y is None or z is None:
                 return PositionSample(
-                    source_id=source.id,
-                    source_name=source.name,
-                    source_type=source.source_type,
+                    vehicle_id=source.id,
+                    vehicle_name=source.name,
+                    vehicle_type=source.source_type,
                     lat_deg=None,
                     lon_deg=None,
                     alt_m=None,
@@ -265,9 +272,9 @@ def _build_sample_for_mapping(
     except Exception as exc:  # pragma: no cover - defensive guardrail
         logger.exception("Failed to build position sample for source %s: %s", source.id, exc)
         return PositionSample(
-            source_id=source.id,
-            source_name=source.name,
-            source_type=source.source_type,
+            vehicle_id=source.id,
+            vehicle_name=source.name,
+            vehicle_type=source.source_type,
             lat_deg=None,
             lon_deg=None,
             alt_m=None,
@@ -279,9 +286,9 @@ def _build_sample_for_mapping(
 
     if latest_ts is None or lat_deg is None or lon_deg is None or alt_m is None:
         return PositionSample(
-            source_id=source.id,
-            source_name=source.name,
-            source_type=source.source_type,
+            vehicle_id=source.id,
+            vehicle_name=source.name,
+            vehicle_type=source.source_type,
             lat_deg=None,
             lon_deg=None,
             alt_m=None,
@@ -295,9 +302,9 @@ def _build_sample_for_mapping(
     valid = age <= staleness
 
     return PositionSample(
-        source_id=source.id,
-        source_name=source.name,
-        source_type=source.source_type,
+        vehicle_id=source.id,
+        vehicle_name=source.name,
+        vehicle_type=source.source_type,
         lat_deg=lat_deg,
         lon_deg=lon_deg,
         alt_m=alt_m,
@@ -311,12 +318,12 @@ def _build_sample_for_mapping(
 def get_latest_positions(
     db: Session,
     *,
-    source_ids: Optional[Iterable[str]] = None,
+    vehicle_ids: Optional[Iterable[str]] = None,
     staleness_seconds: int = 300,
 ) -> list[PositionSample]:
-    """Get latest resolved positions for all sources with active mappings.
+    """Get latest resolved positions for all vehicles with active mappings.
 
-    When source_ids is provided, restrict to that set.
+    When vehicle_ids is provided, restrict to that set.
     """
     now = datetime.now(timezone.utc)
     staleness = timedelta(seconds=staleness_seconds)
@@ -324,12 +331,12 @@ def get_latest_positions(
     stmt = select(PositionChannelMapping).where(
         PositionChannelMapping.active.is_(True),
     )
-    # When source_ids is provided:
+    # When vehicle_ids is provided:
     # - None  -> no restriction (all active mappings)
     # - []    -> explicit empty filter (return no results)
     # - [ids] -> restrict to that set
-    if source_ids is not None:
-        ids = list(source_ids)
+    if vehicle_ids is not None:
+        ids = list(vehicle_ids)
         if not ids:
             return []
         stmt = stmt.where(PositionChannelMapping.source_id.in_(ids))
@@ -347,7 +354,7 @@ def get_latest_positions(
         src = sources_by_id.get(mapping.source_id)
         if not src:
             continue
-        data_source_id = resolve_active_run_id(db, mapping.source_id)
+        data_source_id = resolve_latest_stream_id(db, mapping.source_id)
         samples.append(
             _build_sample_for_mapping(
                 db,

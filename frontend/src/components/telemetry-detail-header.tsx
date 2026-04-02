@@ -98,11 +98,11 @@ export function TelemetryDetailHeader({
     : "";
 
   return (
-    <header className="sticky top-14 z-10 py-4 mb-2 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80 border-b">
+    <header className="bg-background/95 supports-backdrop-filter:bg-background/80 sticky top-14 z-10 mb-2 border-b py-4 backdrop-blur">
       <div className="flex flex-wrap items-center justify-between gap-4 px-4 sm:px-6">
         <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-3 min-w-0">
-            <h1 className="text-lg font-semibold truncate" title={name}>
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <h1 className="truncate text-lg font-semibold" title={name}>
               {name}
               {units ? ` (${units})` : ""}
             </h1>
@@ -115,27 +115,27 @@ export function TelemetryDetailHeader({
               </Badge>
             )}
             {live && (
-              <Badge variant="default" className="shrink-0 text-xs gap-1.5 bg-emerald-600 text-white hover:bg-emerald-600">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-pulse opacity-80" />
+              <Badge variant="default" className="shrink-0 gap-1.5 bg-emerald-600 text-xs text-white hover:bg-emerald-600">
+                <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current opacity-80" />
                 Live
               </Badge>
             )}
-            <span className="text-lg font-medium tabular-nums shrink-0" data-value={value}>
+            <span className="shrink-0 text-lg font-medium tabular-nums" data-value={value}>
               {formatWithUnits(value, units)}
             </span>
             {lastTimestamp != null && lastTimestamp !== "" && (
-              <span className="text-sm text-muted-foreground shrink-0" data-last-timestamp={lastTimestamp}>
+              <span className="text-muted-foreground shrink-0 text-sm" data-last-timestamp={lastTimestamp}>
                 {formatTimeAgo(lastTimestamp)}
               </span>
             )}
           </div>
           {description && (
-            <p className="text-sm text-muted-foreground line-clamp-2">
+            <p className="text-muted-foreground line-clamp-2 text-sm">
               {description}
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

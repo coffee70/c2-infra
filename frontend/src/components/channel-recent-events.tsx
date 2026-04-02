@@ -7,7 +7,8 @@ import { useOpsEventsQuery } from "@/lib/query-hooks";
 
 interface ChannelRecentEventsProps {
   channelName: string;
-  sourceId?: string;
+  vehicleId?: string;
+  streamId?: string;
   sinceMinutes?: number;
 }
 
@@ -29,15 +30,17 @@ function formatTime(iso: string): string {
 
 export function ChannelRecentEvents({
   channelName,
-  sourceId = "default",
+  vehicleId = "default",
+  streamId,
   sinceMinutes = 60,
 }: ChannelRecentEventsProps) {
   const params = {
-      source_id: sourceId,
-      since_minutes: String(sinceMinutes),
-      channel_name: channelName,
-      limit: "20",
-    };
+    source_id: vehicleId,
+    since_minutes: String(sinceMinutes),
+    channel_name: channelName,
+    limit: "20",
+    ...(streamId ? { stream_id: streamId } : {}),
+  };
   const eventsQuery = useOpsEventsQuery(params);
   const loading = eventsQuery.isLoading;
   const events = eventsQuery.data?.events ?? [];
@@ -46,7 +49,7 @@ export function ChannelRecentEvents({
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium text-muted-foreground">
+          <CardTitle className="text-muted-foreground text-sm font-medium">
             Recent events for this channel
           </CardTitle>
         </CardHeader>
@@ -61,12 +64,12 @@ export function ChannelRecentEvents({
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium text-muted-foreground">
+          <CardTitle className="text-muted-foreground text-sm font-medium">
             Recent events for this channel
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-muted-foreground text-sm">
             No events in the last {sinceMinutes} minutes.
           </p>
         </CardContent>
@@ -77,7 +80,7 @@ export function ChannelRecentEvents({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm font-medium text-muted-foreground">
+        <CardTitle className="text-muted-foreground text-sm font-medium">
           Recent events for this channel
         </CardTitle>
       </CardHeader>
@@ -86,7 +89,7 @@ export function ChannelRecentEvents({
           {events.map((e) => (
             <li
               key={e.id}
-              className="flex flex-wrap items-center gap-2 text-sm border-b border-border/50 pb-2 last:border-0 last:pb-0"
+              className="border-border/50 flex flex-wrap items-center gap-2 border-b pb-2 text-sm last:border-0 last:pb-0"
             >
               <Badge
                 variant={e.severity === "warning" ? "destructive" : "secondary"}

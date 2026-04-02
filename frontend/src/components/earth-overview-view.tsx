@@ -21,11 +21,17 @@ import {
   fetchSimulatorRuntimeStatus,
   type SimulatorRuntimeStatus,
 } from "@/lib/simulator-runtime";
+import {
+  fetchFeedStatus,
+  type FeedState,
+  type FeedStatus,
+} from "@/lib/feed-status";
 import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { FeedStatusBadge } from "@/components/feed-status-badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -125,6 +131,9 @@ export function EarthOverviewView({
   const [simulatorRuntimeBySource, setSimulatorRuntimeBySource] = useState<
     Record<string, SimulatorRuntimeStatus>
   >({});
+  const [feedStatusBySource, setFeedStatusBySource] = useState<
+    Record<string, FeedStatus>
+  >({});
 
   const loadAllMappings = useCallback(async () => {
     setAllMappingsLoading(true);
@@ -133,7 +142,8 @@ export function EarthOverviewView({
       const bySource: Record<string, PositionChannelMapping | null> = {};
       for (const s of sources) bySource[s.id] = null;
       for (const m of configs) {
-        if (m.source_id in bySource) bySource[m.source_id] = m;
+        const sourceKey = m.vehicle_id;
+        if (sourceKey && sourceKey in bySource) bySource[sourceKey] = m;
       }
       setMappingsBySource(bySource);
     } catch {
@@ -147,6 +157,50 @@ export function EarthOverviewView({
     if (sources.length === 0) return;
     loadAllMappings();
   }, [sources.length, loadAllMappings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (selectedIds.length === 0) {
+        setFeedStatusBySource({});
+        return;
+      }
+
+      const entries = await Promise.all(
+        selectedIds.map(async (sourceId) => {
+          try {
+            const status = await fetchFeedStatus(sourceId);
+            return [sourceId, status] as const;
+          } catch {
+            return [sourceId, null] as const;
+          }
+        })
+      );
+      if (cancelled) return;
+      const next: Record<string, FeedStatus> = {};
+      for (const [sourceId, status] of entries) {
+        if (status) next[sourceId] = status;
+      }
+      setFeedStatusBySource(next);
+    }
+    load();
+    const interval = setInterval(load, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [selectedIds]);
+
+  useEffect(() => {
+    setFeedStatusBySource((prev) => {
+      const next = { ...prev };
+      const selected = new Set(selectedIds);
+      for (const sourceId of Object.keys(next)) {
+        if (!selected.has(sourceId)) delete next[sourceId];
+      }
+      return next;
+    });
+  }, [selectedIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,18 +236,18 @@ export function EarthOverviewView({
     };
   }, [selectedIds, sources]);
 
-  const effectiveRunIdBySource = useMemo(() => {
+  const effectiveStreamIdBySource = useMemo(() => {
     const next: Record<string, string> = {};
     for (const source of sources) {
       const runtime = simulatorRuntimeBySource[source.id];
-      const activeRunId =
+      const activeStreamId =
         source.source_type === "simulator" &&
         runtime?.connected === true &&
         runtime.state != null &&
         runtime.state !== "idle"
-          ? runtime.config?.source_id ?? null
+          ? runtime.config?.stream_id ?? null
           : null;
-      next[source.id] = activeRunId ?? source.id;
+      next[source.id] = activeStreamId ?? source.id;
     }
     return next;
   }, [sources, simulatorRuntimeBySource]);
@@ -202,11 +256,11 @@ export function EarthOverviewView({
     const next: Record<string, string> = {};
     for (const sourceId of selectedIds) {
       next[sourceId] = sourceId;
-      const effectiveRunId = effectiveRunIdBySource[sourceId] ?? sourceId;
-      next[effectiveRunId] = sourceId;
+      const effectiveStreamId = effectiveStreamIdBySource[sourceId] ?? sourceId;
+      next[effectiveStreamId] = sourceId;
     }
     return next;
-  }, [effectiveRunIdBySource, selectedIds]);
+  }, [effectiveStreamIdBySource, selectedIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -228,7 +282,7 @@ export function EarthOverviewView({
               sourceId,
               {
                 ...status,
-                source_id: sourceId,
+                vehicle_id: sourceId,
               },
             ] as const;
           } catch {
@@ -253,14 +307,14 @@ export function EarthOverviewView({
 
   useEffect(() => {
     const client = new RealtimeWsClient();
-    const handler = (msg: { type: string; source_id?: string; status?: string; reason?: string; orbit_type?: string | null; perigee_km?: number | null; apogee_km?: number | null; eccentricity?: number | null; velocity_kms?: number | null; period_sec?: number | null }) => {
-      if (msg.type === "orbit_status" && msg.source_id != null) {
-        const logicalSourceId = logicalSourceIdByOrbitSourceId[msg.source_id];
+    const handler = (msg: { type: string; vehicle_id?: string; status?: string; reason?: string; orbit_type?: string | null; perigee_km?: number | null; apogee_km?: number | null; eccentricity?: number | null; velocity_kms?: number | null; period_sec?: number | null }) => {
+      if (msg.type === "orbit_status" && msg.vehicle_id != null) {
+        const logicalSourceId = logicalSourceIdByOrbitSourceId[msg.vehicle_id];
         if (!logicalSourceId) return;
         setOrbitStatusBySource((prev) => ({
           ...prev,
           [logicalSourceId]: {
-            source_id: logicalSourceId,
+            vehicle_id: logicalSourceId,
             status: msg.status ?? "",
             reason: msg.reason ?? "",
             orbit_type: msg.orbit_type ?? null,
@@ -305,8 +359,10 @@ export function EarthOverviewView({
                 alt_m: typeof p.alt_m === "number" ? p.alt_m : 0,
                 timestamp: p.timestamp ?? undefined,
               };
-              const arr = [...(next[p.source_id] ?? []), entry];
-              next[p.source_id] = arr.slice(-MAX_POSITION_HISTORY_POINTS);
+              const sourceKey = p.vehicle_id;
+              if (!sourceKey) continue;
+              const arr = [...(next[sourceKey] ?? []), entry];
+              next[sourceKey] = arr.slice(-MAX_POSITION_HISTORY_POINTS);
             }
           }
           return next;
@@ -379,14 +435,10 @@ export function EarthOverviewView({
     return () => { cancelled = true; };
   }, [expandedSourceId, sources]);
 
-  const liveStatus = useMemo(() => {
-    return positions.some((p) => p.valid) ? "live" : "stale";
-  }, [positions]);
-
   const effectivePositions = useMemo(() => {
     if (selectedIds.length === 0) return [];
     const set = new Set(selectedIds);
-    return positions.filter((p) => set.has(p.source_id));
+    return positions.filter((p) => set.has(p.vehicle_id));
   }, [positions, selectedIds]);
 
   const effectivePositionHistory = useMemo(() => {
@@ -442,7 +494,7 @@ export function EarthOverviewView({
       const y = yChannel.trim() || null;
       const z = zChannel.trim() || null;
       const saved = await upsertPositionConfig({
-        source_id: src.id,
+        vehicle_id: src.id,
         frame_type: frameType,
         lat_channel_name: frameType === "gps_lla" ? lat : null,
         lon_channel_name: frameType === "gps_lla" ? lon : null,
@@ -492,34 +544,39 @@ export function EarthOverviewView({
     return `${selectedIds.length} sources`;
   }, [sources, selectedIds]);
 
+  const feedStateBySource = useMemo<Record<string, FeedState>>(() => {
+    const next: Record<string, FeedState> = {};
+    for (const source of sources) {
+      const runtime = simulatorRuntimeBySource[source.id];
+      if (
+        source.source_type === "simulator" &&
+        (runtime?.connected === false || runtime?.state === "idle")
+      ) {
+        next[source.id] = "disconnected";
+        continue;
+      }
+      next[source.id] = feedStatusBySource[source.id]?.state ?? "disconnected";
+    }
+    return next;
+  }, [feedStatusBySource, simulatorRuntimeBySource, sources]);
+
   return (
-    <div className="absolute inset-0 w-full h-full min-h-0 min-w-0">
-      <div className="relative w-full h-full min-h-0 min-w-0">
+    <div className="absolute inset-0 h-full min-h-0 w-full min-w-0">
+      <div className="relative h-full min-h-0 w-full min-w-0">
         {sources.length > 0 && (
           <div className="pointer-events-auto absolute top-4 left-4 z-20 max-w-md">
-            <Card className="bg-background/90 backdrop-blur-sm border border-border/70 shadow-lg">
+            <Card className="bg-background/90 border-border/70 border shadow-lg backdrop-blur-sm">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between gap-2">
                   <CardTitle className="text-sm">Earth view</CardTitle>
-                  <div className="flex items-center gap-2 text-[11px]">
-                    {liveStatus === "live" ? (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/20 dark:bg-green-500/30 px-2 py-0.5 font-medium text-green-700 dark:text-green-400">
-                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 dark:bg-green-400" />
-                        Live
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/20 dark:bg-amber-500/30 px-2 py-0.5 font-medium text-amber-700 dark:text-amber-300">
-                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-300" />
-                        Stale
-                      </span>
-                    )}
-                    {lastUpdated && (
-                      <span className="text-muted-foreground">{lastUpdated.toLocaleTimeString()}</span>
-                    )}
-                  </div>
+                  {lastUpdated && (
+                    <div className="text-muted-foreground text-[11px]">
+                      {lastUpdated.toLocaleTimeString()}
+                    </div>
+                  )}
                 </div>
               </CardHeader>
-              <CardContent className="pt-0 space-y-5">
+              <CardContent className="space-y-5 pt-0">
                 {/* Orbit anomaly banner: when any visible + mapped source has orbit anomaly */}
                 {(() => {
                   const anomalySources = selectedIds.filter((id) => {
@@ -547,16 +604,16 @@ export function EarthOverviewView({
 
                 {/* Section 1: Which sources are shown on the globe (independent of config) */}
                 <div className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">Show on globe</p>
+                  <p className="text-muted-foreground text-xs font-medium">Show on globe</p>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
                         variant="outline"
                         size="sm"
-                        className="h-8 w-full justify-between text-xs font-normal px-3"
+                        className="h-8 w-full justify-between px-3 text-xs font-normal"
                       >
                         <span className="truncate">{showOnGlobeLabel}</span>
-                        <ChevronDownIcon className="size-3.5 opacity-50 shrink-0" />
+                        <ChevronDownIcon className="size-3.5 shrink-0 opacity-50" />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="min-w-(--radix-popper-anchor-width)">
@@ -573,7 +630,7 @@ export function EarthOverviewView({
                             className="text-xs"
                           >
                             <span className="truncate">{src.name}</span>
-                            <Badge variant="outline" className="ml-1 text-[9px] uppercase shrink-0">
+                            <Badge variant="outline" className="ml-1 shrink-0 text-[9px] uppercase">
                               {typeLabel}
                             </Badge>
                           </DropdownMenuCheckboxItem>
@@ -581,19 +638,19 @@ export function EarthOverviewView({
                       })}
                     </DropdownMenuContent>
                   </DropdownMenu>
-                  {error && <p className="text-[11px] text-destructive">Positions: {error}</p>}
+                  {error && <p className="text-destructive text-[11px]">Positions: {error}</p>}
                 </div>
 
                 {/* Section 2: Position mapping per source (independent of visibility) */}
                 <div className="border-t pt-5">
-                  <p className="text-xs font-medium text-muted-foreground mb-1">
+                  <p className="text-muted-foreground mb-1 text-xs font-medium">
                     Position mapping
                   </p>
-                  <p className="text-[11px] text-muted-foreground mb-3">
+                  <p className="text-muted-foreground mb-3 text-[11px]">
                     Configure frame and channels for each source. Visibility above is separate.
                   </p>
                   {allMappingsLoading ? (
-                    <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+                    <div className="text-muted-foreground flex items-center gap-2 py-3 text-xs">
                       <Spinner size="sm" />
                       Loading mappings…
                     </div>
@@ -609,17 +666,26 @@ export function EarthOverviewView({
                             open={open}
                             onOpenChange={(o) => setExpandedSourceId(o ? src.id : null)}
                           >
-                            <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2 text-left text-xs hover:bg-accent/50 hover:border-border data-[state=open]:border-border data-[state=open]:bg-accent/50">
+                            <CollapsibleTrigger
+                              data-testid={`planning-source-row-${src.id}`}
+                              className="hover:bg-accent/50 hover:border-border data-[state=open]:border-border data-[state=open]:bg-accent/50 flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2 text-left text-xs"
+                            >
                               {open ? (
-                                <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                                <ChevronDownIcon className="text-muted-foreground size-3.5 shrink-0" />
                               ) : (
-                                <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                                <ChevronRightIcon className="text-muted-foreground size-3.5 shrink-0" />
                               )}
                               <span className="truncate font-medium">{src.name}</span>
-                              <Badge variant="outline" className="text-[9px] uppercase shrink-0">
+                              <Badge variant="outline" className="shrink-0 text-[9px] uppercase">
                                 {typeLabel}
                               </Badge>
-                              <span className="ml-auto truncate text-[11px] text-muted-foreground">
+                              {selectedIds.includes(src.id) && (
+                                <FeedStatusBadge
+                                  state={feedStateBySource[src.id] ?? "disconnected"}
+                                  className="ml-1.5 shrink-0"
+                                />
+                              )}
+                              <span className="text-muted-foreground ml-auto truncate text-[11px]">
                                 {m ? mappingSummary(m) : "Not configured"}
                               </span>
                               {m && (() => {
@@ -629,7 +695,7 @@ export function EarthOverviewView({
                                 return (
                                   <Badge
                                     variant={isAnomaly ? "destructive" : "secondary"}
-                                    className="ml-1.5 text-[9px] shrink-0"
+                                    className="ml-1.5 shrink-0 text-[9px]"
                                     title={st.reason || st.status}
                                   >
                                     {isAnomaly ? st.status.replace(/_/g, " ") : (st.orbit_type ?? "OK")}
@@ -638,7 +704,7 @@ export function EarthOverviewView({
                               })()}
                             </CollapsibleTrigger>
                             <CollapsibleContent>
-                              <div className="mt-3 space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                              <div className="border-border bg-muted/30 mt-3 space-y-3 rounded-md border p-3">
                                 <div className="space-y-1.5">
                                   <Label className="text-xs">Frame</Label>
                                   <Select value={frameType} onValueChange={setFrameType}>
@@ -718,7 +784,7 @@ export function EarthOverviewView({
                                   </div>
                                 )}
                                 {mappingError && (
-                                  <p className="text-xs text-destructive">{mappingError}</p>
+                                  <p className="text-destructive text-xs">{mappingError}</p>
                                 )}
                                 <div className="flex flex-wrap gap-2 pt-0.5">
                                   {m && (
@@ -761,7 +827,7 @@ export function EarthOverviewView({
           </div>
         )}
 
-        <div className="absolute inset-0 min-w-0 min-h-0">
+        <div className="absolute inset-0 min-h-0 min-w-0">
           <EarthOverviewGlobe
             positions={effectivePositions}
             positionHistoryBySource={effectivePositionHistory}

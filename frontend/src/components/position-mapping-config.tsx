@@ -111,7 +111,7 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
     setError(null);
     try {
       const saved = await upsertPositionConfig({
-        source_id: currentSource.id,
+        vehicle_id: currentSource.id,
         frame_type: frameType,
         lat_channel_name: frameType === "gps_lla" ? latChannel || null : null,
         lon_channel_name: frameType === "gps_lla" ? lonChannel || null : null,
@@ -167,7 +167,7 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-xl max-h-[80vh] overflow-hidden flex flex-col">
+        <DialogContent className="flex max-h-[80vh] max-w-xl flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Configure position mapping</DialogTitle>
             <DialogDescription>
@@ -175,9 +175,9 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
               the Overview Earth view can plot each source.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-5 overflow-y-auto max-h-[60vh] pr-2">
+          <div className="max-h-[60vh] space-y-5 overflow-y-auto pr-2">
             {sources.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-muted-foreground text-sm">
                 No telemetry sources are registered yet.
               </p>
             ) : (
@@ -232,7 +232,7 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
                 </section>
 
                 {frameType === "gps_lla" ? (
-                  <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div className="space-y-1">
                       <Label htmlFor="lat-channel">Latitude channel</Label>
                       <Input
@@ -267,7 +267,7 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
                     </div>
                   </section>
                 ) : (
-                  <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <div className="space-y-1">
                       <Label htmlFor="x-channel">X channel</Label>
                       <Input
@@ -310,7 +310,7 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
                 )}
 
                 {loading && (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <div className="text-muted-foreground flex items-center gap-2 text-sm">
                     <Spinner size="sm" />
                     <span>Loading existing mapping…</span>
                   </div>
@@ -318,7 +318,7 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
               </>
             )}
           </div>
-          <DialogFooter className="border-t pt-4 mt-2 flex items-center justify-between gap-3">
+          <DialogFooter className="mt-2 flex items-center justify-between gap-3 border-t pt-4">
             <div className="flex items-center gap-2">
               {mapping && (
                 <Button

@@ -10,7 +10,8 @@ import { useOpsEventsQuery } from "@/lib/query-hooks";
 import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 
 interface OpsEventHistoryProps {
-  sourceId: string;
+  vehicleId: string;
+  streamId?: string | null;
 }
 
 const RANGE_OPTIONS = [
@@ -38,15 +39,18 @@ function formatTime(iso: string): string {
   });
 }
 
-export function OpsEventHistory({ sourceId }: OpsEventHistoryProps) {
+export function OpsEventHistory({ vehicleId, streamId }: OpsEventHistoryProps) {
   const [rangeMinutes, setRangeMinutes] = useState(15);
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
   const params: Record<string, string> = {
-    source_id: sourceId,
+    source_id: vehicleId,
     since_minutes: String(rangeMinutes),
     limit: "100",
     offset: "0",
   };
+  if (streamId) {
+    params.stream_id = streamId;
+  }
   if (eventTypeFilter !== "all") {
     if (eventTypeFilter === "alerts") {
       params.event_types = "alert.opened,alert.cleared,alert.acked,alert.resolved";
@@ -65,11 +69,11 @@ export function OpsEventHistory({ sourceId }: OpsEventHistoryProps) {
         <div className="flex items-center justify-between gap-3">
           <div>
             <CardTitle className="text-base">Event history</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">
+            <p className="text-muted-foreground mt-1 text-sm">
               Recent and historical ops events for the current Overview source.
             </p>
           </div>
-          <span className="text-sm text-muted-foreground">{total} total</span>
+          <span className="text-muted-foreground text-sm">{total} total</span>
         </div>
         <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div className="space-y-2">
@@ -116,19 +120,19 @@ export function OpsEventHistory({ sourceId }: OpsEventHistoryProps) {
             <Spinner size="default" />
           </div>
         ) : events.length === 0 ? (
-          <p className="py-8 text-center text-muted-foreground">
+          <p className="text-muted-foreground py-8 text-center">
             No events in the selected range.
           </p>
         ) : (
           <ul
-            className="divide-y divide-border"
+            className="divide-border divide-y"
             role="list"
             aria-label="Overview event history"
           >
             {events.map((event) => (
               <li
                 key={event.id}
-                className="px-2 py-3 transition-colors hover:bg-muted/40 focus-within:bg-muted/40"
+                className="hover:bg-muted/40 focus-within:bg-muted/40 px-2 py-3 transition-colors"
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge
@@ -139,15 +143,19 @@ export function OpsEventHistory({ sourceId }: OpsEventHistoryProps) {
                   >
                     {EVENT_TYPE_LABELS[event.event_type] ?? event.event_type}
                   </Badge>
-                  <span className="shrink-0 text-sm tabular-nums text-muted-foreground">
+                  <span className="text-muted-foreground shrink-0 text-sm tabular-nums">
                     {formatTime(event.event_time)}
                   </span>
                 </div>
                 <p className="mt-1 text-sm">{event.summary}</p>
                 {event.entity_id && (
                   <Link
-                    href={buildTelemetryDetailHref(sourceId, event.entity_id)}
-                    className="mt-1 inline-block text-xs text-primary hover:underline"
+                    href={buildTelemetryDetailHref(
+                      vehicleId,
+                      event.entity_id,
+                      event.stream_id ?? streamId ?? undefined,
+                    )}
+                    className="text-primary mt-1 inline-block text-xs hover:underline"
                   >
                     View {event.entity_id}
                   </Link>
