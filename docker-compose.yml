@@ -71,5 +71,15 @@ services:
     depends_on:
       - backend
 
+  satnogs-adapter:
+    build:
+      context: .
+      dockerfile: satnogs_adapter/Dockerfile
+    container_name: telemetry-satnogs-adapter
+    environment:
+      SATNOGS_API_TOKEN: ${SATNOGS_API_TOKEN:-}
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:

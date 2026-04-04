@@ -40,6 +40,7 @@ This starts:
 - **Backend** (port 8000) — FastAPI telemetry API
 - **Frontend** (port 3000) — Next.js dashboard
 - **Simulator** (port 8001) — mock vehicle streamer for testing scenarios
+- **SatNOGS adapter** — optional ISS AX.25/APRS observation ingestor (starts with placeholder config until you set a real ISS source UUID)
 
 Migrations run automatically on backend startup.
 
@@ -92,6 +93,19 @@ Or with anomalies:
 ```
 
 The Overview page will show live updates (green "Live" badge when connected). The Events Console supports Ack and Resolve for alerts.
+
+## SatNOGS ISS Adapter
+
+The repo includes a compose-managed `satnogs-adapter` service for ISS AX.25/APRS telemetry ingestion from SatNOGS observations.
+
+Operational sequence:
+
+1. Add or confirm the ISS definition file at `telemetry-definitions/vehicles/iss.yaml`.
+2. Create the ISS source through `POST /telemetry/sources` with `source_type="vehicle"` and `telemetry_definition_path="vehicles/iss.yaml"`.
+3. Copy the returned backend UUID into `satnogs_adapter/config.example.yaml` as `platform.source_id` or provide your own config file.
+4. Start the adapter with `docker compose up -d satnogs-adapter`.
+
+The adapter does not create sources. It only ingests for an already-registered source and publishes batched events to `POST /telemetry/realtime/ingest`.
 
 ## Browser Validation
 

@@ -1,0 +1,53 @@
+platform:
+  source_id: "00000000-0000-0000-0000-000000000000"
+  ingest_url: "http://backend:8000/telemetry/realtime/ingest"
+
+vehicle:
+  slug: "iss"
+  name: "International Space Station"
+  norad_cat_id: 25544
+  allowed_source_callsigns:
+    - "NA1SS"
+    - "RS0ISS"
+  telemetry_definition_path: "vehicles/iss.yaml"
+
+satnogs_network:
+  base_url: "https://network.satnogs.org"
+  api_token: ""
+  poll_interval_seconds: 60
+  lookback_window_minutes: 180
+  filters:
+    satellite_norad_cat_id: 25544
+    ground_station_allowlist: []
+    status_allowlist: []
+  pagination:
+    cursor_persistence_enabled: true
+    max_pages_per_cycle: 5
+  download:
+    max_concurrent_observation_fetches: 2
+    max_concurrent_artifact_downloads: 2
+
+backfill:
+  enabled: false
+  mode: bounded_range
+  start_time: null
+  end_time: null
+  max_observations_per_run: 250
+  requests_per_minute: 20
+  checkpoint_store_path: "tmp/satnogs-adapter/checkpoints.json"
+
+publisher:
+  batch_size_events: 50
+  timeout_seconds: 10
+  retry:
+    max_attempts: 3
+    backoff_seconds: 1
+    backoff_multiplier: 2
+    retryable_status_codes: [408, 425, 429, 500, 502, 503, 504]
+
+checkpoints:
+  path: "tmp/satnogs-adapter/checkpoints.json"
+
+dlq:
+  root_dir: "tmp/satnogs-adapter/dlq"
+  write_observation_dlq: true

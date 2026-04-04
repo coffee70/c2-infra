@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ISS SatNOGS adapter service** — Added a compose-managed `satnogs-adapter` service that polls SatNOGS observations, decodes AX.25/APRS telemetry, maps stable and dynamic numeric fields, and publishes batched realtime ingest events for an ISS vehicle source registered in the backend.
+- **ISS telemetry definition** — Added `telemetry-definitions/vehicles/iss.yaml` with stable ISS position/speed channels, a position mapping, and ingestion-side stable field mappings for the SatNOGS adapter.
+
 ### Changed
 
 - **Runtime identity contract cleanup** — Runtime telemetry APIs now use `source_id + stream_id` consistently across ingest, telemetry, realtime, and ops. `run` / `run_id` compatibility routes and wrappers were removed, explicit `stream_id` is authoritative at route boundaries, and the frontend now carries `stream_id` instead of `run_id` in telemetry detail links and queries.

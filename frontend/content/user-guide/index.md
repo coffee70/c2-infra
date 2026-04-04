@@ -11,3 +11,5 @@ A **spacecraft telemetry monitoring and analysis platform** for mission operatio
 ## Get Started
 
 [Quick Start →](/docs/quick-start) — First-time setup: start services, generate data, and see your Overview dashboard.
+
+[ISS SatNOGS Adapter →](/docs/iss-satnogs-adapter) — Register the ISS source, configure the adapter UUID, and ingest completed SatNOGS observations.

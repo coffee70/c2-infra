@@ -56,6 +56,33 @@ def test_load_definition_with_channel_aliases(tmp_path: Path) -> None:
     assert definition.channels[0].aliases == ["BAT_V", "BATTERY_VOLT", "VBAT"]
 
 
+def test_load_definition_with_ingestion_mappings(tmp_path: Path) -> None:
+    path = tmp_path / "with-ingestion.yaml"
+    path.write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "channels:",
+                "  - name: GPS_LAT",
+                '    units: "deg"',
+                '    description: "Latitude"',
+                '    subsystem: "nav"',
+                "    mean: 0.0",
+                "    std_dev: 1.0",
+                "ingestion:",
+                "  stable_field_mappings:",
+                "    latitude: GPS_LAT",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    definition = load_definition_file(str(path), root=tmp_path)
+
+    assert definition.ingestion is not None
+    assert definition.ingestion.stable_field_mappings == {"latitude": "GPS_LAT"}
+
+
 def test_load_definition_rejects_alias_colliding_with_other_canonical_name(tmp_path: Path) -> None:
     path = tmp_path / "bad-alias.yaml"
     path.write_text(

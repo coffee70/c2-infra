@@ -78,12 +78,17 @@ class TelemetryChannelDefinition(BaseModel):
     sample_rate_hz: float | None = None
 
 
+class TelemetryIngestionDefinition(BaseModel):
+    stable_field_mappings: dict[str, str] = Field(default_factory=dict)
+
+
 class TelemetryDefinitionFile(BaseModel):
     version: int = 1
     name: str | None = None
     vehicle_profile: VehicleProfileDefinition | None = None
     channels: list[TelemetryChannelDefinition]
     position_mapping: PositionMappingDefinition | None = None
+    ingestion: TelemetryIngestionDefinition | None = None
     scenarios: dict[str, TelemetryScenarioDefinition] = Field(default_factory=dict)
 
     @model_validator(mode="after")

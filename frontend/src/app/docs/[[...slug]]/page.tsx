@@ -15,6 +15,7 @@ const DOC_PAGES = [
   { slug: ["investigating-channels"], file: "investigating-channels.md", title: "Investigating a Channel" },
   { slug: ["handling-alerts"], file: "handling-alerts.md", title: "Handling Alerts" },
   { slug: ["multi-source"], file: "multi-source.md", title: "Multi-Source Operations" },
+  { slug: ["iss-satnogs-adapter"], file: "iss-satnogs-adapter.md", title: "ISS SatNOGS Adapter" },
   { slug: ["reference"], file: "reference.md", title: "Reference" },
 ] as const;
 

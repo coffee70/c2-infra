@@ -40,6 +40,17 @@ With anomalies:
 
 The streamer posts to `POST /telemetry/realtime/ingest` with the built-in mock vehicle source id. Its telemetry catalog also comes from a committed definition file, so the backend and streamer agree on the expected channels.
 
+## Option C: SatNOGS ISS Adapter
+
+Use the SatNOGS adapter when you want a real external packet-radio feed instead of simulator traffic.
+
+1. Create a vehicle source from the ISS definition file and keep the returned source UUID.
+2. Place that UUID into the adapter config as `platform.source_id`.
+3. Start the compose-managed `satnogs-adapter` service.
+4. The adapter polls SatNOGS observations for NORAD `25544`, maps one completed observation to one stream, and posts numeric telemetry events to realtime ingest.
+
+The detailed workflow lives in [ISS SatNOGS Adapter](/docs/iss-satnogs-adapter).
+
 If an external decoder or payload stream emits a field that is not in the seeded catalog, the backend now creates a source-scoped **discovered** channel instead of dropping the sample. When the producer sends structured decoder tags such as `decoder=APRS` and `field_name=Payload Temp`, the stored channel name is derived into a stable namespace like `decoder.aprs.payload_temp`.
 
 Some external decoders only know when a packet was heard, not when it was generated onboard. Those streams may send `reception_time` without `generation_time`; the backend will synthesize `generation_time = reception_time` so the packet still flows through realtime ingest. For those packets, ordering and freshness are reception-based.
