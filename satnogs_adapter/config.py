@@ -9,7 +9,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-from telemetry_catalog.definitions import TelemetryDefinitionFile, load_definition_file
+from telemetry_catalog.definitions import VehicleConfigurationFile, load_vehicle_config_file
 
 
 class PlatformConfig(BaseModel):
@@ -80,7 +80,7 @@ class VehicleConfig(BaseModel):
     name: str = "International Space Station"
     norad_cat_id: int = 25544
     allowed_source_callsigns: list[str] = Field(default_factory=lambda: ["NA1SS", "RS0ISS"])
-    telemetry_definition_path: str = "vehicles/iss.yaml"
+    vehicle_config_path: str = "vehicles/iss.yaml"
     stable_field_mappings: dict[str, str] = Field(default_factory=dict)
 
 
@@ -99,8 +99,8 @@ class AdapterConfig(BaseModel):
             raise ValueError("vehicle.norad_cat_id must match satnogs_network.filters.satellite_norad_cat_id")
         return self
 
-    def load_definition(self) -> TelemetryDefinitionFile:
-        return load_definition_file(self.vehicle.telemetry_definition_path)
+    def load_definition(self) -> VehicleConfigurationFile:
+        return load_vehicle_config_file(self.vehicle.vehicle_config_path)
 
     def resolve_stable_field_mappings(self) -> dict[str, str]:
         definition = self.load_definition()

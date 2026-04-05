@@ -34,7 +34,39 @@ export interface TelemetrySource {
   description?: string | null;
   source_type?: string;
   base_url?: string | null;
-  telemetry_definition_path?: string;
+  vehicle_config_path?: string;
+}
+
+export interface VehicleConfigListItem {
+  path: string;
+  filename: string;
+  name?: string | null;
+  category: string;
+  format: string;
+  modified_at?: string | null;
+}
+
+export interface VehicleConfigParsedSummary {
+  version: number;
+  name?: string | null;
+  channel_count: number;
+  scenario_names: string[];
+  has_position_mapping: boolean;
+  has_ingestion: boolean;
+}
+
+export interface VehicleConfigValidationError {
+  loc: string[];
+  message: string;
+  type: string;
+}
+
+export interface VehicleConfigDocument {
+  path: string;
+  content: string;
+  format: string;
+  parsed?: VehicleConfigParsedSummary | null;
+  validation_errors: VehicleConfigValidationError[];
 }
 
 export interface SearchResult {
@@ -118,7 +150,7 @@ interface SourceMutationInput {
   name: string;
   description?: string;
   base_url?: string;
-  telemetry_definition_path: string;
+  vehicle_config_path: string;
 }
 
 interface SourceUpdateInput {
@@ -126,7 +158,19 @@ interface SourceUpdateInput {
   name: string;
   description?: string;
   base_url?: string;
-  telemetry_definition_path?: string;
+  vehicle_config_path?: string;
+}
+
+interface VehicleConfigValidateInput {
+  content: string;
+  path?: string;
+  filename?: string;
+  format?: string;
+}
+
+interface VehicleConfigSaveInput {
+  path: string;
+  content: string;
 }
 
 interface SimulatorActionInput {
@@ -147,6 +191,14 @@ function toSearchQueryParams(params: SearchParams): URLSearchParams {
     query.set("recent_minutes", String(params.recentMinutes));
   }
   return query;
+}
+
+function encodePathSegments(path: string): string {
+  return path
+    .split("/")
+    .filter((segment) => segment.length > 0)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
 }
 
 export function useWatchlistQuery(sourceId: string, enabled = true) {
@@ -316,6 +368,82 @@ export function useUpdateTelemetrySourceMutation() {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.telemetrySourcesStatus(variables.sourceId),
       });
+    },
+  });
+}
+
+export function useVehicleConfigsQuery(enabled = true) {
+  return useQuery<VehicleConfigListItem[]>({
+    queryKey: queryKeys.vehicleConfigs,
+    enabled,
+    staleTime: 30 * 1000,
+    queryFn: async ({ signal }) => {
+      const data = await fetchJson<VehicleConfigListItem[]>("/vehicle-configs", {
+        signal,
+        cache: "no-store",
+      });
+      return Array.isArray(data) ? data : [];
+    },
+  });
+}
+
+export function useVehicleConfigQuery(path: string, enabled = true) {
+  return useQuery<VehicleConfigDocument>({
+    queryKey: queryKeys.vehicleConfig(path),
+    enabled: enabled && path.trim().length > 0,
+    queryFn: async ({ signal }) =>
+      fetchJson<VehicleConfigDocument>(`/vehicle-configs/${encodePathSegments(path)}`, {
+        signal,
+        cache: "no-store",
+      }),
+  });
+}
+
+export function useValidateVehicleConfigMutation() {
+  return useMutation({
+    mutationFn: async (input: VehicleConfigValidateInput) =>
+      fetchJson<{
+        valid: boolean;
+        parsed?: VehicleConfigParsedSummary | null;
+        errors: VehicleConfigValidationError[];
+      }>("/vehicle-configs/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+  });
+}
+
+export function useCreateVehicleConfigMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: VehicleConfigSaveInput) =>
+      fetchJson<{ path: string; parsed: VehicleConfigParsedSummary; saved: boolean }>("/vehicle-configs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.vehicleConfigs });
+    },
+  });
+}
+
+export function useUpdateVehicleConfigMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: VehicleConfigSaveInput) =>
+      fetchJson<{ path: string; parsed: VehicleConfigParsedSummary; saved: boolean }>(
+        `/vehicle-configs/${encodePathSegments(input.path)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        }
+      ),
+    onSettled: async (_data, _error, variables) => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.vehicleConfigs });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.vehicleConfig(variables.path) });
     },
   });
 }

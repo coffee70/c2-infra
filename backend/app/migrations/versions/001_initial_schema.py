@@ -25,7 +25,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("source_type", sa.Text(), nullable=False),
         sa.Column("base_url", sa.Text(), nullable=True),
-        sa.Column("telemetry_definition_path", sa.Text(), nullable=False),
+        sa.Column("vehicle_config_path", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
 

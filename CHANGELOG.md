@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **ISS SatNOGS adapter service** — Added a compose-managed `satnogs-adapter` service that polls SatNOGS observations, decodes AX.25/APRS telemetry, maps stable and dynamic numeric fields, and publishes batched realtime ingest events for an ISS vehicle source registered in the backend.
-- **ISS telemetry definition** — Added `telemetry-definitions/vehicles/iss.yaml` with stable ISS position/speed channels, a position mapping, and ingestion-side stable field mappings for the SatNOGS adapter.
+- **ISS vehicle configuration** — Added `vehicle-configurations/vehicles/iss.yaml` with stable ISS position/speed channels, a position mapping, and ingestion-side stable field mappings for the SatNOGS adapter.
 
 ### Changed
 
@@ -43,9 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Source-scoped channel aliases** — Telemetry definition files can now declare alias names for catalog channels. Ingest, watchlist changes, position mapping, channel detail APIs, and channel search accept either the canonical name or a configured alias, then normalize back to the canonical channel identity for storage and URLs.
+- **Source-scoped channel aliases** — Vehicle configuration files can now declare alias names for catalog channels. Ingest, watchlist changes, position mapping, channel detail APIs, and channel search accept either the canonical name or a configured alias, then normalize back to the canonical channel identity for storage and URLs.
 - **Dynamic telemetry channel discovery** — Realtime ingest now creates durable source-scoped `discovered` channels for unknown live fields instead of dropping them. Decoder-tagged payloads can derive stable names such as `decoder.aprs.payload_temp`, and those channels now appear in source-scoped lists, search, summaries, and watchlist configuration.
-- **Per-source telemetry definition files** — Vehicles and simulators now register with a JSON or YAML `telemetry_definition_path`. The backend validates the file, seeds that source’s telemetry catalog automatically, and seeds any inline position mapping so the system knows which channels to expect before the source goes live.
+- **Per-source vehicle configuration files** — Vehicles and simulators now register with a JSON or YAML `vehicle_config_path`. The backend validates the file, seeds that source’s telemetry catalog automatically, and seeds any inline position mapping so the system knows which channels to expect before the source goes live.
 - **Built-in source catalog refresh** — The local stack now ships with four named built-ins backed by fixed UUID source IDs: `Aegon Relay`, `Balerion Surveyor`, `DrogonSat`, and `RhaegalSat`.
 - **Simulator orbit anomaly presets** — The simulator now includes explicit `orbit_nominal`, `orbit_decay`, `orbit_highly_elliptical`, `orbit_suborbital`, and `orbit_escape` scenarios so operators can drive Planning and orbit-analysis workflows with intentional trajectory cases instead of random GPS corruption.
 - **Real-time orbit validation** — Backend orbit validation for sources with an active position channel mapping. Assembles position from GPS/LLA (or ECEF) channels, computes orbital parameters (perigee, apogee, eccentricity, velocity), classifies LEO/MEO/GEO, and detects anomalies (escape trajectory, suborbital, orbit decay, highly elliptical LEO). Status is exposed via `GET /telemetry/orbit/status` and broadcast over WebSocket (`orbit_status`) when status changes.
@@ -66,8 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Operator-facing **Position mapping** UI on the Planning page (overlay control) to configure which telemetry channels (e.g. `GPS_LAT`/`GPS_LON`/`GPS_ALT` or XYZ) should be treated as position for each source.
 - **Constellation: Sources tab and multi-sim support**
   - **Sources** tab (replaces Simulator): lists Vehicles and Simulators in separate sections
-  - Add-source wizard: add vehicles or simulators with a telemetry definition path; simulators also include a Base URL (server-reachable URL)
-  - Edit sources: update name, Base URL, and telemetry definition path from the Sources page
+  - Add-source wizard: add vehicles or simulators with a vehicle configuration path; simulators also include a Base URL (server-reachable URL)
+  - Edit sources: update name, Base URL, and vehicle configuration path from the Sources page
   - Overview source selector grouped by **Vehicles** and **Simulators**
   - Per-simulator backend proxy: simulator routes resolve URL from DB using the selected vehicle context
   - Two simulator containers (`simulator`, `simulator2`) in docker-compose for testing multi-sim

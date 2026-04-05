@@ -32,8 +32,8 @@ from app.utils.subsystem import infer_subsystem
 from telemetry_catalog.builtins import BUILT_IN_SOURCES
 from telemetry_catalog.builtins import LEGACY_SOURCE_ID_ALIASES
 from telemetry_catalog.definitions import (
-    canonical_definition_path,
-    load_definition_file,
+    canonical_vehicle_config_path,
+    load_vehicle_config_file,
     resolve_source_id_alias,
 )
 
@@ -69,7 +69,7 @@ def _source_to_dict(src: TelemetrySource) -> dict:
         "description": src.description,
         "source_type": src.source_type,
         "base_url": src.base_url,
-        "telemetry_definition_path": src.telemetry_definition_path,
+        "vehicle_config_path": src.vehicle_config_path,
     }
 
 
@@ -506,7 +506,7 @@ def _seed_metadata_for_source(
     db: Session,
     *,
     source_id: str,
-    telemetry_definition_path: str,
+    vehicle_config_path: str,
     embedding_provider: EmbeddingProvider | None = None,
     prune_missing: bool = False,
     refresh_embeddings: bool = True,
@@ -514,7 +514,7 @@ def _seed_metadata_for_source(
     overwrite_position_mapping: bool = True,
 ) -> bool:
     needs_embedding_backfill = False
-    definition = load_definition_file(telemetry_definition_path)
+    vehicle_config = load_vehicle_config_file(vehicle_config_path)
     existing_rows = db.execute(
         select(TelemetryMetadata).where(TelemetryMetadata.source_id == source_id)
     ).scalars().all()
@@ -523,8 +523,8 @@ def _seed_metadata_for_source(
         select(TelemetryChannelAlias).where(TelemetryChannelAlias.source_id == source_id)
     ).scalars().all()
     existing_aliases_by_name = {row.alias_name: row for row in existing_aliases}
-    expected_names = {channel.name for channel in definition.channels}
-    expected_aliases = {alias for channel in definition.channels for alias in channel.aliases}
+    expected_names = {channel.name for channel in vehicle_config.channels}
+    expected_aliases = {alias for channel in vehicle_config.channels for alias in channel.aliases}
     preserved_alias_names = expected_aliases - expected_names
     removed_names: set[str] = set()
 
@@ -562,7 +562,7 @@ def _seed_metadata_for_source(
                 name: row for name, row in existing_by_name.items() if name not in removed_names
             }
 
-    for channel in definition.channels:
+    for channel in vehicle_config.channels:
         meta = existing_by_name.get(channel.name)
         created_meta = False
         if meta is None:
@@ -643,7 +643,7 @@ def _seed_metadata_for_source(
             else:
                 alias.telemetry_id = meta.id
 
-    mapping = definition.position_mapping
+    mapping = vehicle_config.position_mapping
     existing_mapping = db.execute(
         select(PositionChannelMapping).where(
             PositionChannelMapping.source_id == source_id,
@@ -1132,7 +1132,7 @@ def reconcile_builtin_source_duplicates(db: Session) -> None:
         for duplicate in duplicates:
             if duplicate.id not in legacy_duplicate_ids:
                 continue
-            if duplicate.telemetry_definition_path != spec.telemetry_definition_path:
+            if duplicate.vehicle_config_path != spec.vehicle_config_path:
                 continue
             if duplicate.source_type != spec.source_type:
                 continue
@@ -1323,14 +1323,14 @@ def create_source(
     *,
     description: str | None = None,
     base_url: str | None = None,
-    telemetry_definition_path: str,
+    vehicle_config_path: str,
 ) -> dict:
     """Create a new telemetry source. Returns the created source dict."""
     if source_type not in ("vehicle", "simulator"):
         raise ValueError("source_type must be 'vehicle' or 'simulator'")
     if source_type == "simulator" and not base_url:
         raise ValueError("base_url is required for simulator sources")
-    resolved_definition_path = canonical_definition_path(telemetry_definition_path)
+    resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
     source_id = str(uuid.uuid4())
     src = TelemetrySource(
         id=source_id,
@@ -1338,14 +1338,14 @@ def create_source(
         description=description,
         source_type=source_type,
         base_url=base_url if source_type == "simulator" else None,
-        telemetry_definition_path=resolved_definition_path,
+        vehicle_config_path=resolved_vehicle_config_path,
     )
     db.add(src)
     db.flush()
     _seed_metadata_for_source(
         db,
         source_id=source_id,
-        telemetry_definition_path=resolved_definition_path,
+        vehicle_config_path=resolved_vehicle_config_path,
         embedding_provider=embedding_provider,
     )
     db.commit()
@@ -1361,7 +1361,7 @@ def update_source(
     name: str | None = None,
     description: str | None = None,
     base_url: str | None = None,
-    telemetry_definition_path: str | None = None,
+    vehicle_config_path: str | None = None,
 ) -> dict | None:
     """Update a telemetry source. Returns updated source dict or None if not found."""
     resolved_source_id = resolve_source_id_alias(source_id)
@@ -1374,17 +1374,17 @@ def update_source(
         src.description = description
     if base_url is not None and src.source_type == "simulator":
         src.base_url = base_url
-    if telemetry_definition_path is not None:
-        next_path = canonical_definition_path(telemetry_definition_path)
-        if src.source_type == "simulator" and next_path != src.telemetry_definition_path:
-            raise ValueError("Cannot change telemetry_definition_path for simulator sources")
-        if next_path != src.telemetry_definition_path and source_has_telemetry_history(db, src.id):
-            raise ValueError("Cannot change telemetry_definition_path after telemetry has been ingested")
-        src.telemetry_definition_path = next_path
+    if vehicle_config_path is not None:
+        next_path = canonical_vehicle_config_path(vehicle_config_path)
+        if src.source_type == "simulator" and next_path != src.vehicle_config_path:
+            raise ValueError("Cannot change vehicle_config_path for simulator sources")
+        if next_path != src.vehicle_config_path and source_has_telemetry_history(db, src.id):
+            raise ValueError("Cannot change vehicle_config_path after telemetry has been ingested")
+        src.vehicle_config_path = next_path
         _seed_metadata_for_source(
             db,
             source_id=src.id,
-            telemetry_definition_path=src.telemetry_definition_path,
+            vehicle_config_path=src.vehicle_config_path,
             embedding_provider=embedding_provider,
             prune_missing=True,
         )
@@ -1416,7 +1416,7 @@ def refresh_source_embeddings(
         _seed_metadata_for_source(
             db,
             source_id=src.id,
-            telemetry_definition_path=src.telemetry_definition_path,
+            vehicle_config_path=src.vehicle_config_path,
             embedding_provider=embedding_provider,
             refresh_embeddings=True,
             preserve_existing_embeddings=True,
@@ -1440,7 +1440,7 @@ def bootstrap_builtin_sources(
                 description=spec.description,
                 source_type=spec.source_type,
                 base_url=spec.base_url,
-                telemetry_definition_path=spec.telemetry_definition_path,
+                vehicle_config_path=spec.vehicle_config_path,
             )
             db.add(src)
             db.flush()
@@ -1455,7 +1455,7 @@ def bootstrap_builtin_sources(
             needs_embedding_backfill = _seed_metadata_for_source(
                 db,
                 source_id=src.id,
-                telemetry_definition_path=src.telemetry_definition_path,
+                vehicle_config_path=src.vehicle_config_path,
                 refresh_embeddings=False,
                 overwrite_position_mapping=False,
             )
@@ -1464,9 +1464,9 @@ def bootstrap_builtin_sources(
                 sources_needing_embedding_backfill.add(src.id)
         except Exception:
             logger.exception(
-                "Skipping bootstrap metadata repair for source %s due to invalid definition path %s",
+                "Skipping bootstrap metadata repair for source %s due to invalid vehicle configuration path %s",
                 src.id,
-                src.telemetry_definition_path,
+                src.vehicle_config_path,
             )
 
     if sources_needing_embedding_backfill:
@@ -1487,7 +1487,7 @@ def bootstrap_builtin_sources(
                     _seed_metadata_for_source(
                         db,
                         source_id=src.id,
-                        telemetry_definition_path=src.telemetry_definition_path,
+                        vehicle_config_path=src.vehicle_config_path,
                         embedding_provider=provider,
                         refresh_embeddings=True,
                         preserve_existing_embeddings=True,

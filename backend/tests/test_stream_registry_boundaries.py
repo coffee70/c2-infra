@@ -80,7 +80,7 @@ def test_resolve_channel_metadata_prefers_exact_source_lookup_for_source_ids() -
             id=source_id,
             name="Source A",
             source_type="vehicle",
-            telemetry_definition_path="defs/source-a.yaml",
+            vehicle_config_path="defs/source-a.yaml",
         )
         if model is TelemetrySource and key == source_id
         else None

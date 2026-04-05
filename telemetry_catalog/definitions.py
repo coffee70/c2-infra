@@ -1,4 +1,4 @@
-"""Telemetry definition models and file loading."""
+"""Vehicle configuration models and file loading."""
 
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ class TelemetryIngestionDefinition(BaseModel):
     stable_field_mappings: dict[str, str] = Field(default_factory=dict)
 
 
-class TelemetryDefinitionFile(BaseModel):
+class VehicleConfigurationFile(BaseModel):
     version: int = 1
     name: str | None = None
     vehicle_profile: VehicleProfileDefinition | None = None
@@ -92,7 +92,7 @@ class TelemetryDefinitionFile(BaseModel):
     scenarios: dict[str, TelemetryScenarioDefinition] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_channels(self) -> "TelemetryDefinitionFile":
+    def validate_channels(self) -> "VehicleConfigurationFile":
         seen: set[str] = set()
         aliases_seen: dict[str, str] = {}
         for channel in self.channels:
@@ -142,11 +142,11 @@ class TelemetryDefinitionFile(BaseModel):
         return self
 
 
-def telemetry_definitions_root() -> Path:
-    configured = os.environ.get("TELEMETRY_DEFINITIONS_ROOT")
+def vehicle_config_root() -> Path:
+    configured = os.environ.get("VEHICLE_CONFIG_ROOT")
     if configured:
         return Path(configured).resolve()
-    return (Path(__file__).resolve().parent.parent / "telemetry-definitions").resolve()
+    return (Path(__file__).resolve().parent.parent / "vehicle-configurations").resolve()
 
 
 def resolve_source_id_alias(source_id: str | None) -> str | None:
@@ -155,38 +155,38 @@ def resolve_source_id_alias(source_id: str | None) -> str | None:
     return LEGACY_SOURCE_ID_ALIASES.get(source_id, source_id)
 
 
-def resolve_definition_path(path_str: str, *, root: Path | None = None) -> Path:
-    base = (root or telemetry_definitions_root()).resolve()
+def resolve_vehicle_config_path(path_str: str, *, root: Path | None = None) -> Path:
+    base = (root or vehicle_config_root()).resolve()
     raw = Path(path_str)
     candidate = raw if raw.is_absolute() else (base / raw)
     resolved = candidate.resolve()
     try:
         resolved.relative_to(base)
     except ValueError as exc:
-        raise ValueError(f"Definition path must stay under {base}") from exc
+        raise ValueError(f"Vehicle configuration path must stay under {base}") from exc
     if not resolved.exists():
-        raise ValueError(f"Definition file not found: {path_str}")
+        raise ValueError(f"Vehicle configuration file not found: {path_str}")
     if resolved.suffix.lower() not in {".json", ".yaml", ".yml"}:
-        raise ValueError("Definition file must be .json, .yaml, or .yml")
+        raise ValueError("Vehicle configuration file must be .json, .yaml, or .yml")
     return resolved
 
 
-def canonical_definition_path(path_str: str, *, root: Path | None = None) -> str:
-    resolved = resolve_definition_path(path_str, root=root)
-    base = (root or telemetry_definitions_root()).resolve()
+def canonical_vehicle_config_path(path_str: str, *, root: Path | None = None) -> str:
+    resolved = resolve_vehicle_config_path(path_str, root=root)
+    base = (root or vehicle_config_root()).resolve()
     return resolved.relative_to(base).as_posix()
 
 
-def load_definition_file(path_str: str, *, root: Path | None = None) -> TelemetryDefinitionFile:
-    resolved = resolve_definition_path(path_str, root=root)
+def load_vehicle_config_file(path_str: str, *, root: Path | None = None) -> VehicleConfigurationFile:
+    resolved = resolve_vehicle_config_path(path_str, root=root)
     raw = resolved.read_text(encoding="utf-8")
     if resolved.suffix.lower() == ".json":
         payload = json.loads(raw)
     else:
         payload = yaml.safe_load(raw)
     if not isinstance(payload, dict):
-        raise ValueError("Definition file must contain an object at the top level")
-    return TelemetryDefinitionFile.model_validate(payload)
+        raise ValueError("Vehicle configuration file must contain an object at the top level")
+    return VehicleConfigurationFile.model_validate(payload)
 
 
 def channel_rate_hz(channel: TelemetryChannelDefinition) -> float:

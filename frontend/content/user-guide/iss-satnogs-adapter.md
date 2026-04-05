@@ -6,7 +6,7 @@ Use the SatNOGS adapter to ingest ISS AX.25/APRS telemetry from SatNOGS Network 
 
 ## 1. Create the ISS source
 
-Create a vehicle source that points at the committed ISS definition file:
+Create a vehicle source that points at the committed ISS vehicle configuration file:
 
 ```bash
 curl -X POST http://localhost:8000/telemetry/sources \
@@ -14,7 +14,7 @@ curl -X POST http://localhost:8000/telemetry/sources \
   -d '{
     "source_type": "vehicle",
     "name": "International Space Station",
-    "telemetry_definition_path": "vehicles/iss.yaml"
+    "vehicle_config_path": "vehicles/iss.yaml"
   }'
 ```
 
@@ -25,7 +25,7 @@ Save the returned `id`. That backend UUID is the canonical `source_id` for all a
 Edit `satnogs_adapter/config.example.yaml` or provide your own config file.
 
 - Set `platform.source_id` to the UUID returned by the backend.
-- Keep `vehicle.telemetry_definition_path` pointed at `vehicles/iss.yaml`.
+- Keep `vehicle.vehicle_config_path` pointed at `vehicles/iss.yaml`.
 - Set `SATNOGS_API_TOKEN` if your SatNOGS deployment requires authenticated observation access.
 
 `iss` is only the human-readable vehicle slug. The adapter publishes the backend UUID.

@@ -23,7 +23,7 @@ class BuiltInSourceSpec:
     name: str
     description: str
     source_type: str
-    telemetry_definition_path: str
+    vehicle_config_path: str
     base_url: str | None = None
 
 
@@ -33,14 +33,14 @@ BUILT_IN_SOURCES = (
         name="Aegon Relay",
         description="Baseline operator training vehicle",
         source_type="vehicle",
-        telemetry_definition_path="vehicles/aegon-relay.yaml",
+        vehicle_config_path="vehicles/aegon-relay.yaml",
     ),
     BuiltInSourceSpec(
         id=MOCK_VEHICLE_SOURCE_ID,
         name="Balerion Surveyor",
         description="CLI mock vehicle stream for source-aware validation",
         source_type="vehicle",
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
     ),
     BuiltInSourceSpec(
         id=DROGONSAT_SOURCE_ID,
@@ -48,7 +48,7 @@ BUILT_IN_SOURCES = (
         description="Agile tactical simulator with GPS LLA telemetry",
         source_type="simulator",
         base_url="http://simulator:8001",
-        telemetry_definition_path="simulators/drogonsat.yaml",
+        vehicle_config_path="simulators/drogonsat.yaml",
     ),
     BuiltInSourceSpec(
         id=RHAEGALSAT_SOURCE_ID,
@@ -56,6 +56,6 @@ BUILT_IN_SOURCES = (
         description="Heavy survey simulator with ECEF position telemetry",
         source_type="simulator",
         base_url="http://simulator2:8001",
-        telemetry_definition_path="simulators/rhaegalsat.json",
+        vehicle_config_path="simulators/rhaegalsat.json",
     ),
 )

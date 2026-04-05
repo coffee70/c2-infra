@@ -35,17 +35,17 @@ The **Overview** page shows ops events for the selected source directly under th
 1. Go to the **Sources** page.
 2. Click **Add source**.
 3. Choose **Simulator**.
-4. Enter a name, a **Telemetry definition path** (JSON or YAML under the server’s definitions catalog), and a **Base URL** — the URL the server uses to reach the simulator (e.g. `http://simulator:8001`).
+4. Enter a name, a **Vehicle configuration path** (JSON or YAML under the server’s definitions catalog), and a **Base URL** — the URL the server uses to reach the simulator (e.g. `http://simulator:8001`).
 5. Click **Create**.
 
-The simulator appears in the Simulators list. The backend seeds its expected channel catalog immediately from the definition file. Click **Manage** to open its control panel and start, pause, or stop it.
+The simulator appears in the Simulators list. The backend seeds its expected channel catalog immediately from the vehicle configuration file. Click **Manage** to open its control panel and start, pause, or stop it.
 
 ## Adding a Vehicle
 
 1. Go to the **Sources** page.
 2. Click **Add source**.
 3. Choose **Vehicle**.
-4. Enter a name and a **Telemetry definition path**.
+4. Enter a name and a **Vehicle configuration path**.
 5. Click **Create**.
 
 The backend seeds the source catalog from that definition so searches, watchlists, summaries, and alerts know which channels belong to that source before live ingest starts.

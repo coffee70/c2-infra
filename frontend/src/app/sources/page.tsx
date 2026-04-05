@@ -30,7 +30,7 @@ interface TelemetrySource {
   description?: string | null;
   source_type: string;
   base_url?: string | null;
-  telemetry_definition_path?: string;
+  vehicle_config_path?: string;
 }
 
 interface SimulatorStatus {
@@ -84,7 +84,7 @@ export default function SourcesPage() {
 
   async function handleWizardSubmit() {
     if (!wizardName.trim() || !wizardDefinitionPath.trim()) {
-      setWizardError("Name and telemetry definition path are required");
+      setWizardError("Name and vehicle configuration path are required");
       return;
     }
     if (wizardType === "simulator" && !wizardBaseUrl.trim()) {
@@ -98,7 +98,7 @@ export default function SourcesPage() {
         source_type: wizardType,
         name: wizardName.trim(),
         base_url: wizardType === "simulator" ? wizardBaseUrl.trim() : undefined,
-        telemetry_definition_path: wizardDefinitionPath.trim(),
+        vehicle_config_path: wizardDefinitionPath.trim(),
       });
       setWizardOpen(false);
     } catch (e) {
@@ -112,7 +112,7 @@ export default function SourcesPage() {
     setEditingSourceId(source.id);
     setEditName(source.name);
     setEditBaseUrl(source.base_url || "");
-    setEditDefinitionPath(source.telemetry_definition_path || "");
+    setEditDefinitionPath(source.vehicle_config_path || "");
     setEditError(null);
   }
 
@@ -126,7 +126,7 @@ export default function SourcesPage() {
         sourceId: editingSourceId,
         name: editName.trim(),
         base_url: editBaseUrl.trim() || undefined,
-        telemetry_definition_path: isSimulator ? undefined : editDefinitionPath.trim() || undefined,
+        vehicle_config_path: isSimulator ? undefined : editDefinitionPath.trim() || undefined,
       });
       setEditingSourceId(null);
     } catch (error) {
@@ -147,7 +147,12 @@ export default function SourcesPage() {
       <div className="mx-auto max-w-2xl space-y-8">
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Sources</h1>
-          <Button onClick={openWizard}>Add source</Button>
+          <div className="flex gap-2">
+            <Button variant="outline" asChild>
+              <Link href="/sources/configs">Vehicle Configurations</Link>
+            </Button>
+            <Button onClick={openWizard}>Add source</Button>
+          </div>
         </div>
 
         <Card>
@@ -208,7 +213,7 @@ export default function SourcesPage() {
                       </div>
                       {!isEditing ? (
                         <p className="text-muted-foreground font-mono text-xs">
-                          {s.telemetry_definition_path || "—"}
+                          {s.vehicle_config_path || "—"}
                         </p>
                       ) : (
                         <div className="space-y-2">
@@ -223,7 +228,7 @@ export default function SourcesPage() {
                               />
                             </div>
                             <div>
-                              <Label htmlFor={`edit-defpath-${s.id}`}>Definition path</Label>
+                              <Label htmlFor={`edit-defpath-${s.id}`}>Vehicle Configuration Path</Label>
                               <Input
                                 id={`edit-defpath-${s.id}`}
                                 value={editDefinitionPath}
@@ -310,7 +315,7 @@ export default function SourcesPage() {
                       {!isEditing ? (
                         <div className="text-muted-foreground space-y-1 font-mono text-xs">
                           <p>{s.base_url || "—"}</p>
-                          <p>{s.telemetry_definition_path || "—"}</p>
+                          <p>{s.vehicle_config_path || "—"}</p>
                         </div>
                       ) : (
                         <div className="space-y-2">
@@ -340,7 +345,7 @@ export default function SourcesPage() {
                       )}
                       {isEditing ? (
                         <p className="text-muted-foreground font-mono text-xs">
-                          Definition path is fixed by the simulator runtime: {s.telemetry_definition_path || "—"}
+                          Vehicle configuration path is fixed by the simulator runtime: {s.vehicle_config_path || "—"}
                         </p>
                       ) : null}
                     </li>
@@ -361,7 +366,7 @@ export default function SourcesPage() {
             <DialogDescription>
               {wizardStep === 1
                 ? "Choose the type of source you want to add. Vehicles connect to physical or external telemetry streams; simulators run synthetic data for testing."
-                : "Enter the source details. The telemetry definition path must resolve inside the backend definitions directory."}
+                : "Enter the source details. The vehicle configuration path must resolve inside the backend vehicle configuration directory."}
             </DialogDescription>
           </DialogHeader>
           {wizardStep === 1 ? (
@@ -380,7 +385,7 @@ export default function SourcesPage() {
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">Vehicle</p>
                   <p className="text-muted-foreground mt-0.5 text-sm">
-                    Register a physical spacecraft or external telemetry stream using a shared telemetry definition file.
+                    Register a physical spacecraft or external telemetry stream using a shared vehicle configuration file.
                   </p>
                 </div>
               </button>
@@ -398,7 +403,7 @@ export default function SourcesPage() {
                 <div className="min-w-0 flex-1">
                   <p className="font-medium">Simulator</p>
                   <p className="text-muted-foreground mt-0.5 text-sm">
-                    Add an in-app or remote simulator instance backed by a source-specific telemetry definition file.
+                    Add an in-app or remote simulator instance backed by a source-specific vehicle configuration file.
                   </p>
                 </div>
               </button>
@@ -416,7 +421,7 @@ export default function SourcesPage() {
                 />
               </div>
               <div>
-                <Label htmlFor="wizard-definition-path">Telemetry definition path</Label>
+                <Label htmlFor="wizard-definition-path">Vehicle Configuration Path</Label>
                 <Input
                   id="wizard-definition-path"
                   value={wizardDefinitionPath}

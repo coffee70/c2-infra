@@ -401,7 +401,7 @@ def test_validate_stream_batch_identities_rejects_mixed_stream_owners(monkeypatc
                 id=key,
                 name=key,
                 source_type="vehicle",
-                telemetry_definition_path=f"defs/{key}.yaml",
+                vehicle_config_path=f"defs/{key}.yaml",
             )
         return None
 

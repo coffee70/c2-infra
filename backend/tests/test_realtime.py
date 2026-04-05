@@ -237,7 +237,7 @@ def test_validate_stream_batch_identities_allows_reserved_source_id(
             id="vehicle-a",
             name="Vehicle A",
             source_type="vehicle",
-            telemetry_definition_path="defs/vehicle-a.yaml",
+            vehicle_config_path="defs/vehicle-a.yaml",
         )
         if model is TelemetrySource and key == "vehicle-a"
         else None

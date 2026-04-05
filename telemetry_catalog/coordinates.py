@@ -1,4 +1,4 @@
-"""Shared coordinate transforms for telemetry definition consumers."""
+"""Shared coordinate transforms for vehicle configuration consumers."""
 
 from __future__ import annotations
 

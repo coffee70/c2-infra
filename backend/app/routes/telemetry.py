@@ -302,7 +302,7 @@ def create_source_route(
             name=body.name,
             description=body.description,
             base_url=body.base_url,
-            telemetry_definition_path=body.telemetry_definition_path,
+            vehicle_config_path=body.vehicle_config_path,
         )
         audit_log("sources.create", source_id=result["id"], name=body.name)
         return result
@@ -327,7 +327,7 @@ def update_source_route(
             name=updates.get("name"),
             description=updates.get("description"),
             base_url=updates.get("base_url"),
-            telemetry_definition_path=updates.get("telemetry_definition_path"),
+            vehicle_config_path=updates.get("vehicle_config_path"),
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))

@@ -176,7 +176,7 @@ class TelemetrySource(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source_type: Mapped[str] = mapped_column(Text, nullable=False)  # vehicle | simulator
     base_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # for simulators
-    telemetry_definition_path: Mapped[str] = mapped_column(Text, nullable=False)
+    vehicle_config_path: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

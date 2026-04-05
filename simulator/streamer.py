@@ -65,13 +65,13 @@ class TelemetryStreamer:
         stream_id: str = "",
         packet_source: str | None = None,
         receiver_id: str | None = None,
-        telemetry_definition_path: str | None = None,
+        vehicle_config_path: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.ingest_url = f"{self.base_url}/telemetry/realtime/ingest"
         self.scenario_name = scenario
-        if telemetry_definition_path:
-            definition = load_definition(telemetry_definition_path)
+        if vehicle_config_path:
+            definition = load_definition(vehicle_config_path)
             self.telemetry_rows = [
                 (
                     channel.name,

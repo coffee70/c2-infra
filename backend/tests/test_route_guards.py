@@ -111,7 +111,7 @@ async def test_simulator_start_preserves_runtime_validation_errors(monkeypatch) 
     config.speed = 1.0
 
     mock_src = MagicMock()
-    mock_src.telemetry_definition_path = "simulators/drogonsat.yaml"
+    mock_src.vehicle_config_path = "simulators/drogonsat.yaml"
     monkeypatch.setattr(
         "app.routes.simulator._resolve_simulator_source",
         lambda _db, _source_id: mock_src,

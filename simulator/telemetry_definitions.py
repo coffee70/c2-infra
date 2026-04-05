@@ -1,4 +1,4 @@
-"""Telemetry definitions loaded from shared source definition files."""
+"""Vehicle configurations loaded from shared source vehicle configuration files."""
 
 from __future__ import annotations
 
@@ -6,17 +6,17 @@ import os
 
 from telemetry_catalog.definitions import (
     TelemetryChannelDefinition,
-    TelemetryDefinitionFile,
+    VehicleConfigurationFile,
     channel_rate_hz,
-    load_definition_file,
+    load_vehicle_config_file,
 )
 
 DEFAULT_DEFINITION_PATH = "simulators/drogonsat.yaml"
 
 
-def _load_runtime_definition() -> TelemetryDefinitionFile:
-    path = os.environ.get("TELEMETRY_DEFINITION_PATH", DEFAULT_DEFINITION_PATH)
-    return load_definition_file(path)
+def _load_runtime_definition() -> VehicleConfigurationFile:
+    path = os.environ.get("VEHICLE_CONFIG_PATH", DEFAULT_DEFINITION_PATH)
+    return load_vehicle_config_file(path)
 
 
 DEFINITION = _load_runtime_definition()
@@ -43,9 +43,9 @@ SCENARIOS = {
 POSITION_MAPPING = DEFINITION.position_mapping
 
 
-def load_definition(path: str | None = None) -> TelemetryDefinitionFile:
+def load_definition(path: str | None = None) -> VehicleConfigurationFile:
     if path:
-        return load_definition_file(path)
+        return load_vehicle_config_file(path)
     return DEFINITION
 
 

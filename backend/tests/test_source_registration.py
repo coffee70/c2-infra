@@ -14,6 +14,7 @@ from telemetry_catalog.builtins import MOCK_VEHICLE_SOURCE_ID
 from telemetry_catalog.builtins import BUILT_IN_SOURCES
 
 from app.services.realtime_service import _seed_metadata_for_source
+from app.services.realtime_service import _source_to_dict
 from app.services.realtime_service import create_discovered_channel_metadata
 from app.services.realtime_service import create_source
 from app.services.realtime_service import bootstrap_builtin_sources
@@ -22,6 +23,21 @@ from app.services.realtime_service import source_has_telemetry_history
 from app.services.realtime_service import update_source
 from app.models.telemetry import TelemetryChannelAlias
 from app.models.telemetry import TelemetryMetadata
+
+
+def test_source_api_payload_uses_only_vehicle_config_path() -> None:
+    source = MagicMock()
+    source.id = "source-1"
+    source.name = "ISS"
+    source.description = "Low Earth orbit"
+    source.source_type = "vehicle"
+    source.base_url = None
+    source.vehicle_config_path = "vehicles/iss.yaml"
+
+    payload = _source_to_dict(source)
+
+    assert payload["vehicle_config_path"] == "vehicles/iss.yaml"
+    assert "telemetry_definition_path" not in payload
 
 
 def test_create_source_flushes_before_seeding_metadata(monkeypatch) -> None:
@@ -66,7 +82,7 @@ def test_create_source_flushes_before_seeding_metadata(monkeypatch) -> None:
         embedding_provider=embedding_provider,
         source_type="vehicle",
         name="Test Vehicle",
-        telemetry_definition_path="vehicles/aegon-relay.yaml",
+        vehicle_config_path="vehicles/aegon-relay.yaml",
     )
 
     assert call_order == ["add", "flush", "seed", "commit", "refresh"]
@@ -82,7 +98,7 @@ def test_bootstrap_builtin_sources_preserves_existing_operator_edits(monkeypatch
     existing.description = "Operator override"
     existing.source_type = "simulator"
     existing.base_url = "http://custom-simulator:8010"
-    existing.telemetry_definition_path = "simulators/rhaegalsat.json"
+    existing.vehicle_config_path = "simulators/rhaegalsat.json"
     db.get.side_effect = lambda model, source_id: existing if source_id == DROGONSAT_SOURCE_ID else None
 
     seeded_calls: list[dict] = []
@@ -113,10 +129,10 @@ def test_bootstrap_builtin_sources_preserves_existing_operator_edits(monkeypatch
     assert existing.name == "Mission Drogon"
     assert existing.description == "Operator override"
     assert existing.base_url == "http://custom-simulator:8010"
-    assert existing.telemetry_definition_path == "simulators/rhaegalsat.json"
+    assert existing.vehicle_config_path == "simulators/rhaegalsat.json"
     assert any(
         call["source_id"] == DROGONSAT_SOURCE_ID
-        and call["telemetry_definition_path"] == "simulators/rhaegalsat.json"
+        and call["vehicle_config_path"] == "simulators/rhaegalsat.json"
         and call["refresh_embeddings"] is False
         and call["overwrite_position_mapping"] is False
         for call in seeded_calls
@@ -159,7 +175,7 @@ def test_bootstrap_builtin_sources_flushes_before_seeding_new_sources(monkeypatc
         "app.services.realtime_service._seed_metadata_for_source",
         fake_seed_metadata_for_source,
     )
-    built_in_rows = [MagicMock(id=DROGONSAT_SOURCE_ID, telemetry_definition_path="simulators/drogonsat.yaml")]
+    built_in_rows = [MagicMock(id=DROGONSAT_SOURCE_ID, vehicle_config_path="simulators/drogonsat.yaml")]
     db.execute.return_value = ScalarResult(built_in_rows)
 
     bootstrap_builtin_sources(
@@ -220,14 +236,14 @@ def test_seed_metadata_for_source_creates_channel_alias_rows(tmp_path, monkeypat
     embedding_provider = MagicMock()
     embedding_provider.embed.return_value = [0.1, 0.2, 0.3]
     monkeypatch.setattr(
-        "app.services.realtime_service.load_definition_file",
+        "app.services.realtime_service.load_vehicle_config_file",
         lambda _path: definition,
     )
 
     _seed_metadata_for_source(
         db,
         source_id="source-a",
-        telemetry_definition_path="ignored.yaml",
+        vehicle_config_path="ignored.yaml",
         embedding_provider=embedding_provider,
         refresh_embeddings=True,
     )
@@ -262,7 +278,7 @@ def test_bootstrap_builtin_sources_does_not_prune_existing_metadata(monkeypatch)
         fake_seed_metadata_for_source,
     )
     db.execute.return_value = ScalarResult(
-        [MagicMock(id=MOCK_VEHICLE_SOURCE_ID, telemetry_definition_path="vehicles/balerion-surveyor.json")]
+        [MagicMock(id=MOCK_VEHICLE_SOURCE_ID, vehicle_config_path="vehicles/balerion-surveyor.json")]
     )
 
     bootstrap_builtin_sources(
@@ -281,7 +297,7 @@ def test_bootstrap_builtin_sources_preserves_existing_position_mappings(monkeypa
     db = MagicMock()
     existing_source = MagicMock()
     existing_source.id = DROGONSAT_SOURCE_ID
-    existing_source.telemetry_definition_path = "simulators/drogonsat.yaml"
+    existing_source.vehicle_config_path = "simulators/drogonsat.yaml"
     db.get.side_effect = lambda model, source_id: existing_source if source_id == DROGONSAT_SOURCE_ID else None
     seed_calls: list[dict] = []
 
@@ -312,7 +328,7 @@ def test_bootstrap_builtin_sources_seeds_existing_custom_sources(monkeypatch) ->
     db = MagicMock()
     custom = MagicMock()
     custom.id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    custom.telemetry_definition_path = "vehicles/aegon-relay.yaml"
+    custom.vehicle_config_path = "vehicles/aegon-relay.yaml"
     db.get.return_value = None
     seed_calls: list[dict] = []
 
@@ -347,10 +363,10 @@ def test_bootstrap_builtin_sources_returns_repaired_sources_for_embedding_backfi
     db = MagicMock()
     built_in = MagicMock()
     built_in.id = DROGONSAT_SOURCE_ID
-    built_in.telemetry_definition_path = "simulators/drogonsat.yaml"
+    built_in.vehicle_config_path = "simulators/drogonsat.yaml"
     custom = MagicMock()
     custom.id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    custom.telemetry_definition_path = "vehicles/aegon-relay.yaml"
+    custom.vehicle_config_path = "vehicles/aegon-relay.yaml"
     db.get.side_effect = lambda model, source_id: built_in if source_id == DROGONSAT_SOURCE_ID else None
 
     class ScalarResult:
@@ -382,7 +398,7 @@ def test_refresh_source_embeddings_backfills_real_embeddings(monkeypatch) -> Non
     db = MagicMock()
     source = MagicMock()
     source.id = DROGONSAT_SOURCE_ID
-    source.telemetry_definition_path = "simulators/drogonsat.yaml"
+    source.vehicle_config_path = "simulators/drogonsat.yaml"
     provider = MagicMock()
     seed_calls: list[dict] = []
 
@@ -402,7 +418,7 @@ def test_refresh_source_embeddings_backfills_real_embeddings(monkeypatch) -> Non
     assert seed_calls == [
         {
             "source_id": DROGONSAT_SOURCE_ID,
-            "telemetry_definition_path": "simulators/drogonsat.yaml",
+            "vehicle_config_path": "simulators/drogonsat.yaml",
             "embedding_provider": provider,
             "refresh_embeddings": True,
             "preserve_existing_embeddings": True,
@@ -418,7 +434,7 @@ def test_bootstrap_builtin_sources_reconciles_duplicates_before_seeding(monkeypa
     db = MagicMock()
     source = MagicMock()
     source.id = DROGONSAT_SOURCE_ID
-    source.telemetry_definition_path = "simulators/drogonsat.yaml"
+    source.vehicle_config_path = "simulators/drogonsat.yaml"
     call_order: list[str] = []
 
     class ScalarResult:
@@ -460,11 +476,11 @@ def test_reconcile_builtin_source_duplicates_ignores_custom_sources(monkeypatch)
     canonical.description = "Agile tactical simulator with GPS LLA telemetry"
     canonical.base_url = "http://simulator:8001"
     canonical.source_type = "simulator"
-    canonical.telemetry_definition_path = "simulators/drogonsat.yaml"
+    canonical.vehicle_config_path = "simulators/drogonsat.yaml"
     custom = MagicMock()
     custom.id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     custom.source_type = "simulator"
-    custom.telemetry_definition_path = "simulators/drogonsat.yaml"
+    custom.vehicle_config_path = "simulators/drogonsat.yaml"
     custom.name = "Custom Drogon"
     custom.description = "Independent simulator"
     custom.base_url = "http://remote-sim:9000"
@@ -522,15 +538,15 @@ def test_merge_builtin_duplicate_source_moves_channel_aliases() -> None:
 
 
 def test_bootstrap_builtin_sources_skips_invalid_catalogs_without_aborting(monkeypatch) -> None:
-    """One stale definition path should not prevent startup repair for other sources."""
+    """One stale vehicle configuration path should not prevent startup repair for other sources."""
 
     db = MagicMock()
     bad = MagicMock()
     bad.id = "bad-source"
-    bad.telemetry_definition_path = "vehicles/missing.yaml"
+    bad.vehicle_config_path = "vehicles/missing.yaml"
     good = MagicMock()
     good.id = DROGONSAT_SOURCE_ID
-    good.telemetry_definition_path = "simulators/drogonsat.yaml"
+    good.vehicle_config_path = "simulators/drogonsat.yaml"
     seed_calls: list[str] = []
 
     class ScalarResult:
@@ -607,14 +623,14 @@ def test_seed_metadata_prunes_watchlist_entries_for_removed_channels(monkeypatch
     db.execute.side_effect = fake_execute
 
     monkeypatch.setattr(
-        "app.services.realtime_service.load_definition_file",
+        "app.services.realtime_service.load_vehicle_config_file",
         lambda _path: definition,
     )
 
     _seed_metadata_for_source(
         db,
         source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
         embedding_provider=embedding_provider,
         prune_missing=True,
     )
@@ -670,14 +686,14 @@ def test_seed_metadata_does_not_prune_discovered_channels(monkeypatch) -> None:
     db.execute.side_effect = fake_execute
 
     monkeypatch.setattr(
-        "app.services.realtime_service.load_definition_file",
+        "app.services.realtime_service.load_vehicle_config_file",
         lambda _path: definition,
     )
 
     _seed_metadata_for_source(
         db,
         source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
         embedding_provider=embedding_provider,
         prune_missing=True,
     )
@@ -736,14 +752,14 @@ def test_seed_metadata_prunes_removed_aliases_even_without_metadata_pruning(monk
     db.execute.side_effect = fake_execute
 
     monkeypatch.setattr(
-        "app.services.realtime_service.load_definition_file",
+        "app.services.realtime_service.load_vehicle_config_file",
         lambda _path: definition,
     )
 
     _seed_metadata_for_source(
         db,
         source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
         embedding_provider=embedding_provider,
         prune_missing=False,
     )
@@ -807,14 +823,14 @@ def test_seed_metadata_merges_discovered_alias_conflict_into_canonical_channel(m
     db.execute.side_effect = fake_execute
 
     monkeypatch.setattr(
-        "app.services.realtime_service.load_definition_file",
+        "app.services.realtime_service.load_vehicle_config_file",
         lambda _path: definition,
     )
 
     _seed_metadata_for_source(
         db,
         source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
         embedding_provider=embedding_provider,
         prune_missing=False,
     )
@@ -902,14 +918,14 @@ def test_seed_metadata_allows_renamed_channel_to_keep_old_name_as_alias_when_pru
     db.add.side_effect = added.append
 
     monkeypatch.setattr(
-        "app.services.realtime_service.load_definition_file",
+        "app.services.realtime_service.load_vehicle_config_file",
         lambda _path: definition,
     )
 
     _seed_metadata_for_source(
         db,
         source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
         embedding_provider=embedding_provider,
         prune_missing=True,
     )
@@ -986,14 +1002,14 @@ def test_seed_metadata_does_not_prune_watchlist_for_preserved_alias_name(monkeyp
     db.execute.side_effect = fake_execute
 
     monkeypatch.setattr(
-        "app.services.realtime_service.load_definition_file",
+        "app.services.realtime_service.load_vehicle_config_file",
         lambda _path: definition,
     )
 
     _seed_metadata_for_source(
         db,
         source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
         embedding_provider=embedding_provider,
         prune_missing=True,
     )
@@ -1053,14 +1069,14 @@ def test_seed_metadata_promotes_discovered_channel_when_definition_catches_up(mo
     db.execute.side_effect = fake_execute
 
     monkeypatch.setattr(
-        "app.services.realtime_service.load_definition_file",
+        "app.services.realtime_service.load_vehicle_config_file",
         lambda _path: definition,
     )
 
     _seed_metadata_for_source(
         db,
         source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
         embedding_provider=None,
         refresh_embeddings=False,
     )
@@ -1116,14 +1132,14 @@ def test_seed_metadata_flags_promoted_discovered_channel_without_embedding_for_b
     db.execute.side_effect = fake_execute
 
     monkeypatch.setattr(
-        "app.services.realtime_service.load_definition_file",
+        "app.services.realtime_service.load_vehicle_config_file",
         lambda _path: definition,
     )
 
     needs_backfill = _seed_metadata_for_source(
         db,
         source_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
         refresh_embeddings=False,
         overwrite_position_mapping=False,
     )
@@ -1135,7 +1151,7 @@ def test_bootstrap_builtin_sources_backfills_embeddings_for_promoted_channels(mo
     db = MagicMock()
     source = MagicMock()
     source.id = DROGONSAT_SOURCE_ID
-    source.telemetry_definition_path = "simulators/drogonsat.yaml"
+    source.vehicle_config_path = "simulators/drogonsat.yaml"
     db.get.side_effect = lambda model, source_id: source if source_id == DROGONSAT_SOURCE_ID else None
 
     class ScalarResult:
@@ -1178,7 +1194,7 @@ def test_bootstrap_builtin_sources_ignores_embedding_provider_init_failures(monk
     db = MagicMock()
     source = MagicMock()
     source.id = DROGONSAT_SOURCE_ID
-    source.telemetry_definition_path = "simulators/drogonsat.yaml"
+    source.vehicle_config_path = "simulators/drogonsat.yaml"
     db.get.side_effect = lambda model, source_id: source if source_id == DROGONSAT_SOURCE_ID else None
 
     class ScalarResult:
@@ -1223,7 +1239,7 @@ def test_bootstrap_builtin_sources_ignores_backfill_failures_per_source(monkeypa
     db = MagicMock()
     source = MagicMock()
     source.id = DROGONSAT_SOURCE_ID
-    source.telemetry_definition_path = "simulators/drogonsat.yaml"
+    source.vehicle_config_path = "simulators/drogonsat.yaml"
     db.get.side_effect = lambda model, source_id: source if source_id == DROGONSAT_SOURCE_ID else None
 
     class ScalarResult:
@@ -1270,7 +1286,7 @@ def test_update_source_prunes_missing_channels_when_vehicle_definition_changes(m
     embedding_provider = MagicMock()
     existing = MagicMock()
     existing.id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    existing.telemetry_definition_path = "vehicles/aegon-relay.yaml"
+    existing.vehicle_config_path = "vehicles/aegon-relay.yaml"
     existing.source_type = "vehicle"
     db.get.return_value = existing
 
@@ -1293,16 +1309,16 @@ def test_update_source_prunes_missing_channels_when_vehicle_definition_changes(m
         db,
         embedding_provider=embedding_provider,
         source_id=existing.id,
-        telemetry_definition_path="vehicles/balerion-surveyor.json",
+        vehicle_config_path="vehicles/balerion-surveyor.json",
     )
 
-    assert existing.telemetry_definition_path == "vehicles/balerion-surveyor.json"
+    assert existing.vehicle_config_path == "vehicles/balerion-surveyor.json"
     assert seed_calls == [
         (
             (db,),
             {
                 "source_id": existing.id,
-                "telemetry_definition_path": "vehicles/balerion-surveyor.json",
+                "vehicle_config_path": "vehicles/balerion-surveyor.json",
                 "embedding_provider": embedding_provider,
                 "prune_missing": True,
             },
@@ -1378,7 +1394,7 @@ def test_update_source_rejects_simulator_definition_path_changes() -> None:
     embedding_provider = MagicMock()
     existing = MagicMock()
     existing.id = "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
-    existing.telemetry_definition_path = "simulators/drogonsat.yaml"
+    existing.vehicle_config_path = "simulators/drogonsat.yaml"
     existing.source_type = "simulator"
     db.get.return_value = existing
 
@@ -1387,7 +1403,7 @@ def test_update_source_rejects_simulator_definition_path_changes() -> None:
             db,
             embedding_provider=embedding_provider,
             source_id=existing.id,
-            telemetry_definition_path="simulators/rhaegalsat.json",
+            vehicle_config_path="simulators/rhaegalsat.json",
         )
 
-    assert "Cannot change telemetry_definition_path for simulator sources" in str(exc_info.value)
+    assert "Cannot change vehicle_config_path for simulator sources" in str(exc_info.value)

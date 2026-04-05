@@ -499,7 +499,7 @@ class SourceCreate(BaseModel):
     name: str
     description: Optional[str] = None
     base_url: Optional[str] = None  # required for simulator
-    telemetry_definition_path: str
+    vehicle_config_path: str
 
 
 class SourceUpdate(BaseModel):
@@ -508,7 +508,79 @@ class SourceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     base_url: Optional[str] = None  # for simulators
-    telemetry_definition_path: Optional[str] = None
+    vehicle_config_path: Optional[str] = None
+
+
+class VehicleConfigValidationError(BaseModel):
+    """Structured validation error for vehicle configuration APIs."""
+
+    loc: list[str]
+    message: str
+    type: str
+
+
+class VehicleConfigListItem(BaseModel):
+    """Single item for the vehicle configuration list endpoint."""
+
+    path: str
+    filename: str
+    name: Optional[str] = None
+    category: str
+    format: str
+    modified_at: Optional[str] = None
+
+
+class VehicleConfigParsedSummary(BaseModel):
+    """Lightweight parsed summary for editor and list UIs."""
+
+    version: int = 1
+    name: Optional[str] = None
+    channel_count: int = 0
+    scenario_names: list[str] = []
+    has_position_mapping: bool = False
+    has_ingestion: bool = False
+
+
+class VehicleConfigFetchResponse(BaseModel):
+    """Response for loading a single vehicle configuration file."""
+
+    path: str
+    content: str
+    format: str
+    parsed: Optional[VehicleConfigParsedSummary] = None
+    validation_errors: list[VehicleConfigValidationError] = Field(default_factory=list)
+
+
+class VehicleConfigValidationRequest(BaseModel):
+    """Request body for POST /vehicle-configs/validate."""
+
+    content: str
+    path: Optional[str] = None
+    filename: Optional[str] = None
+    format: Optional[str] = None
+
+
+class VehicleConfigValidationResponse(BaseModel):
+    """Validation response for vehicle configuration content."""
+
+    valid: bool
+    parsed: Optional[VehicleConfigParsedSummary] = None
+    errors: list[VehicleConfigValidationError] = Field(default_factory=list)
+
+
+class VehicleConfigCreateRequest(BaseModel):
+    """Create a new vehicle configuration file on disk."""
+
+    path: str
+    content: str
+
+
+class VehicleConfigSaveResponse(BaseModel):
+    """Response for create/update vehicle configuration writes."""
+
+    path: str
+    parsed: VehicleConfigParsedSummary
+    saved: bool = True
 
 
 # --- Position mapping and samples ---

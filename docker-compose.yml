@@ -54,7 +54,7 @@ services:
       - "8001:8001"
     environment:
       BACKEND_URL: http://backend:8000
-      TELEMETRY_DEFINITION_PATH: simulators/drogonsat.yaml
+      VEHICLE_CONFIG_PATH: simulators/drogonsat.yaml
     depends_on:
       - backend
 
@@ -67,7 +67,7 @@ services:
       - "8002:8001"
     environment:
       BACKEND_URL: http://backend:8000
-      TELEMETRY_DEFINITION_PATH: simulators/rhaegalsat.json
+      VEHICLE_CONFIG_PATH: simulators/rhaegalsat.json
     depends_on:
       - backend
 

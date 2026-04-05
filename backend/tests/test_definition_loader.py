@@ -1,4 +1,4 @@
-"""Tests for shared telemetry definition loading."""
+"""Tests for shared vehicle configuration loading."""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ from pathlib import Path
 import pytest
 
 from telemetry_catalog.definitions import (
-    canonical_definition_path,
-    load_definition_file,
+    canonical_vehicle_config_path,
+    load_vehicle_config_file,
     resolve_source_id_alias,
 )
 
 
 def test_load_builtin_yaml_definition() -> None:
-    definition = load_definition_file("simulators/drogonsat.yaml")
+    definition = load_vehicle_config_file("simulators/drogonsat.yaml")
 
     assert definition.name == "DrogonSat"
     assert definition.position_mapping is not None
@@ -23,7 +23,7 @@ def test_load_builtin_yaml_definition() -> None:
 
 
 def test_load_builtin_json_definition() -> None:
-    definition = load_definition_file("simulators/rhaegalsat.json")
+    definition = load_vehicle_config_file("simulators/rhaegalsat.json")
 
     assert definition.name == "RhaegalSat"
     assert definition.position_mapping is not None
@@ -51,7 +51,7 @@ def test_load_definition_with_channel_aliases(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    definition = load_definition_file(str(path), root=tmp_path)
+    definition = load_vehicle_config_file(str(path), root=tmp_path)
 
     assert definition.channels[0].aliases == ["BAT_V", "BATTERY_VOLT", "VBAT"]
 
@@ -77,7 +77,7 @@ def test_load_definition_with_ingestion_mappings(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    definition = load_definition_file(str(path), root=tmp_path)
+    definition = load_vehicle_config_file(str(path), root=tmp_path)
 
     assert definition.ingestion is not None
     assert definition.ingestion.stable_field_mappings == {"latitude": "GPS_LAT"}
@@ -109,18 +109,18 @@ def test_load_definition_rejects_alias_colliding_with_other_canonical_name(tmp_p
     )
 
     with pytest.raises(ValueError, match="collides with canonical name"):
-        load_definition_file(str(path), root=tmp_path)
+        load_vehicle_config_file(str(path), root=tmp_path)
 
 
-def test_canonical_definition_path_rejects_traversal(tmp_path: Path) -> None:
+def test_canonical_vehicle_config_path_rejects_traversal(tmp_path: Path) -> None:
     root = tmp_path / "defs"
     root.mkdir()
     (root / "ok.yaml").write_text("version: 1\nchannels: []\n", encoding="utf-8")
 
-    assert canonical_definition_path("ok.yaml", root=root) == "ok.yaml"
+    assert canonical_vehicle_config_path("ok.yaml", root=root) == "ok.yaml"
 
     with pytest.raises(ValueError):
-        canonical_definition_path("../outside.yaml", root=root)
+        canonical_vehicle_config_path("../outside.yaml", root=root)
 
 
 def test_resolve_source_id_alias_maps_legacy_ids() -> None:

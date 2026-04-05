@@ -54,7 +54,7 @@ class StartConfig(BaseModel):
     jitter: float = Field(default=0.1, ge=0, le=1, description="Inter-sample jitter")
     vehicle_id: str = Field(..., description="Vehicle ID for ingest (must be simulator)")
     base_url: str | None = Field(default=None, description="Backend ingest URL")
-    telemetry_definition_path: str | None = Field(
+    vehicle_config_path: str | None = Field(
         default=None, description="Override catalog file for simulator runtime"
     )
     packet_source: str | None = Field(default="simulator-link", description="Packet origin identifier")
@@ -213,8 +213,8 @@ async def simulator_start(
     try:
         body = config.model_dump(exclude_none=True)
         body["vehicle_id"] = resolved_source_id
-        if src.telemetry_definition_path:
-            body["telemetry_definition_path"] = src.telemetry_definition_path
+        if src.vehicle_config_path:
+            body["vehicle_config_path"] = src.vehicle_config_path
         result = await _proxy_post(base_url, "/start", body)
         stream_id = result.get("stream_id")
         try:

@@ -100,8 +100,8 @@ The repo includes a compose-managed `satnogs-adapter` service for ISS AX.25/APRS
 
 Operational sequence:
 
-1. Add or confirm the ISS definition file at `telemetry-definitions/vehicles/iss.yaml`.
-2. Create the ISS source through `POST /telemetry/sources` with `source_type="vehicle"` and `telemetry_definition_path="vehicles/iss.yaml"`.
+1. Add or confirm the ISS vehicle configuration file at `vehicle-configurations/vehicles/iss.yaml`.
+2. Create the ISS source through `POST /telemetry/sources` with `source_type="vehicle"` and `vehicle_config_path="vehicles/iss.yaml"`.
 3. Copy the returned backend UUID into `satnogs_adapter/config.example.yaml` as `platform.source_id` or provide your own config file.
 4. Start the adapter with `docker compose up -d satnogs-adapter`.
 

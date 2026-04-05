@@ -4,7 +4,7 @@ WORKDIR /app/simulator
 
 COPY simulator /app/simulator
 COPY telemetry_catalog /app/telemetry_catalog
-COPY telemetry-definitions /app/telemetry-definitions
+COPY vehicle-configurations /app/vehicle-configurations
 
 RUN pip install --no-cache-dir -r /app/simulator/requirements.txt 2>/dev/null || \
     (echo "fastapi>=0.100.0" > /tmp/req.txt && \
@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r /app/simulator/requirements.txt 2>/dev/null ||
 
 ENV BACKEND_URL=http://backend:8000
 ENV PYTHONPATH=/app:/app/simulator
-ENV TELEMETRY_DEFINITIONS_ROOT=/app/telemetry-definitions
+ENV VEHICLE_CONFIG_ROOT=/app/vehicle-configurations
 
 EXPOSE 8001
 

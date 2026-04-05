@@ -78,7 +78,7 @@ To see a simulator’s position and trail on the globe:
 
 1. **Generate position telemetry** — On the [Sources](/sources) page, add a simulator (if needed), click **Manage**, then **Start**. The simulator emits position channels (e.g. `GPS_LAT`, `GPS_LON`, `GPS_ALT`) along with other telemetry.
 2. **Open Planning** — Go to the [Planning](/planning) tab. In the Earth view card, open **Show on globe** and select the simulator (and any other sources you want).
-3. **Confirm the mapping** — Built-in and newly registered sources seed their position mapping from the telemetry definition file. In **Position mapping**, verify the frame and channel names if you want operator confirmation or an override. `DrogonSat` uses GPS/LLA channels; `RhaegalSat` uses ECEF XYZ channels.
+3. **Confirm the mapping** — Built-in and newly registered sources seed their position mapping from the vehicle configuration file. In **Position mapping**, verify the frame and channel names if you want operator confirmation or an override. `DrogonSat` uses GPS/LLA channels; `RhaegalSat` uses ECEF XYZ channels.
 4. Planning resolves the simulator source to its current stream automatically. The globe then shows the simulator’s current position (point and label), a recent trail (polyline), and a per-source feed badge (`Live`, `Degraded`, or `No data`) on the selected source row as telemetry is received for that stream.
 5. Use **Nominal** or **Orbit nominal** when you want a stable realistic path on the globe. Use **Orbit decay**, **Orbit highly elliptical**, **Orbit suborbital**, or **Orbit escape** only when you intentionally want the orbit-analysis badges and alerting to exercise those cases.
 

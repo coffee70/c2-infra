@@ -9,7 +9,7 @@ vehicle:
   allowed_source_callsigns:
     - "NA1SS"
     - "RS0ISS"
-  telemetry_definition_path: "vehicles/iss.yaml"
+  vehicle_config_path: "vehicles/iss.yaml"
 
 satnogs_network:
   base_url: "https://network.satnogs.org"
