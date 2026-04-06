@@ -6,6 +6,7 @@ const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
 export interface ApiError extends Error {
   status?: number;
   detail?: string;
+  errors?: unknown[];
 }
 
 function getApiBases(useFallback = false): string[] {
@@ -21,14 +22,33 @@ function isIdempotentMethod(method: string | undefined): boolean {
 async function parseError(response: Response): Promise<ApiError> {
   let message = response.statusText || `HTTP ${response.status}`;
   let detail: string | undefined;
+  let errors: unknown[] | undefined;
 
   try {
     const text = await response.text();
     if (text) {
       try {
-        const json = JSON.parse(text) as { detail?: string; message?: string };
-        detail = typeof json.detail === "string" ? json.detail : undefined;
-        message = detail || (typeof json.message === "string" ? json.message : message);
+        const json = JSON.parse(text) as {
+          detail?: string | { message?: string; errors?: unknown[] };
+          message?: string;
+          errors?: unknown[];
+        };
+
+        if (typeof json.detail === "string") {
+          detail = json.detail;
+          message = detail || message;
+        } else if (json.detail && typeof json.detail === "object") {
+          detail = typeof json.detail.message === "string" ? json.detail.message : detail;
+          errors = Array.isArray(json.detail.errors) ? json.detail.errors : errors;
+          message = detail || message;
+        }
+
+        if (typeof json.message === "string" && !detail) {
+          message = json.message;
+        }
+        if (Array.isArray(json.errors) && !errors) {
+          errors = json.errors;
+        }
       } catch {
         detail = text;
         message = text;
@@ -39,6 +59,7 @@ async function parseError(response: Response): Promise<ApiError> {
   const error = new Error(message) as ApiError;
   error.status = response.status;
   error.detail = detail;
+  error.errors = errors;
   return error;
 }
 
@@ -81,4 +102,10 @@ export async function fetchVoid(
 export function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
   return fallback;
+}
+
+export function getErrorErrors<T = unknown>(error: unknown): T[] {
+  if (!error || typeof error !== "object" || !("errors" in error)) return [];
+  const errors = (error as { errors?: unknown[] }).errors;
+  return Array.isArray(errors) ? (errors as T[]) : [];
 }

@@ -9,8 +9,9 @@ By default, live Overview and watchlist subscriptions stay **source-scoped**: if
 ## Option A: In-app Simulator
 
 1. Go to the **Sources** page (nav link). The page lists Vehicles and Simulators. Add a simulator with **Add source** → choose **Simulator** → enter a name, a vehicle configuration path (for example `simulators/drogonsat.yaml`), and a Base URL (for example `http://simulator:8001`). The server uses the vehicle configuration file to seed the expected channel catalog and uses the Base URL to reach the simulator.
-2. Click **Manage** on a simulator to open its control panel on a dedicated page. The panel shows a connection pill (green when reachable, red when disconnected) and runtime state (Idle, Running, Paused) with elapsed time.
-3. Choose a scenario:
+2. Use **Vehicle Configurations** from the Sources page when you need to inspect or edit the backing YAML/JSON files directly. The page now opens as a full workspace: an explorer on the left mirrors the folder structure under `VEHICLE_CONFIGURATION_PATH`, the editor fills the right side, and the divider can be dragged wider or narrower.
+3. Click **Manage** on a simulator to open its control panel on a dedicated page. The panel shows a connection pill (green when reachable, red when disconnected) and runtime state (Idle, Running, Paused) with elapsed time.
+4. Choose a scenario:
    - **Nominal** — normal operation
    - **Power sag** — voltage anomalies
    - **Thermal runaway** — temperature excursions
@@ -18,8 +19,8 @@ By default, live Overview and watchlist subscriptions stay **source-scoped**: if
    - **Safe mode** — vehicle enters safe mode
    - **Orbit nominal** — smooth physically plausible orbit for globe testing
    - **Orbit decay / highly elliptical / suborbital / escape** — explicit orbit-analysis test presets
-4. Adjust duration, speed, dropout, and jitter if desired.
-5. Click **Start**.
+5. Adjust duration, speed, dropout, and jitter if desired.
+6. Click **Start**.
 
 The simulator posts to the ingest API; the Overview will show live updates and the **Live** badge when connected. Position mapping is now seeded from the vehicle configuration file, so built-in simulators are ready for the Planning globe without a separate mapping step. `DrogonSat` emits GPS/LLA position channels, while `RhaegalSat` emits ECEF XYZ channels. Nominal orbit scenarios keep motion smooth by default, while orbit-analysis edge cases come from the explicit orbit presets—see [Monitoring the Overview](/docs/monitoring-overview#workflow-simulator-on-the-planning-globe).
 

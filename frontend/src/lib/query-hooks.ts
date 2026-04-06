@@ -391,6 +391,7 @@ export function useVehicleConfigQuery(path: string, enabled = true) {
   return useQuery<VehicleConfigDocument>({
     queryKey: queryKeys.vehicleConfig(path),
     enabled: enabled && path.trim().length > 0,
+    placeholderData: (previousData) => previousData,
     queryFn: async ({ signal }) =>
       fetchJson<VehicleConfigDocument>(`/vehicle-configs/${encodePathSegments(path)}`, {
         signal,

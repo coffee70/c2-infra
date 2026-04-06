@@ -206,6 +206,20 @@ def _serialize_vehicle_config(parsed: VehicleConfigurationFile, fmt: str) -> str
     )
 
 
+def _normalize_line_endings(content: str) -> str:
+    return content.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _serialize_vehicle_config_for_save(
+    parsed: VehicleConfigurationFile,
+    fmt: str,
+    raw_content: str,
+) -> str:
+    if fmt == "yaml":
+        return _normalize_line_endings(raw_content)
+    return _serialize_vehicle_config(parsed, fmt)
+
+
 def list_vehicle_configs() -> list[VehicleConfigListItem]:
     root = vehicle_config_root()
     items: list[VehicleConfigListItem] = []
@@ -256,7 +270,7 @@ def create_vehicle_config(path: str, content: str) -> VehicleConfigSaveResponse:
     if resolved.exists():
         raise VehicleConfigServiceError("Vehicle configuration file already exists", status_code=409)
     parsed = parse_vehicle_config_content(content, path=canonical_path)
-    normalized = _serialize_vehicle_config(parsed.parsed, parsed.format)
+    normalized = _serialize_vehicle_config_for_save(parsed.parsed, parsed.format, content)
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(normalized, encoding="utf-8")
     return VehicleConfigSaveResponse(path=canonical_path, parsed=_parsed_summary(parsed.parsed), saved=True)
@@ -265,6 +279,6 @@ def create_vehicle_config(path: str, content: str) -> VehicleConfigSaveResponse:
 def update_vehicle_config(path: str, content: str) -> VehicleConfigSaveResponse:
     resolved, canonical_path = _resolve_relative_path(path, must_exist=True)
     parsed = parse_vehicle_config_content(content, path=canonical_path)
-    normalized = _serialize_vehicle_config(parsed.parsed, parsed.format)
+    normalized = _serialize_vehicle_config_for_save(parsed.parsed, parsed.format, content)
     resolved.write_text(normalized, encoding="utf-8")
     return VehicleConfigSaveResponse(path=canonical_path, parsed=_parsed_summary(parsed.parsed), saved=True)

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Vehicle configuration workspace layout** — The Vehicle Configurations page now uses a full-screen split workspace instead of a centered card layout. A VS Code-style explorer on the left derives folders from `VEHICLE_CONFIGURATION_PATH`, the editor fills the right pane, the divider is resizable, and the path/actions/summary controls now live in a compact toolbar above the editor.
 - **Runtime identity contract cleanup** — Runtime telemetry APIs now use `source_id + stream_id` consistently across ingest, telemetry, realtime, and ops. `run` / `run_id` compatibility routes and wrappers were removed, explicit `stream_id` is authoritative at route boundaries, and the frontend now carries `stream_id` instead of `run_id` in telemetry detail links and queries.
 - **Schema and migration reset** — The SQLAlchemy runtime models now expose canonical `source_id` and `stream_id` fields directly without compatibility synonyms, and Alembic history was collapsed to one baseline migration for clean rebuilds.
 - **Explicit vehicle and stream identity** — Realtime ingest and simulator runtime now distinguish logical `vehicle_id` from per-session `stream_id`, with first-class packet-path metadata for `packet_source` and `receiver_id`. The backend now tracks active telemetry streams explicitly instead of inferring them from overloaded `source_id-run` strings.

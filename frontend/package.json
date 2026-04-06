@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "@tanstack/react-query": "^5.90.21",
     "cesium": "^1.139.1",
     "class-variance-authority": "^0.7.1",
@@ -22,6 +23,7 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
+    "monaco-editor": "^0.54.0",
     "recharts": "^3.7.0",
     "remark-gfm": "^4.0.0",
     "resium": "^1.19.4",

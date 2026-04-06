@@ -25,6 +25,25 @@ def _sample_yaml(name: str = "ISS") -> str:
     )
 
 
+def _sample_yaml_with_comments(name: str = "ISS") -> str:
+    return "\n".join(
+        [
+            "# Operator note",
+            "version: 1",
+            f"name: {name}",
+            "channels:",
+            "  # Primary latitude feed",
+            "  - name: GPS_LAT",
+            '    units: "deg"',
+            '    description: "Latitude"',
+            '    subsystem: "nav"',
+            "    mean: 0.0",
+            "    std_dev: 1.0",
+            "",
+        ]
+    )
+
+
 def _client() -> TestClient:
     app = FastAPI()
     app.include_router(router, prefix="/vehicle-configs")
@@ -79,27 +98,41 @@ def test_create_vehicle_config_route_saves_file(tmp_path: Path, monkeypatch) -> 
 
     response = _client().post(
         "/vehicle-configs",
-        json={"path": "vehicles/new.yaml", "content": _sample_yaml("Created")},
+        json={"path": "vehicles/new.yaml", "content": _sample_yaml_with_comments("Created")},
     )
 
     assert response.status_code == 200
     assert (root / "vehicles" / "new.yaml").exists()
     assert response.json()["parsed"]["name"] == "Created"
+    saved = (root / "vehicles" / "new.yaml").read_text(encoding="utf-8")
+    assert "# Operator note" in saved
+    assert "# Primary latitude feed" in saved
 
 
 def test_update_vehicle_config_route_updates_existing_file(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "vehicle-configurations"
     (root / "vehicles").mkdir(parents=True)
-    (root / "vehicles" / "iss.yaml").write_text(_sample_yaml("Old"), encoding="utf-8")
+    target = root / "vehicles" / "iss.yaml"
+    target.write_text(_sample_yaml_with_comments("Old"), encoding="utf-8")
     monkeypatch.setenv("VEHICLE_CONFIG_ROOT", str(root))
 
     response = _client().put(
         "/vehicle-configs/vehicles/iss.yaml",
-        json={"path": "vehicles/iss.yaml", "content": _sample_yaml("Updated")},
+        json={
+            "path": "vehicles/iss.yaml",
+            "content": _sample_yaml_with_comments("Updated").replace(
+                '    description: "Latitude"',
+                '    description: "Latitude telemetry"',
+            ),
+        },
     )
 
     assert response.status_code == 200
     assert response.json()["parsed"]["name"] == "Updated"
+    saved = target.read_text(encoding="utf-8")
+    assert "# Operator note" in saved
+    assert "# Primary latitude feed" in saved
+    assert 'description: "Latitude telemetry"' in saved
 
 
 def test_vehicle_config_route_rejects_traversal(tmp_path: Path, monkeypatch) -> None:
