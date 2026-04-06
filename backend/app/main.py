@@ -34,6 +34,7 @@ async def lifespan(app: FastAPI):
     from app.realtime.ws_hub import get_ws_hub
     from app.services.ops_events_service import write_event as write_ops_event
     from app.services.realtime_service import (
+        auto_register_sources_from_configs,
         bootstrap_builtin_sources,
         refresh_source_embeddings,
     )
@@ -83,6 +84,15 @@ async def lifespan(app: FastAPI):
         created_builtin_source_ids = bootstrap_builtin_sources(
             bootstrap_session,
         )
+        try:
+            from app.services.embedding_service import SentenceTransformerEmbeddingProvider
+
+            auto_register_sources_from_configs(
+                bootstrap_session,
+                embedding_provider=SentenceTransformerEmbeddingProvider(),
+            )
+        except Exception as e:
+            logger.exception("Skipping startup auto-registration due to embedding provider failure: %s", e)
     finally:
         bootstrap_session.close()
 

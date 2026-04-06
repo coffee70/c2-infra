@@ -373,78 +373,79 @@ function VehicleConfigEditorWorkspace({
 
   return (
     <section className="bg-background/95 border-border/70 relative flex h-full min-h-0 min-w-0 flex-col rounded-xl border shadow-xs backdrop-blur">
-      {notice ? <EditorStatusNotice key={notice.id} notice={notice} onClear={() => setNotice(null)} /> : null}
       <div className="border-border/70 border-b px-4 py-3">
         <div className="min-w-0 space-y-3">
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              {draftPath.trim().toLowerCase().endsWith(".json") ? (
-                <FileJson2 className="text-muted-foreground size-4 shrink-0" />
-              ) : (
-                <FileCode2 className="text-muted-foreground size-4 shrink-0" />
-              )}
-              <h1 className="truncate text-base font-semibold tracking-tight">{displayName}</h1>
+          <div
+            className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+            data-testid="vehicle-config-toolbar-top"
+          >
+            <div className="min-w-0" data-testid="vehicle-config-toolbar-title">
+              <div className="flex min-w-0 items-center gap-2">
+                {draftPath.trim().toLowerCase().endsWith(".json") ? (
+                  <FileJson2 className="text-muted-foreground size-4 shrink-0" />
+                ) : (
+                  <FileCode2 className="text-muted-foreground size-4 shrink-0" />
+                )}
+                <h1 className="truncate text-base font-semibold tracking-tight">{displayName}</h1>
+              </div>
+              <div
+                id="vehicle-config-path"
+                data-testid="vehicle-config-path-display"
+                title={displayedPath}
+                className="text-muted-foreground mt-1 truncate font-mono text-xs"
+              >
+                {displayedPath}
+              </div>
             </div>
-            <div
-              id="vehicle-config-path"
-              data-testid="vehicle-config-path-display"
-              title={displayedPath}
-              className="text-muted-foreground mt-1 truncate font-mono text-xs"
-            >
-              {displayedPath}
+
+            <div className="flex shrink-0 items-center justify-end gap-2 self-start sm:self-center" data-testid="vehicle-config-toolbar-actions">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  onClick={handleValidate}
+                  disabled={
+                    isLoadingSelectedPath ||
+                    validateMutation.isPending ||
+                    trimmedDraftPath.length === 0 ||
+                    content.trim().length === 0
+                  }
+                >
+                  Validate
+                </Button>
+                <Button
+                  onClick={handleSave}
+                  disabled={
+                    isLoadingSelectedPath ||
+                    createMutation.isPending ||
+                    updateMutation.isPending ||
+                    trimmedDraftPath.length === 0 ||
+                    content.trim().length === 0
+                  }
+                >
+                  Save
+                </Button>
+              </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={handleValidate}
-                disabled={
-                  isLoadingSelectedPath ||
-                  validateMutation.isPending ||
-                  trimmedDraftPath.length === 0 ||
-                  content.trim().length === 0
-                }
-              >
-                Validate
-              </Button>
-              <Button
-                onClick={handleSave}
-                disabled={
-                  isLoadingSelectedPath ||
-                  createMutation.isPending ||
-                  updateMutation.isPending ||
-                  trimmedDraftPath.length === 0 ||
-                  content.trim().length === 0
-                }
-              >
-                Save
-              </Button>
+          <div className="border-border/70 border-t pt-2" data-testid="vehicle-config-toolbar-meta">
+            <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
+              <Badge variant={isDirty ? "outline" : "secondary"}>{isDirty ? "Unsaved changes" : "Saved"}</Badge>
+              {displayedParsedSummary ? (
+                <>
+                  <Badge variant="secondary">v{displayedParsedSummary.version}</Badge>
+                  <Badge variant="secondary">{displayedParsedSummary.channel_count} channels</Badge>
+                  <Badge variant="secondary">{displayedParsedSummary.scenario_names.length} scenarios</Badge>
+                  <Badge variant={displayedParsedSummary.has_position_mapping ? "success" : "secondary"}>
+                    {displayedParsedSummary.has_position_mapping ? "Position mapping" : "No position mapping"}
+                  </Badge>
+                  <Badge variant={displayedParsedSummary.has_ingestion ? "success" : "secondary"}>
+                    {displayedParsedSummary.has_ingestion ? "Ingestion" : "No ingestion"}
+                  </Badge>
+                </>
+              ) : null}
             </div>
-            <span
-              className={cn(
-                "text-xs font-medium",
-                isDirty ? "text-amber-400" : "text-muted-foreground"
-              )}
-            >
-              {isDirty ? "Unsaved changes" : "Saved"}
-            </span>
           </div>
-
-          {displayedParsedSummary ? (
-            <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-              <span>v{displayedParsedSummary.version}</span>
-              <span>{displayedParsedSummary.channel_count} channels</span>
-              <span>{displayedParsedSummary.scenario_names.length} scenarios</span>
-              <Badge variant={displayedParsedSummary.has_position_mapping ? "success" : "secondary"}>
-                {displayedParsedSummary.has_position_mapping ? "Position mapping" : "No position mapping"}
-              </Badge>
-              <Badge variant={displayedParsedSummary.has_ingestion ? "success" : "secondary"}>
-                {displayedParsedSummary.has_ingestion ? "Ingestion" : "No ingestion"}
-              </Badge>
-            </div>
-          ) : null}
         </div>
       </div>
 
@@ -457,12 +458,15 @@ function VehicleConfigEditorWorkspace({
             Loading {selectedPath}...
           </div>
         ) : (
-          <VehicleConfigEditor
-            value={content}
-            onChange={setContent}
-            path={draftPath}
-            className="h-full rounded-t-none rounded-b-xl border-0"
-          />
+          <div className="relative h-full min-h-0" data-testid="vehicle-config-editor-stage">
+            {notice ? <EditorStatusNotice key={notice.id} notice={notice} onClear={() => setNotice(null)} /> : null}
+            <VehicleConfigEditor
+              value={content}
+              onChange={setContent}
+              path={draftPath}
+              className="h-full rounded-t-none rounded-b-xl border-0"
+            />
+          </div>
         )}
       </div>
     </section>

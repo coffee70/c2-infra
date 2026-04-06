@@ -15,10 +15,14 @@ from telemetry_catalog.builtins import BUILT_IN_SOURCES
 
 from app.services.realtime_service import _seed_metadata_for_source
 from app.services.realtime_service import _source_to_dict
+from app.services.realtime_service import auto_register_sources_from_configs
 from app.services.realtime_service import create_discovered_channel_metadata
 from app.services.realtime_service import create_source
 from app.services.realtime_service import bootstrap_builtin_sources
+from app.services.realtime_service import get_source_by_vehicle_config_path
+from app.services.realtime_service import infer_auto_registration_fields
 from app.services.realtime_service import refresh_source_embeddings
+from app.services.realtime_service import register_source_if_missing
 from app.services.realtime_service import source_has_telemetry_history
 from app.services.realtime_service import update_source
 from app.models.telemetry import TelemetryChannelAlias
@@ -88,6 +92,148 @@ def test_create_source_flushes_before_seeding_metadata(monkeypatch) -> None:
     assert call_order == ["add", "flush", "seed", "commit", "refresh"]
 
 
+def test_get_source_by_vehicle_config_path_canonicalizes_before_lookup(monkeypatch) -> None:
+    db = MagicMock()
+    source = MagicMock()
+    captured_params: dict[str, object] = {}
+
+    class ScalarResult:
+        def scalars(self):
+            return self
+
+        def first(self):
+            return source
+
+    def fake_execute(stmt):
+        captured_params.update(stmt.compile().params)
+        return ScalarResult()
+
+    db.execute.side_effect = fake_execute
+    monkeypatch.setattr(
+        "app.services.realtime_service.canonical_vehicle_config_path",
+        lambda path: "vehicles/iss.yaml",
+    )
+
+    result = get_source_by_vehicle_config_path(db, "./vehicles/../vehicles/iss.yaml")
+
+    assert result is source
+    assert "vehicles/iss.yaml" in captured_params.values()
+
+
+def test_register_source_if_missing_returns_existing_source_without_creating_duplicate(monkeypatch) -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    existing = MagicMock()
+    existing.id = "source-1"
+    existing.name = "Existing"
+    existing.description = "Already present"
+    existing.source_type = "vehicle"
+    existing.base_url = None
+    existing.vehicle_config_path = "vehicles/iss.yaml"
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.get_source_by_vehicle_config_path",
+        lambda _db, _path: existing,
+    )
+    create_calls: list[dict] = []
+    monkeypatch.setattr(
+        "app.services.realtime_service.create_source",
+        lambda *args, **kwargs: create_calls.append(kwargs),
+    )
+
+    result, created = register_source_if_missing(
+        db,
+        embedding_provider=embedding_provider,
+        source_type="vehicle",
+        name="ISS",
+        description="desc",
+        vehicle_config_path="vehicles/iss.yaml",
+    )
+
+    assert created is False
+    assert result["id"] == "source-1"
+    assert create_calls == []
+
+
+def test_register_source_if_missing_creates_source_when_missing(monkeypatch) -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    monkeypatch.setattr(
+        "app.services.realtime_service.get_source_by_vehicle_config_path",
+        lambda _db, _path: None,
+    )
+    create_calls: list[dict] = []
+
+    def fake_create_source(_db, **kwargs):
+        create_calls.append(kwargs)
+        return {"id": "created-1", **kwargs}
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.create_source",
+        fake_create_source,
+    )
+
+    result, created = register_source_if_missing(
+        db,
+        embedding_provider=embedding_provider,
+        source_type="vehicle",
+        name="ISS",
+        description="desc",
+        vehicle_config_path="vehicles/iss.yaml",
+    )
+
+    assert created is True
+    assert result["id"] == "created-1"
+    assert create_calls == [
+        {
+            "embedding_provider": embedding_provider,
+            "source_type": "vehicle",
+            "name": "ISS",
+            "description": "desc",
+            "base_url": None,
+            "vehicle_config_path": "vehicles/iss.yaml",
+        }
+    ]
+
+
+def test_infer_auto_registration_fields_prefers_parsed_name_and_builtin_simulator_url() -> None:
+    config_item = SimpleNamespace(category="simulators")
+    loaded = SimpleNamespace(
+        path="simulators/drogonsat.yaml",
+        parsed=SimpleNamespace(name="DrogonSat"),
+    )
+
+    result = infer_auto_registration_fields("simulators/drogonsat.yaml", config_item, loaded)
+
+    assert result["source_type"] == "simulator"
+    assert result["name"] == "DrogonSat"
+    assert result["base_url"] == "http://simulator:8001"
+    assert result["vehicle_config_path"] == "simulators/drogonsat.yaml"
+
+
+@pytest.mark.parametrize(
+    ("category", "expected_type"),
+    [
+        ("simulator", "simulator"),
+        ("simulators", "simulator"),
+        ("vehicles", "vehicle"),
+        ("custom", "vehicle"),
+    ],
+)
+def test_infer_auto_registration_fields_uses_category_and_filename_fallback(category: str, expected_type: str) -> None:
+    config_item = SimpleNamespace(category=category)
+    loaded = SimpleNamespace(
+        path="custom/demo-config.yaml",
+        parsed=SimpleNamespace(name=None),
+    )
+
+    result = infer_auto_registration_fields("custom/demo-config.yaml", config_item, loaded)
+
+    assert result["source_type"] == expected_type
+    assert result["name"] == "demo-config"
+    assert result["base_url"] is None
+
+
 def test_bootstrap_builtin_sources_preserves_existing_operator_edits(monkeypatch) -> None:
     """Existing built-in sources should keep operator-edited fields across restarts."""
 
@@ -139,6 +285,150 @@ def test_bootstrap_builtin_sources_preserves_existing_operator_edits(monkeypatch
     )
     assert all("prune_missing" not in call for call in seeded_calls)
     assert all(call.get("refresh_embeddings") is False for call in seeded_calls)
+
+
+def test_auto_register_sources_from_configs_skips_invalid_files(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.realtime_service.list_vehicle_configs",
+        lambda: [SimpleNamespace(path="vehicles/bad.yaml", category="vehicles")],
+    )
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_vehicle_config",
+        lambda _path: SimpleNamespace(
+            path="vehicles/bad.yaml",
+            parsed=SimpleNamespace(name="Bad"),
+            validation_errors=[SimpleNamespace(model_dump=lambda: {"message": "invalid"})],
+        ),
+    )
+    register_calls: list[dict] = []
+    monkeypatch.setattr(
+        "app.services.realtime_service.register_source_if_missing",
+        lambda *args, **kwargs: register_calls.append(kwargs),
+    )
+
+    summary = auto_register_sources_from_configs(MagicMock(), embedding_provider=MagicMock())
+
+    assert summary["examined"] == 1
+    assert summary["created"] == []
+    assert summary["invalid"] == [{"path": "vehicles/bad.yaml", "errors": [{"message": "invalid"}]}]
+    assert register_calls == []
+
+
+def test_auto_register_sources_from_configs_skips_simulator_without_base_url(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.services.realtime_service.list_vehicle_configs",
+        lambda: [SimpleNamespace(path="simulators/custom.yaml", category="simulators")],
+    )
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_vehicle_config",
+        lambda _path: SimpleNamespace(
+            path="simulators/custom.yaml",
+            parsed=SimpleNamespace(name="Custom Sim"),
+            validation_errors=[],
+        ),
+    )
+    register_calls: list[dict] = []
+    monkeypatch.setattr(
+        "app.services.realtime_service.register_source_if_missing",
+        lambda *args, **kwargs: register_calls.append(kwargs),
+    )
+
+    summary = auto_register_sources_from_configs(MagicMock(), embedding_provider=MagicMock())
+
+    assert summary["examined"] == 1
+    assert summary["skipped"] == [
+        {
+            "path": "simulators/custom.yaml",
+            "reason": "missing_base_url",
+            "source_type": "simulator",
+        }
+    ]
+    assert register_calls == []
+
+
+def test_auto_register_sources_from_configs_continues_after_failure_and_audits_creates(monkeypatch) -> None:
+    items = [
+        SimpleNamespace(path="vehicles/bad.yaml", category="vehicles"),
+        SimpleNamespace(path="vehicles/good.yaml", category="vehicles"),
+        SimpleNamespace(path="vehicles/existing.yaml", category="vehicles"),
+    ]
+    monkeypatch.setattr("app.services.realtime_service.list_vehicle_configs", lambda: items)
+
+    def fake_load_vehicle_config(path: str):
+        if path == "vehicles/bad.yaml":
+            raise RuntimeError("boom")
+        return SimpleNamespace(
+            path=path,
+            parsed=SimpleNamespace(name=None),
+            validation_errors=[],
+        )
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.load_vehicle_config",
+        fake_load_vehicle_config,
+    )
+    register_calls: list[dict] = []
+
+    def fake_register_source_if_missing(_db, embedding_provider=None, **kwargs):
+        register_calls.append(kwargs)
+        if kwargs["vehicle_config_path"] == "vehicles/good.yaml":
+            return (
+                {
+                    "id": "created-1",
+                    "name": kwargs["name"],
+                    "description": kwargs["description"],
+                    "source_type": kwargs["source_type"],
+                    "base_url": kwargs["base_url"],
+                    "vehicle_config_path": kwargs["vehicle_config_path"],
+                },
+                True,
+            )
+        return (
+            {
+                "id": "existing-1",
+                "name": kwargs["name"],
+                "description": kwargs["description"],
+                "source_type": kwargs["source_type"],
+                "base_url": kwargs["base_url"],
+                "vehicle_config_path": kwargs["vehicle_config_path"],
+            },
+            False,
+        )
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.register_source_if_missing",
+        fake_register_source_if_missing,
+    )
+    audit_calls: list[dict] = []
+    monkeypatch.setattr(
+        "app.services.realtime_service.audit_log",
+        lambda action, **kwargs: audit_calls.append({"action": action, **kwargs}),
+    )
+
+    summary = auto_register_sources_from_configs(MagicMock(), embedding_provider=MagicMock())
+
+    assert summary["examined"] == 3
+    assert summary["invalid"] == [
+        {
+            "path": "vehicles/bad.yaml",
+            "errors": [{"message": "Unexpected reconciliation failure", "type": "startup_error"}],
+        }
+    ]
+    assert [item["vehicle_config_path"] for item in summary["created"]] == ["vehicles/good.yaml"]
+    assert [item["vehicle_config_path"] for item in summary["existing"]] == ["vehicles/existing.yaml"]
+    assert [call["vehicle_config_path"] for call in register_calls] == [
+        "vehicles/good.yaml",
+        "vehicles/existing.yaml",
+    ]
+    assert audit_calls == [
+        {
+            "action": "sources.auto_register",
+            "source_id": "created-1",
+            "vehicle_config_path": "vehicles/good.yaml",
+            "source_type": "vehicle",
+            "name": "good",
+        }
+    ]
 
 
 def test_bootstrap_builtin_sources_flushes_before_seeding_new_sources(monkeypatch) -> None:

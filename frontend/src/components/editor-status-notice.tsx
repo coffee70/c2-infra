@@ -51,14 +51,17 @@ export function EditorStatusNotice({ notice, onClear }: EditorStatusNoticeProps)
   const Icon = notice.variant === "error" ? AlertCircle : CheckCircle2;
 
   return (
-    <div className="pointer-events-none absolute top-4 right-4 z-20" data-testid="editor-status-notice-region">
+    <div
+      className="pointer-events-none absolute top-4 left-1/2 z-20 -translate-x-1/2"
+      data-testid="editor-status-notice-region"
+    >
       <div
         data-testid="editor-status-notice"
         role={notice.variant === "error" ? "alert" : "status"}
         aria-live={notice.variant === "error" ? "assertive" : "polite"}
         aria-atomic="true"
         className={cn(
-          "pointer-events-auto w-[min(28rem,calc(100vw-4rem))] overflow-hidden rounded-xl border shadow-lg backdrop-blur transition-[opacity,transform]",
+          "pointer-events-auto w-[min(28rem,calc(100vw-4rem))] max-w-[calc(100vw-4rem)] overflow-hidden rounded-xl border shadow-lg backdrop-blur transition-[opacity,transform]",
           isClosing
             ? "animate-out fade-out slide-out-to-top-2 duration-150"
             : "animate-in fade-in slide-in-from-top-2 duration-200",

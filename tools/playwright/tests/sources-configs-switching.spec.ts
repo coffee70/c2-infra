@@ -73,11 +73,33 @@ test("vehicle config explorer switches files and keeps the workspace interactive
   await expect(page).toHaveURL(/\/sources\/configs$/);
   await expect(page.getByTestId("vehicle-config-path-display")).toContainText(secondPath);
   await expect(page.getByTestId("vehicle-config-loading-shell")).toHaveCount(0);
+  await expect(page.getByTestId("vehicle-config-toolbar-top")).toContainText("Validate");
+  await expect(page.getByTestId("vehicle-config-toolbar-top")).toContainText("Save");
+  await expect(page.getByTestId("vehicle-config-toolbar-meta")).toContainText("Saved");
+  await expect(page.getByTestId("vehicle-config-toolbar-meta")).toContainText("channels");
+  const titleBox = await page.getByTestId("vehicle-config-toolbar-title").boundingBox();
+  const actionsBox = await page.getByTestId("vehicle-config-toolbar-actions").boundingBox();
+  expect(titleBox).not.toBeNull();
+  expect(actionsBox).not.toBeNull();
+  const titleMidpoint = (titleBox?.y ?? 0) + (titleBox?.height ?? 0) / 2;
+  const actionsMidpoint = (actionsBox?.y ?? 0) + (actionsBox?.height ?? 0) / 2;
+  expect(Math.abs(actionsMidpoint - titleMidpoint)).toBeLessThan(4);
 
   await page.getByRole("button", { name: "Validate" }).click();
+  const editorStage = page.getByTestId("vehicle-config-editor-stage");
+  const noticeRegion = page.getByTestId("editor-status-notice-region");
   const notice = page.getByTestId("editor-status-notice");
   await expect(notice).toContainText("Validation Passed");
   await expect(notice).toContainText("Vehicle configuration is valid.");
+  await expect(noticeRegion).toBeVisible();
+  const editorBox = await editorStage.boundingBox();
+  const noticeBox = await noticeRegion.boundingBox();
+  expect(editorBox).not.toBeNull();
+  expect(noticeBox).not.toBeNull();
+  const editorMidpoint = (editorBox?.x ?? 0) + (editorBox?.width ?? 0) / 2;
+  const noticeMidpoint = (noticeBox?.x ?? 0) + (noticeBox?.width ?? 0) / 2;
+  expect(Math.abs(noticeMidpoint - editorMidpoint)).toBeLessThan(24);
+  expect((noticeBox?.y ?? 0) - (editorBox?.y ?? 0)).toBeLessThan(32);
   await expect(notice).toHaveCount(0, { timeout: 6000 });
 
   await page.getByRole("button", { name: "Validate" }).click();

@@ -4,12 +4,14 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from sqlalchemy import delete, desc, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.interfaces.embedding_provider import EmbeddingProvider
+from app.lib.audit import audit_log
 from app.models.schemas import RealtimeChannelUpdate, RecentDataPoint, TelemetryAlertSchema
 from app.models.telemetry import (
     PositionChannelMapping,
@@ -28,6 +30,7 @@ from app.services.source_stream_service import (
     normalize_source_id,
     resolve_latest_stream_id,
 )
+from app.services.vehicle_config_service import list_vehicle_configs, load_vehicle_config
 from app.utils.subsystem import infer_subsystem
 from telemetry_catalog.builtins import BUILT_IN_SOURCES
 from telemetry_catalog.builtins import LEGACY_SOURCE_ID_ALIASES
@@ -1315,6 +1318,46 @@ def get_telemetry_sources(db: Session) -> list[dict]:
     return [_source_to_dict(r) for r in rows]
 
 
+def _create_source_row(
+    db: Session,
+    *,
+    source_type: str,
+    name: str,
+    description: str | None,
+    base_url: str | None,
+    vehicle_config_path: str,
+    source_id: str | None = None,
+) -> TelemetrySource:
+    if source_type not in ("vehicle", "simulator"):
+        raise ValueError("source_type must be 'vehicle' or 'simulator'")
+    if source_type == "simulator" and not base_url:
+        raise ValueError("base_url is required for simulator sources")
+    resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
+    src = TelemetrySource(
+        id=source_id or str(uuid.uuid4()),
+        name=name,
+        description=description,
+        source_type=source_type,
+        base_url=base_url if source_type == "simulator" else None,
+        vehicle_config_path=resolved_vehicle_config_path,
+    )
+    db.add(src)
+    db.flush()
+    return src
+
+
+def get_source_by_vehicle_config_path(
+    db: Session,
+    vehicle_config_path: str,
+) -> TelemetrySource | None:
+    resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
+    return db.execute(
+        select(TelemetrySource).where(
+            TelemetrySource.vehicle_config_path == resolved_vehicle_config_path,
+        )
+    ).scalars().first()
+
+
 def create_source(
     db: Session,
     embedding_provider: EmbeddingProvider,
@@ -1326,26 +1369,18 @@ def create_source(
     vehicle_config_path: str,
 ) -> dict:
     """Create a new telemetry source. Returns the created source dict."""
-    if source_type not in ("vehicle", "simulator"):
-        raise ValueError("source_type must be 'vehicle' or 'simulator'")
-    if source_type == "simulator" and not base_url:
-        raise ValueError("base_url is required for simulator sources")
-    resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
-    source_id = str(uuid.uuid4())
-    src = TelemetrySource(
-        id=source_id,
+    src = _create_source_row(
+        db,
+        source_type=source_type,
         name=name,
         description=description,
-        source_type=source_type,
-        base_url=base_url if source_type == "simulator" else None,
-        vehicle_config_path=resolved_vehicle_config_path,
+        base_url=base_url,
+        vehicle_config_path=vehicle_config_path,
     )
-    db.add(src)
-    db.flush()
     _seed_metadata_for_source(
         db,
-        source_id=source_id,
-        vehicle_config_path=resolved_vehicle_config_path,
+        source_id=src.id,
+        vehicle_config_path=src.vehicle_config_path,
         embedding_provider=embedding_provider,
     )
     db.commit()
@@ -1425,6 +1460,152 @@ def refresh_source_embeddings(
     db.commit()
 
 
+def register_source_if_missing(
+    db: Session,
+    embedding_provider: EmbeddingProvider,
+    source_type: str,
+    name: str,
+    *,
+    description: str | None = None,
+    base_url: str | None = None,
+    vehicle_config_path: str,
+) -> tuple[dict, bool]:
+    existing = get_source_by_vehicle_config_path(db, vehicle_config_path)
+    if existing is not None:
+        return _source_to_dict(existing), False
+    created = create_source(
+        db,
+        embedding_provider=embedding_provider,
+        source_type=source_type,
+        name=name,
+        description=description,
+        base_url=base_url,
+        vehicle_config_path=vehicle_config_path,
+    )
+    return created, True
+
+
+def _is_simulator_category(category: str | None) -> bool:
+    normalized = (category or "").strip().lower().rstrip("/\\")
+    return normalized in {"simulator", "simulators"}
+
+
+def _built_in_source_for_config_path(vehicle_config_path: str):
+    try:
+        resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
+    except ValueError:
+        return None
+    for spec in BUILT_IN_SOURCES:
+        if spec.vehicle_config_path == resolved_vehicle_config_path:
+            return spec
+    return None
+
+
+def infer_auto_registration_fields(
+    config_path: str,
+    config_item,
+    loaded_config,
+) -> dict:
+    source_type = "simulator" if _is_simulator_category(getattr(config_item, "category", None)) else "vehicle"
+    display_name = loaded_config.parsed.name or Path(config_path).stem
+    built_in_spec = _built_in_source_for_config_path(loaded_config.path) if source_type == "simulator" else None
+    return {
+        "source_type": source_type,
+        "name": display_name,
+        "description": f"Auto-registered from vehicle configuration: {loaded_config.path}",
+        "base_url": built_in_spec.base_url if built_in_spec is not None else None,
+        "vehicle_config_path": loaded_config.path,
+    }
+
+
+def auto_register_sources_from_configs(
+    db: Session,
+    embedding_provider: EmbeddingProvider,
+) -> dict:
+    items = list_vehicle_configs()
+    summary = {
+        "examined": len(items),
+        "created": [],
+        "existing": [],
+        "invalid": [],
+        "skipped": [],
+    }
+
+    for item in items:
+        try:
+            loaded = load_vehicle_config(item.path)
+            if loaded.validation_errors:
+                summary["invalid"].append(
+                    {
+                        "path": item.path,
+                        "errors": [error.model_dump() for error in loaded.validation_errors],
+                    }
+                )
+                logger.warning(
+                    "Skipping auto-registration for invalid vehicle configuration %s",
+                    item.path,
+                    extra={"vehicle_config_path": item.path, "reason": "validation_errors"},
+                )
+                continue
+
+            fields = infer_auto_registration_fields(item.path, item, loaded)
+            if fields["source_type"] == "simulator" and not fields["base_url"]:
+                summary["skipped"].append(
+                    {
+                        "path": loaded.path,
+                        "reason": "missing_base_url",
+                        "source_type": fields["source_type"],
+                    }
+                )
+                logger.info(
+                    "Skipping auto-registration for simulator configuration without base_url: %s",
+                    loaded.path,
+                    extra={"vehicle_config_path": loaded.path, "reason": "missing_base_url"},
+                )
+                continue
+
+            result, created = register_source_if_missing(
+                db,
+                embedding_provider=embedding_provider,
+                source_type=fields["source_type"],
+                name=fields["name"],
+                description=fields["description"],
+                base_url=fields["base_url"],
+                vehicle_config_path=fields["vehicle_config_path"],
+            )
+            bucket = "created" if created else "existing"
+            summary[bucket].append(result)
+            if created:
+                audit_log(
+                    "sources.auto_register",
+                    source_id=result["id"],
+                    vehicle_config_path=result["vehicle_config_path"],
+                    source_type=result["source_type"],
+                    name=result["name"],
+                )
+        except Exception:
+            logger.exception(
+                "Failed auto-registration reconciliation for vehicle configuration %s",
+                item.path,
+            )
+            summary["invalid"].append(
+                {
+                    "path": item.path,
+                    "errors": [{"message": "Unexpected reconciliation failure", "type": "startup_error"}],
+                }
+            )
+
+    logger.info(
+        "Auto-registration reconciliation examined=%s created=%s existing=%s invalid=%s skipped=%s",
+        summary["examined"],
+        len(summary["created"]),
+        len(summary["existing"]),
+        len(summary["invalid"]),
+        len(summary["skipped"]),
+    )
+    return summary
+
+
 def bootstrap_builtin_sources(
     db: Session,
 ) -> list[str]:
@@ -1434,16 +1615,15 @@ def bootstrap_builtin_sources(
     for spec in BUILT_IN_SOURCES:
         src = db.get(TelemetrySource, spec.id)
         if src is None:
-            src = TelemetrySource(
-                id=spec.id,
+            src = _create_source_row(
+                db,
+                source_id=spec.id,
                 name=spec.name,
                 description=spec.description,
                 source_type=spec.source_type,
                 base_url=spec.base_url,
                 vehicle_config_path=spec.vehicle_config_path,
             )
-            db.add(src)
-            db.flush()
             repaired_source_ids.add(spec.id)
 
     reconcile_builtin_source_duplicates(db)
