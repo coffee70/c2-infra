@@ -170,6 +170,13 @@ class TelemetrySource(Base):
     """Registry of telemetry stream sources (vehicles, simulators)."""
 
     __tablename__ = "telemetry_sources"
+    __table_args__ = (
+        Index(
+            "ix_telemetry_sources_vehicle_config_path",
+            "vehicle_config_path",
+            unique=True,
+        ),
+    )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)

@@ -31,6 +31,7 @@ class AdapterRunner:
         publisher: IngestPublisher,
         checkpoint_store: FileCheckpointStore,
         dlq: FilesystemDlq,
+        source_id: str | None = None,
     ) -> None:
         self.config = config
         self.network_connector = network_connector
@@ -38,8 +39,11 @@ class AdapterRunner:
         self.publisher = publisher
         self.checkpoint_store = checkpoint_store
         self.dlq = dlq
+        resolved_source_id = source_id or config.platform.source_id
+        if not resolved_source_id:
+            raise ValueError("AdapterRunner requires a resolved source_id")
         self.mapper = TelemetryMapper(
-            source_id=config.platform.source_id,
+            source_id=resolved_source_id,
             stable_field_mappings=config.resolve_stable_field_mappings(),
             allowed_source_callsigns=config.vehicle.allowed_source_callsigns,
             vehicle_norad_cat_id=config.vehicle.norad_cat_id,

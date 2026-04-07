@@ -1,6 +1,7 @@
 platform:
-  source_id: "00000000-0000-0000-0000-000000000000"
   ingest_url: "http://backend:8000/telemetry/realtime/ingest"
+  source_resolve_url: "http://backend:8000/telemetry/sources/resolve"
+  # source_id: "00000000-0000-0000-0000-000000000000"  # optional override; normally omitted
 
 vehicle:
   slug: "iss"

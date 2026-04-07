@@ -4,16 +4,19 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
 from satnogs_adapter.checkpoints import FileCheckpointStore
-from satnogs_adapter.config import load_config
+from satnogs_adapter.config import RetryConfig, load_config
 from satnogs_adapter.connectors import SatnogsNetworkConnector
 from satnogs_adapter.decoders import parse_aprs_payload, parse_ax25_frame
 from satnogs_adapter.dlq import FilesystemDlq
+from satnogs_adapter.main import build_runner
 from satnogs_adapter.mapper import TelemetryMapper
 from satnogs_adapter.models import ObservationRecord
 from satnogs_adapter.publisher import IngestPublisher
 from satnogs_adapter.runner import AdapterRunner
+from satnogs_adapter.source_resolver import BackendSourceResolver, SourceResolutionError
 
 
 def _encode_callsign(callsign: str, *, last: bool) -> bytes:
@@ -29,10 +32,70 @@ def _build_ax25_frame(*, dest: str, src: str, info: bytes) -> bytes:
     return b"".join([_encode_callsign(dest, last=False), _encode_callsign(src, last=True), bytes([0x03, 0xF0]), info])
 
 
+def _config_yaml(*, source_id: str | None = None, source_resolve_url: str | None = None) -> str:
+    platform_lines = [
+        "platform:",
+        '  ingest_url: "http://backend:8000/telemetry/realtime/ingest"',
+    ]
+    if source_id is not None:
+        platform_lines.append(f'  source_id: "{source_id}"')
+    if source_resolve_url is not None:
+        platform_lines.append(f'  source_resolve_url: "{source_resolve_url}"')
+    return "\n".join(
+        [
+            *platform_lines,
+            "",
+            "vehicle:",
+            '  slug: "iss"',
+            '  name: "International Space Station"',
+            "  norad_cat_id: 25544",
+            "  allowed_source_callsigns:",
+            '    - "NA1SS"',
+            '    - "RS0ISS"',
+            '  vehicle_config_path: "vehicles/iss.yaml"',
+            "",
+            "satnogs_network:",
+            '  base_url: "https://network.satnogs.org"',
+            '  api_token: ""',
+            "  filters:",
+            "    satellite_norad_cat_id: 25544",
+            "",
+        ]
+    )
+
+
 def test_load_config_prefers_definition_stable_field_mappings() -> None:
     config = load_config("satnogs_adapter/config.example.yaml")
 
     assert config.resolve_stable_field_mappings()["latitude"] == "ISS_POS_LAT_DEG"
+
+
+def test_config_allows_source_id_without_resolve_url(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(_config_yaml(source_id="source-uuid"), encoding="utf-8")
+
+    config = load_config(str(path))
+
+    assert config.platform.source_id == "source-uuid"
+    assert config.platform.source_resolve_url is None
+
+
+def test_config_allows_resolve_url_without_source_id(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(_config_yaml(source_resolve_url="http://backend:8000/telemetry/sources/resolve"), encoding="utf-8")
+
+    config = load_config(str(path))
+
+    assert config.platform.source_id is None
+    assert config.platform.source_resolve_url == "http://backend:8000/telemetry/sources/resolve"
+
+
+def test_config_requires_source_id_or_resolve_url(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(_config_yaml(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="platform.source_id or platform.source_resolve_url is required"):
+        load_config(str(path))
 
 
 def test_extract_frames_collects_invalid_hex_without_aborting() -> None:
@@ -164,6 +227,7 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
         publisher=FakePublisher(),
         checkpoint_store=checkpoint_store,
         dlq=dlq,
+        source_id="source-uuid",
     )
 
     runner.run_live_once()
@@ -217,3 +281,109 @@ def test_publisher_retries_timeout_then_succeeds(tmp_path: Path) -> None:
 
     assert result.success is True
     assert attempts["count"] == 2
+
+
+def test_source_resolver_posts_vehicle_request_and_parses_response() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["json"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "resolved-source",
+                "name": "International Space Station",
+                "description": None,
+                "source_type": "vehicle",
+                "base_url": None,
+                "vehicle_config_path": "vehicles/iss.yaml",
+                "created": False,
+            },
+        )
+
+    config = load_config("satnogs_adapter/config.example.yaml")
+    resolver = BackendSourceResolver(
+        resolve_url="http://backend:8000/telemetry/sources/resolve",
+        retry=RetryConfig(max_attempts=1, backoff_seconds=0),
+        timeout_seconds=1,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    source = resolver.resolve_vehicle_source(config.vehicle)
+
+    assert source.id == "resolved-source"
+    assert source.created is False
+    assert seen["json"] == {
+        "source_type": "vehicle",
+        "name": "International Space Station",
+        "description": "Auto-resolved from vehicle configuration: vehicles/iss.yaml",
+        "vehicle_config_path": "vehicles/iss.yaml",
+    }
+
+
+def test_source_resolver_fails_on_non_success_response() -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    resolver = BackendSourceResolver(
+        resolve_url="http://backend:8000/telemetry/sources/resolve",
+        retry=RetryConfig(max_attempts=1, backoff_seconds=0),
+        timeout_seconds=1,
+        client=httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(400, text="bad path"))),
+    )
+
+    with pytest.raises(SourceResolutionError, match="status=400"):
+        resolver.resolve_vehicle_source(config.vehicle)
+
+
+def test_source_resolver_fails_on_malformed_response() -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    resolver = BackendSourceResolver(
+        resolve_url="http://backend:8000/telemetry/sources/resolve",
+        retry=RetryConfig(max_attempts=1, backoff_seconds=0),
+        timeout_seconds=1,
+        client=httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"id": "missing"}))),
+    )
+
+    with pytest.raises(SourceResolutionError, match="Malformed source resolve response"):
+        resolver.resolve_vehicle_source(config.vehicle)
+
+
+def test_build_runner_uses_source_id_override_without_resolving(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(_config_yaml(source_id="override-source"), encoding="utf-8")
+
+    class FailResolver:
+        def __init__(self, **_kwargs):
+            raise AssertionError("resolver should not be constructed")
+
+    monkeypatch.setattr("satnogs_adapter.main.BackendSourceResolver", FailResolver)
+
+    runner = build_runner(str(path))
+
+    assert runner.mapper.source_id == "override-source"
+
+
+def test_build_runner_resolves_source_id_when_override_absent(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(_config_yaml(source_resolve_url="http://backend:8000/telemetry/sources/resolve"), encoding="utf-8")
+    calls = {"count": 0}
+
+    class FakeResolver:
+        def __init__(self, **kwargs):
+            assert kwargs["resolve_url"] == "http://backend:8000/telemetry/sources/resolve"
+
+        def resolve_vehicle_source(self, vehicle):
+            calls["count"] += 1
+
+            class Source:
+                id = "resolved-source"
+                created = False
+                vehicle_config_path = vehicle.vehicle_config_path
+
+            return Source()
+
+    monkeypatch.setattr("satnogs_adapter.main.BackendSourceResolver", FakeResolver)
+
+    runner = build_runner(str(path))
+
+    assert runner.mapper.source_id == "resolved-source"
+    assert calls["count"] == 1

@@ -13,8 +13,19 @@ from telemetry_catalog.definitions import VehicleConfigurationFile, load_vehicle
 
 
 class PlatformConfig(BaseModel):
-    source_id: str
     ingest_url: str
+    source_id: str | None = None
+    source_resolve_url: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source_identity(self) -> "PlatformConfig":
+        if self.source_id == "":
+            self.source_id = None
+        if self.source_resolve_url == "":
+            self.source_resolve_url = None
+        if not self.source_id and not self.source_resolve_url:
+            raise ValueError("platform.source_id or platform.source_resolve_url is required")
+        return self
 
 
 class SatnogsFilterConfig(BaseModel):
@@ -121,4 +132,3 @@ def load_config(path: str) -> AdapterConfig:
         if env_token:
             network["api_token"] = env_token
     return AdapterConfig.model_validate(payload)
-

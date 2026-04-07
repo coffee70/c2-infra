@@ -23,10 +23,13 @@ from app.services.realtime_service import get_source_by_vehicle_config_path
 from app.services.realtime_service import infer_auto_registration_fields
 from app.services.realtime_service import refresh_source_embeddings
 from app.services.realtime_service import register_source_if_missing
+from app.services.realtime_service import resolve_source
 from app.services.realtime_service import source_has_telemetry_history
 from app.services.realtime_service import update_source
 from app.models.telemetry import TelemetryChannelAlias
 from app.models.telemetry import TelemetryMetadata
+from app.models.telemetry import TelemetrySource
+from app.models.schemas import SourceResolveRequest
 
 
 def test_source_api_payload_uses_only_vehicle_config_path() -> None:
@@ -194,6 +197,114 @@ def test_register_source_if_missing_creates_source_when_missing(monkeypatch) -> 
             "vehicle_config_path": "vehicles/iss.yaml",
         }
     ]
+
+
+def test_resolve_source_is_vehicle_only() -> None:
+    with pytest.raises(ValueError, match="source_type must be 'vehicle'"):
+        resolve_source(
+            MagicMock(),
+            embedding_provider=MagicMock(),
+            source_type="simulator",
+            name="Simulator",
+            vehicle_config_path="simulators/drogonsat.yaml",
+        )
+
+
+def test_source_resolve_request_rejects_non_vehicle_type() -> None:
+    with pytest.raises(ValueError):
+        SourceResolveRequest(
+            source_type="simulator",
+            name="Simulator",
+            vehicle_config_path="simulators/drogonsat.yaml",
+        )
+
+
+def test_resolve_source_returns_existing_auto_registered_vehicle_without_mutating(monkeypatch) -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    existing = MagicMock()
+    existing.id = "source-iss"
+    existing.name = "International Space Station"
+    existing.description = "Auto-registered from vehicle configuration: vehicles/iss.yaml"
+    existing.source_type = "vehicle"
+    existing.base_url = None
+    existing.vehicle_config_path = "vehicles/iss.yaml"
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.get_source_by_vehicle_config_path",
+        lambda _db, _path: existing,
+    )
+    create_calls: list[dict] = []
+    monkeypatch.setattr(
+        "app.services.realtime_service.create_source",
+        lambda *args, **kwargs: create_calls.append(kwargs),
+    )
+
+    result, created = resolve_source(
+        db,
+        embedding_provider=embedding_provider,
+        source_type="vehicle",
+        name="Different Adapter Name",
+        description="Different description",
+        vehicle_config_path="vehicles/iss.yaml",
+    )
+
+    assert created is False
+    assert result["id"] == "source-iss"
+    assert result["name"] == "International Space Station"
+    assert result["description"] == "Auto-registered from vehicle configuration: vehicles/iss.yaml"
+    assert existing.name == "International Space Station"
+    assert existing.description == "Auto-registered from vehicle configuration: vehicles/iss.yaml"
+    assert create_calls == []
+
+
+def test_register_source_if_missing_rereads_winner_after_unique_conflict(monkeypatch) -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    existing = MagicMock()
+    existing.id = "winner-source"
+    existing.name = "Winner"
+    existing.description = None
+    existing.source_type = "vehicle"
+    existing.base_url = None
+    existing.vehicle_config_path = "vehicles/iss.yaml"
+    lookups = iter([None, existing])
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.get_source_by_vehicle_config_path",
+        lambda _db, _path: next(lookups),
+    )
+
+    def fake_create_source(*args, **kwargs):
+        raise IntegrityError("insert", {}, Exception("duplicate key"))
+
+    monkeypatch.setattr(
+        "app.services.realtime_service.create_source",
+        fake_create_source,
+    )
+
+    result, created = register_source_if_missing(
+        db,
+        embedding_provider=embedding_provider,
+        source_type="vehicle",
+        name="ISS",
+        vehicle_config_path="vehicles/iss.yaml",
+    )
+
+    assert created is False
+    assert result["id"] == "winner-source"
+    db.rollback.assert_called_once()
+
+
+def test_telemetry_source_vehicle_config_path_is_unique() -> None:
+    table = TelemetrySource.__table__
+
+    assert any(
+        index.unique
+        and index.name == "ix_telemetry_sources_vehicle_config_path"
+        and [column.name for column in index.columns] == ["vehicle_config_path"]
+        for index in table.indexes
+    )
 
 
 def test_infer_auto_registration_fields_prefers_parsed_name_and_builtin_simulator_url() -> None:

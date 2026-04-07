@@ -30,6 +30,8 @@ from app.models.schemas import (
     RecentDataPoint,
     RelatedChannel,
     SourceCreate,
+    SourceResolveRequest,
+    SourceResolveResponse,
     SourceUpdate,
     StatisticsResponse,
     OverviewChannel,
@@ -60,6 +62,7 @@ from app.services.realtime_service import (
     bootstrap_builtin_sources,
     create_source,
     get_telemetry_sources,
+    resolve_source,
     update_source,
 )
 from app.utils.subsystem import infer_subsystem
@@ -306,6 +309,36 @@ def create_source_route(
         )
         audit_log("sources.create", source_id=result["id"], name=body.name)
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except IntegrityError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="source already exists for vehicle_config_path") from e
+
+
+@router.post("/sources/resolve", response_model=SourceResolveResponse)
+def resolve_source_route(
+    body: SourceResolveRequest,
+    db: Session = Depends(get_db),
+    embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
+):
+    """Resolve or create a vehicle source for adapter startup."""
+    try:
+        result, created = resolve_source(
+            db,
+            embedding_provider=embedding,
+            source_type=body.source_type,
+            name=body.name,
+            description=body.description,
+            vehicle_config_path=body.vehicle_config_path,
+        )
+        audit_log(
+            "sources.resolve",
+            source_id=result["id"],
+            vehicle_config_path=result["vehicle_config_path"],
+            created=created,
+        )
+        return {**result, "created": created}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

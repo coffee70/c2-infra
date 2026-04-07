@@ -45,10 +45,10 @@ The streamer posts to `POST /telemetry/realtime/ingest` with the built-in mock v
 
 Use the SatNOGS adapter when you want a real external packet-radio feed instead of simulator traffic.
 
-1. Create a vehicle source from the ISS vehicle configuration file and keep the returned source UUID.
-2. Place that UUID into the adapter config as `platform.source_id`.
+1. Start the backend so it can auto-register vehicle configuration files.
+2. Keep the adapter config pointed at `platform.source_resolve_url` and `vehicle.vehicle_config_path: "vehicles/iss.yaml"`.
 3. Start the compose-managed `satnogs-adapter` service.
-4. The adapter polls SatNOGS observations for NORAD `25544`, maps one completed observation to one stream, and posts numeric telemetry events to realtime ingest.
+4. The adapter resolves the canonical backend vehicle source, polls SatNOGS observations for NORAD `25544`, maps one completed observation to one stream, and posts numeric telemetry events to realtime ingest.
 
 The detailed workflow lives in [ISS SatNOGS Adapter](/docs/iss-satnogs-adapter).
 

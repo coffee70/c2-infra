@@ -1,7 +1,7 @@
 """Pydantic request/response schemas."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
@@ -500,6 +500,27 @@ class SourceCreate(BaseModel):
     description: Optional[str] = None
     base_url: Optional[str] = None  # required for simulator
     vehicle_config_path: str
+
+
+class SourceResolveRequest(BaseModel):
+    """Request body for POST /telemetry/sources/resolve."""
+
+    source_type: Literal["vehicle"]
+    name: str
+    description: Optional[str] = None
+    vehicle_config_path: str
+
+
+class SourceResolveResponse(BaseModel):
+    """Response body for vehicle source resolution."""
+
+    id: str
+    name: str
+    description: Optional[str] = None
+    source_type: str
+    base_url: Optional[str] = None
+    vehicle_config_path: str
+    created: bool
 
 
 class SourceUpdate(BaseModel):

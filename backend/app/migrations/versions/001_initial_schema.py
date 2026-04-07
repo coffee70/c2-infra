@@ -28,6 +28,12 @@ def upgrade() -> None:
         sa.Column("vehicle_config_path", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
+    op.create_index(
+        "ix_telemetry_sources_vehicle_config_path",
+        "telemetry_sources",
+        ["vehicle_config_path"],
+        unique=True,
+    )
 
     op.create_table(
         "telemetry_metadata",
@@ -368,6 +374,7 @@ def downgrade() -> None:
     op.drop_index("ix_telemetry_metadata_source_name", table_name="telemetry_metadata")
     op.drop_table("telemetry_metadata")
 
+    op.drop_index("ix_telemetry_sources_vehicle_config_path", table_name="telemetry_sources")
     op.drop_table("telemetry_sources")
 
     op.execute(sa.text("DROP EXTENSION IF EXISTS vector"))

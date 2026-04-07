@@ -1470,19 +1470,50 @@ def register_source_if_missing(
     base_url: str | None = None,
     vehicle_config_path: str,
 ) -> tuple[dict, bool]:
-    existing = get_source_by_vehicle_config_path(db, vehicle_config_path)
+    resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
+    existing = get_source_by_vehicle_config_path(db, resolved_vehicle_config_path)
     if existing is not None:
         return _source_to_dict(existing), False
-    created = create_source(
+    try:
+        created = create_source(
+            db,
+            embedding_provider=embedding_provider,
+            source_type=source_type,
+            name=name,
+            description=description,
+            base_url=base_url,
+            vehicle_config_path=resolved_vehicle_config_path,
+        )
+    except IntegrityError:
+        db.rollback()
+        existing = get_source_by_vehicle_config_path(db, resolved_vehicle_config_path)
+        if existing is None:
+            raise
+        return _source_to_dict(existing), False
+    return created, True
+
+
+def resolve_source(
+    db: Session,
+    embedding_provider: EmbeddingProvider,
+    source_type: str,
+    name: str,
+    *,
+    description: str | None = None,
+    vehicle_config_path: str,
+) -> tuple[dict, bool]:
+    """Resolve or create a canonical vehicle source for adapter startup."""
+    if source_type != "vehicle":
+        raise ValueError("source_type must be 'vehicle'")
+    return register_source_if_missing(
         db,
         embedding_provider=embedding_provider,
-        source_type=source_type,
+        source_type="vehicle",
         name=name,
         description=description,
-        base_url=base_url,
+        base_url=None,
         vehicle_config_path=vehicle_config_path,
     )
-    return created, True
 
 
 def _is_simulator_category(category: str | None) -> bool:
