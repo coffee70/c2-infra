@@ -97,3 +97,90 @@ class IngestPublisher:
 
         return PublishResult(success=False, attempts=attempts)
 
+
+class ObservationsPublisher:
+    def __init__(
+        self,
+        *,
+        batch_upsert_url: str,
+        config: PublisherConfig,
+        dlq: FilesystemDlq,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.batch_upsert_url = batch_upsert_url
+        self.config = config
+        self.dlq = dlq
+        self.client = client or httpx.Client(timeout=config.timeout_seconds)
+
+    def publish(
+        self,
+        observations: list[dict[str, Any]],
+        *,
+        provider: str,
+        replace_future_scheduled: bool = True,
+        context: dict[str, Any],
+    ) -> PublishResult:
+        payload = {
+            "provider": provider,
+            "replace_future_scheduled": replace_future_scheduled,
+            "observations": observations,
+        }
+        attempts = 0
+        backoff = self.config.retry.backoff_seconds
+        retryable = set(self.config.retry.retryable_status_codes)
+
+        while attempts < self.config.retry.max_attempts:
+            attempts += 1
+            try:
+                response = self.client.post(self.batch_upsert_url, json=payload)
+            except httpx.TimeoutException as exc:
+                if attempts >= self.config.retry.max_attempts:
+                    self.dlq.write("observation-sync", {"request": payload, "context": context, "error": repr(exc), "attempts": attempts})
+                    return PublishResult(success=False, attempts=attempts, response_body=repr(exc))
+                sleep(backoff)
+                backoff *= self.config.retry.backoff_multiplier
+                continue
+
+            if 200 <= response.status_code < 300:
+                return PublishResult(success=True, attempts=attempts, status_code=response.status_code, response_body=response.text)
+
+            if response.status_code < 500 and response.status_code not in retryable:
+                self.dlq.write(
+                    "observation-sync",
+                    {
+                        "request": payload,
+                        "context": context,
+                        "status_code": response.status_code,
+                        "response_body": response.text,
+                        "attempts": attempts,
+                    },
+                )
+                return PublishResult(
+                    success=False,
+                    attempts=attempts,
+                    status_code=response.status_code,
+                    response_body=response.text,
+                )
+
+            if attempts >= self.config.retry.max_attempts:
+                self.dlq.write(
+                    "observation-sync",
+                    {
+                        "request": payload,
+                        "context": context,
+                        "status_code": response.status_code,
+                        "response_body": response.text,
+                        "attempts": attempts,
+                    },
+                )
+                return PublishResult(
+                    success=False,
+                    attempts=attempts,
+                    status_code=response.status_code,
+                    response_body=response.text,
+                )
+
+            sleep(backoff)
+            backoff *= self.config.retry.backoff_multiplier
+
+        return PublishResult(success=False, attempts=attempts)

@@ -331,8 +331,57 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_telemetry_streams_source_id"), "telemetry_streams", ["source_id"])
 
+    op.create_table(
+        "source_observations",
+        sa.Column("id", UUID(as_uuid=True), primary_key=True, nullable=False),
+        sa.Column(
+            "source_id",
+            sa.Text(),
+            sa.ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("external_id", sa.Text(), nullable=True),
+        sa.Column("provider", sa.Text(), nullable=True),
+        sa.Column("status", sa.Text(), nullable=False),
+        sa.Column("start_time", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("end_time", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("station_name", sa.Text(), nullable=True),
+        sa.Column("station_id", sa.Text(), nullable=True),
+        sa.Column("receiver_id", sa.Text(), nullable=True),
+        sa.Column("max_elevation_deg", sa.Numeric(20, 10), nullable=True),
+        sa.Column("details_json", JSONB(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+    )
+    op.create_index(
+        "ix_source_observations_source_start",
+        "source_observations",
+        ["source_id", "start_time"],
+    )
+    op.create_index(
+        "ix_source_observations_source_status_start",
+        "source_observations",
+        ["source_id", "status", "start_time"],
+    )
+    op.create_index(
+        "uq_source_observations_source_provider_external",
+        "source_observations",
+        ["source_id", "provider", "external_id"],
+        unique=True,
+        postgresql_where=sa.text("external_id IS NOT NULL"),
+    )
+
 
 def downgrade() -> None:
+    op.drop_index(
+        "uq_source_observations_source_provider_external",
+        table_name="source_observations",
+        postgresql_where=sa.text("external_id IS NOT NULL"),
+    )
+    op.drop_index("ix_source_observations_source_status_start", table_name="source_observations")
+    op.drop_index("ix_source_observations_source_start", table_name="source_observations")
+    op.drop_table("source_observations")
+
     op.drop_index(op.f("ix_telemetry_streams_source_id"), table_name="telemetry_streams")
     op.drop_table("telemetry_streams")
 

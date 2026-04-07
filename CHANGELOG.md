@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Source upcoming observations** — Added source-scoped observation windows with backend batch-upsert/read APIs, Planning UI display for expected contact windows, and SatNOGS adapter schedule publishing.
 - **SatNOGS adapter service** — Added a compose-managed `satnogs-adapter` service that polls SatNOGS observations, decodes AX.25/APRS telemetry, maps stable and dynamic numeric fields, and publishes batched realtime ingest events for a vehicle source registered in the backend.
 - **SatNOGS vehicle configuration** — Added the LASARSAT vehicle configuration used by the adapter example pair.
 - **Startup source auto-registration** — The backend now scans valid vehicle configuration files during startup and auto-registers missing config-backed telemetry sources through the existing source creation and metadata seeding path. Already-registered sources are left alone, invalid configs are skipped without aborting startup, and non-built-in simulator configs remain skipped unless a valid simulator `base_url` is already known.

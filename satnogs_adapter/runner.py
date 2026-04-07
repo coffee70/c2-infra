@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 
 from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import AdapterConfig
-from satnogs_adapter.connectors import SatnogsNetworkConnector
+from satnogs_adapter.connectors import SatnogsNetworkConnector, SatnogsRateLimitError
 from satnogs_adapter.decoders import parse_aprs_payload, parse_ax25_frame
 from satnogs_adapter.dlq import FilesystemDlq
 from satnogs_adapter.mapper import TelemetryMapper
 from satnogs_adapter.models import FrameRecord, ObservationRecord, TelemetryEvent
-from satnogs_adapter.publisher import IngestPublisher
+from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ class AdapterRunner:
         *,
         network_connector: SatnogsNetworkConnector,
         publisher: IngestPublisher,
+        observations_publisher: ObservationsPublisher,
         checkpoint_store: FileCheckpointStore,
         dlq: FilesystemDlq,
         source_id: str | None = None,
@@ -34,8 +35,10 @@ class AdapterRunner:
         self.config = config
         self.network_connector = network_connector
         self.publisher = publisher
+        self.observations_publisher = observations_publisher
         self.checkpoint_store = checkpoint_store
         self.dlq = dlq
+        self._last_observation_sync_monotonic: float | None = None
         resolved_source_id = source_id or config.platform.source_id
         if not resolved_source_id:
             raise ValueError("AdapterRunner requires a resolved source_id")
@@ -55,7 +58,77 @@ class AdapterRunner:
             time.sleep(self.config.satnogs.poll_interval_seconds)
 
     def run_live_once(self) -> None:
+        self._sync_upcoming_observations_if_due()
         self._run_observation_pages()
+
+    def _sync_upcoming_observations_if_due(self) -> None:
+        now_monotonic = time.monotonic()
+        if (
+            self._last_observation_sync_monotonic is not None
+            and now_monotonic - self._last_observation_sync_monotonic
+            < self.config.satnogs.observation_sync_interval_seconds
+        ):
+            return
+        self._last_observation_sync_monotonic = now_monotonic
+        try:
+            observation_page = self.network_connector.list_upcoming_observations()
+            observations = []
+            for raw_observation in observation_page.results:
+                if not self.network_connector.is_eligible_observation(
+                    raw_observation,
+                    status=self.config.satnogs.upcoming_status,
+                    require_status=False,
+                ):
+                    continue
+                observation = self.network_connector.normalize_observation(raw_observation)
+                payload = self._observation_window_payload(observation)
+                if payload is not None:
+                    observations.append(payload)
+            result = self.observations_publisher.publish(
+                observations,
+                provider="satnogs",
+                replace_future_scheduled=True,
+                context={"source_id": self.mapper.source_id, "count": len(observations)},
+            )
+            if not result.success:
+                logger.warning("SatNOGS observation sync failed: status=%s body=%s", result.status_code, result.response_body)
+        except SatnogsRateLimitError as exc:
+            logger.warning("SatNOGS observation sync throttled; retry after %ss", exc.retry_after_seconds)
+        except Exception:
+            logger.exception("SatNOGS observation sync failed")
+
+    def _observation_window_payload(self, observation: ObservationRecord) -> dict[str, object] | None:
+        if not observation.start_time or not observation.end_time:
+            return None
+        station_name = observation.station_callsign or observation.observer
+        raw_json = observation.raw_json or {}
+        max_elevation = (
+            raw_json.get("max_elevation")
+            or raw_json.get("max_elevation_deg")
+            or raw_json.get("max_altitude")
+        )
+        details = {
+            "satnogs_status": observation.status,
+            "satellite_norad_cat_id": observation.satellite_norad_cat_id,
+        }
+        if observation.transmitter_uuid:
+            details["transmitter_uuid"] = observation.transmitter_uuid
+        payload: dict[str, object] = {
+            "external_id": observation.observation_id,
+            "status": "scheduled",
+            "start_time": observation.start_time,
+            "end_time": observation.end_time,
+            "station_name": station_name,
+            "station_id": observation.ground_station_id,
+            "receiver_id": self.mapper.build_receiver_id(observation),
+            "details": details,
+        }
+        if max_elevation is not None:
+            try:
+                payload["max_elevation_deg"] = float(max_elevation)
+            except (TypeError, ValueError):
+                pass
+        return payload
 
     def run_backfill_once(self) -> None:
         if not self.config.backfill.enabled:
@@ -76,11 +149,15 @@ class AdapterRunner:
         next_url: str | None = None
         observations_seen = 0
         while True:
-            observation_page = self.network_connector.list_recent_observations(
-                next_url=next_url,
-                start_time=None if next_url else start_time,
-                end_time=None if next_url else end_time,
-            )
+            try:
+                observation_page = self.network_connector.list_recent_observations(
+                    next_url=next_url,
+                    start_time=None if next_url else start_time,
+                    end_time=None if next_url else end_time,
+                )
+            except SatnogsRateLimitError as exc:
+                logger.warning("SatNOGS observation poll throttled; retry after %ss", exc.retry_after_seconds)
+                return
             results = observation_page.results
             if not results:
                 return
@@ -283,10 +360,16 @@ def replay_dlq(config: AdapterConfig, *, max_age_seconds: int | None = None) -> 
     checkpoint_store = FileCheckpointStore(config.checkpoints.path)
     network_connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id)
     publisher = IngestPublisher(ingest_url=config.platform.ingest_url, config=config.publisher, dlq=dlq)
+    observations_publisher = ObservationsPublisher(
+        batch_upsert_url=config.platform.observations_batch_upsert_url.format(source_id=config.platform.source_id or ""),
+        config=config.publisher,
+        dlq=dlq,
+    )
     runner = AdapterRunner(
         config,
         network_connector=network_connector,
         publisher=publisher,
+        observations_publisher=observations_publisher,
         checkpoint_store=checkpoint_store,
         dlq=dlq,
     )

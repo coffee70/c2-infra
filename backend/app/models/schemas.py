@@ -532,6 +532,71 @@ class SourceUpdate(BaseModel):
     vehicle_config_path: Optional[str] = None
 
 
+SourceObservationStatus = Literal["scheduled", "in_progress", "completed", "cancelled", "missed"]
+
+
+class SourceObservationUpsert(BaseModel):
+    """Observation/contact window published for a source."""
+
+    external_id: Optional[str] = None
+    status: SourceObservationStatus = "scheduled"
+    start_time: datetime
+    end_time: datetime
+    station_name: Optional[str] = None
+    station_id: Optional[str] = None
+    receiver_id: Optional[str] = None
+    max_elevation_deg: Optional[float] = None
+    details: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_time_range(self) -> "SourceObservationUpsert":
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time")
+        return self
+
+
+class SourceObservationBatchUpsert(BaseModel):
+    """Batch write request for provider observation snapshots."""
+
+    provider: str = Field(..., min_length=1)
+    replace_future_scheduled: bool = True
+    observations: list[SourceObservationUpsert]
+
+
+class SourceObservationBatchUpsertResponse(BaseModel):
+    """Response for provider observation snapshot writes."""
+
+    inserted: int
+    deleted: int
+
+
+class SourceObservationSchema(BaseModel):
+    """Stored source observation/contact window."""
+
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    source_id: str
+    external_id: Optional[str] = None
+    provider: Optional[str] = None
+    status: SourceObservationStatus
+    start_time: datetime
+    end_time: datetime
+    station_name: Optional[str] = None
+    station_id: Optional[str] = None
+    receiver_id: Optional[str] = None
+    max_elevation_deg: Optional[float] = None
+    details: Optional[dict[str, Any]] = Field(default=None, validation_alias="details_json")
+    created_at: datetime
+    updated_at: datetime
+
+
+class UpcomingObservationsResponse(BaseModel):
+    """Upcoming observation windows for a source."""
+
+    observations: list[SourceObservationSchema]
+
+
 class VehicleConfigValidationError(BaseModel):
     """Structured validation error for vehicle configuration APIs."""
 

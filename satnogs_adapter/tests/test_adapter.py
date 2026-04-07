@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -8,15 +9,25 @@ import pytest
 
 from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import RetryConfig, load_config
-from satnogs_adapter.connectors import ObservationPage, SatnogsNetworkConnector
+from satnogs_adapter.connectors import ObservationPage, SatnogsNetworkConnector, SatnogsRateLimitError
 from satnogs_adapter.decoders import parse_aprs_payload, parse_ax25_frame
 from satnogs_adapter.dlq import FilesystemDlq
 from satnogs_adapter.main import build_runner
 from satnogs_adapter.mapper import TelemetryMapper
 from satnogs_adapter.models import ObservationRecord
-from satnogs_adapter.publisher import IngestPublisher
+from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher
 from satnogs_adapter.runner import AdapterRunner
 from satnogs_adapter.source_resolver import BackendSourceResolver, SourceResolutionError
+
+
+class FakeObservationsPublisher:
+    def publish(self, observations, *, provider, replace_future_scheduled=True, context):
+        class Result:
+            success = True
+            status_code = 200
+            response_body = ""
+
+        return Result()
 
 
 def _encode_callsign(callsign: str, *, last: bool) -> bytes:
@@ -36,6 +47,7 @@ def _config_yaml(*, source_id: str | None = None, source_resolve_url: str | None
     platform_lines = [
         "platform:",
         '  ingest_url: "http://backend:8000/telemetry/realtime/ingest"',
+        '  observations_batch_upsert_url: "http://backend:8000/telemetry/sources/{source_id}/observations:batch-upsert"',
     ]
     if source_id is not None:
         platform_lines.append(f'  source_id: "{source_id}"')
@@ -228,6 +240,52 @@ def test_list_recent_observations_follows_next_link_without_reapplying_params() 
     assert seen_urls == ["https://network.satnogs.org/api/observations/?cursor=abc&status=good"]
 
 
+def test_list_upcoming_observations_uses_upcoming_status_and_time_bounds() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json=[])
+
+    config = load_config("satnogs_adapter/config.example.yaml")
+    connector = SatnogsNetworkConnector(
+        config.satnogs,
+        norad_id=config.vehicle.norad_id,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    connector.list_upcoming_observations(now=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc))
+
+    assert seen["params"]["status"] == "future"
+    assert seen["params"]["start"].startswith("2026-04-07T12:00:00")
+    assert seen["params"]["end"].startswith("2026-04-08T12:00:00")
+
+
+def test_satnogs_connector_honors_retry_after_on_rate_limit() -> None:
+    requests_seen = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        requests_seen["count"] += 1
+        return httpx.Response(429, json={"detail": "throttled"}, headers={"Retry-After": "120"})
+
+    config = load_config("satnogs_adapter/config.example.yaml")
+    connector = SatnogsNetworkConnector(
+        config.satnogs,
+        norad_id=config.vehicle.norad_id,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(SatnogsRateLimitError) as first:
+        connector.list_recent_observations()
+
+    with pytest.raises(SatnogsRateLimitError) as second:
+        connector.list_recent_observations()
+
+    assert first.value.retry_after_seconds == 120
+    assert 1 <= second.value.retry_after_seconds <= 120
+    assert requests_seen["count"] == 1
+
+
 def test_ax25_and_aprs_decode_position_payload() -> None:
     frame = _build_ax25_frame(dest="APRS", src="RS0ISS", info=b"!4903.50N/07201.75W>123/456/A=001234 temp=40")
     ax25 = parse_ax25_frame(frame)
@@ -328,6 +386,7 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
         config,
         network_connector=FakeNetworkConnector(),
         publisher=FakePublisher(),
+        observations_publisher=FakeObservationsPublisher(),
         checkpoint_store=checkpoint_store,
         dlq=dlq,
         source_id="source-uuid",
@@ -393,6 +452,7 @@ def test_runner_uses_link_pagination_and_observation_id_dedupe(tmp_path: Path) -
         config,
         network_connector=FakeNetworkConnector(),
         publisher=FakePublisher(),
+        observations_publisher=FakeObservationsPublisher(),
         checkpoint_store=checkpoint_store,
         dlq=dlq,
         source_id="source-uuid",
@@ -402,6 +462,99 @@ def test_runner_uses_link_pagination_and_observation_id_dedupe(tmp_path: Path) -
 
     assert next_urls_seen == [None, "https://network.satnogs.org/api/observations/?cursor=abc"]
     assert checkpoint_store.is_processed_observation("obs-1")
+
+
+def test_runner_syncs_upcoming_observations_with_replacement_payload(tmp_path: Path) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.checkpoints.path = str(tmp_path / "checkpoints.json")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    captured: dict[str, object] = {}
+
+    class FakeNetworkConnector:
+        def list_upcoming_observations(self):
+            return ObservationPage(
+                results=[
+                    {
+                        "id": "future-1",
+                        "status": "future",
+                        "satellite__norad_cat_id": 62391,
+                        "transmitter_uuid": "C3RnLSSuaKzWhHrtJCqUgu",
+                        "start": "2026-04-07T12:00:00Z",
+                        "end": "2026-04-07T12:10:00Z",
+                        "ground_station_id": "42",
+                        "station_callsign": "GS42",
+                        "max_elevation": 51.5,
+                    }
+                ]
+            )
+
+        def is_eligible_observation(self, payload, *, status=None, require_status=True):
+            return status == "future" and require_status is False
+
+        def normalize_observation(self, payload):
+            return ObservationRecord(
+                observation_id=str(payload["id"]),
+                satellite_norad_cat_id=62391,
+                transmitter_uuid="C3RnLSSuaKzWhHrtJCqUgu",
+                start_time=payload["start"],
+                end_time=payload["end"],
+                ground_station_id=payload["ground_station_id"],
+                station_callsign=payload["station_callsign"],
+                status=payload["status"],
+                raw_json=payload,
+            )
+
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            return ObservationPage(results=[])
+
+    class CapturingObservationsPublisher:
+        def publish(self, observations, *, provider, replace_future_scheduled=True, context):
+            captured["observations"] = observations
+            captured["provider"] = provider
+            captured["replace_future_scheduled"] = replace_future_scheduled
+
+            class Result:
+                success = True
+                status_code = 200
+                response_body = ""
+
+            return Result()
+
+    class FakePublisher:
+        def publish(self, events, *, context):
+            raise AssertionError("telemetry publisher should not be called")
+
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=FakePublisher(),
+        observations_publisher=CapturingObservationsPublisher(),
+        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        dlq=FilesystemDlq(config.dlq.root_dir),
+        source_id="source-uuid",
+    )
+
+    runner.run_live_once()
+
+    assert captured["provider"] == "satnogs"
+    assert captured["replace_future_scheduled"] is True
+    assert captured["observations"] == [
+        {
+            "external_id": "future-1",
+            "status": "scheduled",
+            "start_time": "2026-04-07T12:00:00Z",
+            "end_time": "2026-04-07T12:10:00Z",
+            "station_name": "GS42",
+            "station_id": "42",
+            "receiver_id": "satnogs-station-42",
+            "details": {
+                "satnogs_status": "future",
+                "satellite_norad_cat_id": 62391,
+                "transmitter_uuid": "C3RnLSSuaKzWhHrtJCqUgu",
+            },
+            "max_elevation_deg": 51.5,
+        }
+    ]
 
 
 def test_backfill_uses_linked_observations_with_configured_bounds(tmp_path: Path) -> None:
@@ -428,6 +581,7 @@ def test_backfill_uses_linked_observations_with_configured_bounds(tmp_path: Path
         config,
         network_connector=FakeNetworkConnector(),
         publisher=FakePublisher(),
+        observations_publisher=FakeObservationsPublisher(),
         checkpoint_store=FileCheckpointStore(config.checkpoints.path),
         dlq=FilesystemDlq(config.dlq.root_dir),
         source_id="source-uuid",
@@ -495,6 +649,43 @@ def test_publisher_retries_timeout_then_succeeds(tmp_path: Path) -> None:
 
     assert result.success is True
     assert attempts["count"] == 2
+
+
+def test_observations_publisher_posts_batch_upsert_payload(tmp_path: Path) -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["json"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(200, json={"inserted": 1, "deleted": 0})
+
+    config = load_config("satnogs_adapter/config.example.yaml")
+    publisher = ObservationsPublisher(
+        batch_upsert_url="http://backend:8000/telemetry/sources/source-uuid/observations:batch-upsert",
+        config=config.publisher,
+        dlq=FilesystemDlq(str(tmp_path / "dlq")),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = publisher.publish(
+        [{"external_id": "future-1", "status": "scheduled", "start_time": "2026-04-07T12:00:00Z", "end_time": "2026-04-07T12:10:00Z"}],
+        provider="satnogs",
+        replace_future_scheduled=True,
+        context={"source_id": "source-uuid"},
+    )
+
+    assert result.success is True
+    assert seen["json"] == {
+        "provider": "satnogs",
+        "replace_future_scheduled": True,
+        "observations": [
+            {
+                "external_id": "future-1",
+                "status": "scheduled",
+                "start_time": "2026-04-07T12:00:00Z",
+                "end_time": "2026-04-07T12:10:00Z",
+            }
+        ],
+    }
 
 
 def test_source_resolver_posts_vehicle_request_and_parses_response() -> None:

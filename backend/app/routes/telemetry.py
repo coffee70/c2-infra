@@ -2,11 +2,11 @@
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -30,6 +30,9 @@ from app.models.schemas import (
     RecentDataPoint,
     RelatedChannel,
     SourceCreate,
+    SourceObservationBatchUpsert,
+    SourceObservationBatchUpsertResponse,
+    SourceObservationSchema,
     SourceResolveRequest,
     SourceResolveResponse,
     SourceUpdate,
@@ -44,6 +47,7 @@ from app.models.schemas import (
     TelemetryListResponse,
     TelemetrySchemaCreate,
     TelemetrySchemaResponse,
+    UpcomingObservationsResponse,
     WatchlistAddRequest,
     WatchlistResponse,
 )
@@ -78,6 +82,12 @@ from app.services.source_stream_service import (
     StreamIdConflictError,
     resolve_active_stream_id,
     resolve_latest_stream_id,
+)
+from app.services.source_observation_service import (
+    SourceObservationNotFoundError,
+    get_next_observation,
+    list_upcoming_observations,
+    upsert_source_observations,
 )
 from app.config import get_settings
 from app.lib.audit import audit_log
@@ -368,6 +378,100 @@ def update_source_route(
         raise HTTPException(status_code=404, detail="Source not found")
     audit_log("sources.update", source_id=source_id)
     return result
+
+
+@router.get(
+    "/sources/{source_id}/observations/upcoming",
+    response_model=UpcomingObservationsResponse,
+)
+def get_upcoming_source_observations(
+    source_id: str,
+    limit: int = Query(default=5, ge=1, le=25),
+    provider: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """List upcoming observation windows for a source."""
+    logical_source_id = normalize_source_id(source_id)
+    try:
+        observations = list_upcoming_observations(
+            db,
+            source_id=logical_source_id,
+            now=datetime.now(timezone.utc),
+            limit=limit,
+            provider=provider,
+        )
+    except SourceObservationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    audit_log(
+        "source_observations.read_upcoming",
+        source_id=logical_source_id,
+        provider=provider or "",
+        limit=limit,
+    )
+    return UpcomingObservationsResponse(
+        observations=[SourceObservationSchema.model_validate(item) for item in observations]
+    )
+
+
+@router.get(
+    "/sources/{source_id}/observations/next",
+    response_model=SourceObservationSchema | None,
+)
+def get_next_source_observation(
+    source_id: str,
+    provider: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return the next observation window for a source, if known."""
+    logical_source_id = normalize_source_id(source_id)
+    try:
+        observation = get_next_observation(
+            db,
+            source_id=logical_source_id,
+            now=datetime.now(timezone.utc),
+            provider=provider,
+        )
+    except SourceObservationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    audit_log(
+        "source_observations.read_next",
+        source_id=logical_source_id,
+        provider=provider or "",
+    )
+    return SourceObservationSchema.model_validate(observation) if observation is not None else None
+
+
+@router.post(
+    "/sources/{source_id}/observations:batch-upsert",
+    response_model=SourceObservationBatchUpsertResponse,
+)
+def batch_upsert_source_observations(
+    source_id: str,
+    body: SourceObservationBatchUpsert,
+    db: Session = Depends(get_db),
+):
+    """Write a provider snapshot of observation windows for a source."""
+    logical_source_id = normalize_source_id(source_id)
+    try:
+        result = upsert_source_observations(
+            db,
+            source_id=logical_source_id,
+            batch=body,
+            now=datetime.now(timezone.utc),
+        )
+    except SourceObservationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    audit_log(
+        "source_observations.batch_upsert",
+        source_id=logical_source_id,
+        provider=body.provider,
+        inserted=result.inserted,
+        deleted=result.deleted,
+    )
+    return SourceObservationBatchUpsertResponse(
+        inserted=result.inserted,
+        deleted=result.deleted,
+    )
 
 
 @router.get("/sources/{source_id}/streams", response_model=ChannelSourcesResponse)

@@ -37,6 +37,23 @@ export interface TelemetrySource {
   vehicle_config_path?: string;
 }
 
+export interface SourceObservation {
+  id: string;
+  source_id: string;
+  external_id?: string | null;
+  provider?: string | null;
+  status: "scheduled" | "in_progress" | "completed" | "cancelled" | "missed";
+  start_time: string;
+  end_time: string;
+  station_name?: string | null;
+  station_id?: string | null;
+  receiver_id?: string | null;
+  max_elevation_deg?: number | null;
+  details?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface VehicleConfigListItem {
   path: string;
   filename: string;
@@ -368,6 +385,22 @@ export function useUpdateTelemetrySourceMutation() {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.telemetrySourcesStatus(variables.sourceId),
       });
+    },
+  });
+}
+
+export function useUpcomingObservationsQuery(sourceId: string | null | undefined, limit = 5) {
+  return useQuery<SourceObservation[]>({
+    queryKey: queryKeys.sourceObservations(sourceId ?? "", limit),
+    enabled: Boolean(sourceId),
+    staleTime: 60 * 1000,
+    refetchInterval: 60 * 1000,
+    queryFn: async ({ signal }) => {
+      const data = await fetchJson<{ observations?: SourceObservation[] }>(
+        `/telemetry/sources/${encodeURIComponent(sourceId ?? "")}/observations/upcoming?limit=${limit}`,
+        { signal, cache: "no-store" }
+      );
+      return Array.isArray(data.observations) ? data.observations : [];
     },
   });
 }

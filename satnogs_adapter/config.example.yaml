@@ -1,6 +1,7 @@
 platform:
   ingest_url: "http://backend:8000/telemetry/realtime/ingest"
   source_resolve_url: "http://backend:8000/telemetry/sources/resolve"
+  observations_batch_upsert_url: "http://backend:8000/telemetry/sources/{source_id}/observations:batch-upsert"
   # source_id: "00000000-0000-0000-0000-000000000000"  # optional override; normally omitted
 
 vehicle:
@@ -16,6 +17,9 @@ satnogs:
   api_token: ""
   transmitter_uuid: "C3RnLSSuaKzWhHrtJCqUgu"
   status: "good"
+  upcoming_status: "future"
+  upcoming_lookahead_hours: 24
+  observation_sync_interval_seconds: 600
   poll_interval_seconds: 60
   download:
     max_concurrent_observation_fetches: 2

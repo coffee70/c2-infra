@@ -1,6 +1,7 @@
 """Database models."""
 
 from app.models.telemetry import (
+    SourceObservation,
     TelemetryAlert,
     TelemetryAlertNote,
     TelemetryChannelAlias,
@@ -13,6 +14,7 @@ from app.models.telemetry import (
 )
 
 __all__ = [
+    "SourceObservation",
     "TelemetryMetadata",
     "TelemetryChannelAlias",
     "TelemetryData",

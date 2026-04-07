@@ -9,7 +9,7 @@ from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import AdapterConfig, load_config
 from satnogs_adapter.connectors import SatnogsNetworkConnector
 from satnogs_adapter.dlq import FilesystemDlq
-from satnogs_adapter.publisher import IngestPublisher
+from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher
 from satnogs_adapter.runner import AdapterRunner
 from satnogs_adapter.source_resolver import BackendSourceResolver
 
@@ -55,10 +55,16 @@ def build_runner(config_path: str) -> AdapterRunner:
         config=config.publisher,
         dlq=dlq,
     )
+    observations_publisher = ObservationsPublisher(
+        batch_upsert_url=config.platform.observations_batch_upsert_url.format(source_id=source_id),
+        config=config.publisher,
+        dlq=dlq,
+    )
     return AdapterRunner(
         config,
         network_connector=network_connector,
         publisher=publisher,
+        observations_publisher=observations_publisher,
         checkpoint_store=checkpoint_store,
         dlq=dlq,
         source_id=source_id,

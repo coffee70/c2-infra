@@ -32,6 +32,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { FeedStatusBadge } from "@/components/feed-status-badge";
+import { UpcomingObservationsCard } from "@/components/upcoming-observations-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -559,6 +560,7 @@ export function EarthOverviewView({
     }
     return next;
   }, [feedStatusBySource, simulatorRuntimeBySource, sources]);
+  const observationSourceId = expandedSourceId ?? selectedIds[0] ?? null;
 
   return (
     <div className="absolute inset-0 h-full min-h-0 w-full min-w-0">
@@ -640,6 +642,8 @@ export function EarthOverviewView({
                   </DropdownMenu>
                   {error && <p className="text-destructive text-[11px]">Positions: {error}</p>}
                 </div>
+
+                <UpcomingObservationsCard sourceId={observationSourceId} />
 
                 {/* Section 2: Position mapping per source (independent of visibility) */}
                 <div className="border-t pt-5">

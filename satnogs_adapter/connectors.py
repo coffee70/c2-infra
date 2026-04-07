@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import binascii
+from email.utils import parsedate_to_datetime
+from math import ceil
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
+import time
 from typing import Any
 from urllib.parse import urljoin
 
@@ -23,10 +26,34 @@ class ObservationPage:
     next_url: str | None = None
 
 
+class SatnogsRateLimitError(RuntimeError):
+    """Raised when SatNOGS asks the client to wait before retrying."""
+
+    def __init__(self, retry_after_seconds: int) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(f"SatNOGS request throttled; retry after {retry_after_seconds}s")
+
+
 def _stringify(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _parse_retry_after(value: str | None) -> int:
+    if not value:
+        return 60
+    try:
+        return max(1, int(value))
+    except ValueError:
+        pass
+    try:
+        retry_at = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return 60
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=timezone.utc)
+    return max(1, ceil((retry_at - datetime.now(timezone.utc)).total_seconds()))
 
 
 class SatnogsNetworkConnector:
@@ -34,6 +61,7 @@ class SatnogsNetworkConnector:
         self.config = config
         self.norad_id = norad_id
         self.client = client or httpx.Client(timeout=30.0)
+        self._rate_limited_until_monotonic = 0.0
 
     def _headers(self) -> dict[str, str]:
         if not self.config.api_token:
@@ -44,11 +72,19 @@ class SatnogsNetworkConnector:
         return path if path.startswith("http://") or path.startswith("https://") else urljoin(self.config.base_url.rstrip("/") + "/", path.lstrip("/"))
 
     def _get_response(self, path: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
+        now = time.monotonic()
+        if now < self._rate_limited_until_monotonic:
+            raise SatnogsRateLimitError(ceil(self._rate_limited_until_monotonic - now))
+
         response = self.client.get(
             self._build_url(path),
             params=params,
             headers=self._headers(),
         )
+        if response.status_code == 429:
+            retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+            self._rate_limited_until_monotonic = time.monotonic() + retry_after
+            raise SatnogsRateLimitError(retry_after)
         response.raise_for_status()
         return response
 
@@ -63,6 +99,7 @@ class SatnogsNetworkConnector:
         start_time: str | None = None,
         end_time: str | None = None,
         next_url: str | None = None,
+        status: str | None = None,
     ) -> ObservationPage:
         if next_url is not None:
             response = self._get_response(next_url)
@@ -77,7 +114,7 @@ class SatnogsNetworkConnector:
         params: dict[str, Any] = {
             "satellite__norad_cat_id": self.norad_id,
             "transmitter_uuid": self.config.transmitter_uuid,
-            "status": self.config.status,
+            "status": status or self.config.status,
         }
         if start_time is not None:
             params["start"] = start_time
@@ -91,6 +128,15 @@ class SatnogsNetworkConnector:
                 next_url=self._extract_next_url(response),
             )
         raise ValueError("SatNOGS observations response must be an array")
+
+    def list_upcoming_observations(self, *, now: datetime | None = None) -> ObservationPage:
+        observed_at = now or datetime.now(timezone.utc)
+        end_time = observed_at + timedelta(hours=self.config.upcoming_lookahead_hours)
+        return self.list_recent_observations(
+            start_time=observed_at.isoformat(),
+            end_time=end_time.isoformat(),
+            status=self.config.upcoming_status,
+        )
 
     def _extract_next_url(self, response: httpx.Response) -> str | None:
         next_link = response.links.get("next")
@@ -106,16 +152,26 @@ class SatnogsNetworkConnector:
             raise ValueError("SatNOGS observation detail response must be an object")
         return payload
 
-    def is_eligible_observation(self, payload: dict[str, Any]) -> bool:
+    def is_eligible_observation(
+        self,
+        payload: dict[str, Any],
+        *,
+        status: str | None = None,
+        require_status: bool = True,
+    ) -> bool:
         try:
             observation = self.normalize_observation(payload)
         except (KeyError, TypeError, ValueError):
             return False
-        return (
+        identity_matches = (
             observation.satellite_norad_cat_id == self.norad_id
             and observation.transmitter_uuid == self.config.transmitter_uuid
-            and _stringify(observation.status) == self.config.status
         )
+        if not identity_matches:
+            return False
+        if not require_status:
+            return True
+        return _stringify(observation.status) == (status or self.config.status)
 
     def normalize_observation(self, payload: dict[str, Any]) -> ObservationRecord:
         return ObservationRecord(
@@ -130,7 +186,7 @@ class SatnogsNetworkConnector:
             end_time=_stringify(payload.get("end") or payload.get("end_time")),
             ground_station_id=self._extract_ground_station_id(payload),
             observer=_stringify(payload.get("observer")),
-            station_callsign=_stringify(payload.get("station_callsign") or payload.get("ground_station_callsign")),
+            station_callsign=_stringify(payload.get("station_callsign") or payload.get("ground_station_callsign") or payload.get("station_name")),
             station_lat=payload.get("station_lat"),
             station_lng=payload.get("station_lng"),
             station_alt=payload.get("station_alt"),

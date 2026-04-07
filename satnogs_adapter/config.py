@@ -14,6 +14,7 @@ from telemetry_catalog.definitions import VehicleConfigurationFile, load_vehicle
 
 class PlatformConfig(BaseModel):
     ingest_url: str
+    observations_batch_upsert_url: str
     source_id: str | None = None
     source_resolve_url: str | None = None
 
@@ -38,6 +39,9 @@ class SatnogsConfig(BaseModel):
     api_token: str = ""
     transmitter_uuid: str
     status: str
+    upcoming_status: str = "future"
+    upcoming_lookahead_hours: int = 24
+    observation_sync_interval_seconds: int = 600
     poll_interval_seconds: int = 60
     download: DownloadConfig = Field(default_factory=DownloadConfig)
 

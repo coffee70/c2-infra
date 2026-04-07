@@ -24,6 +24,8 @@ sys.modules.setdefault(
 from app.models.schemas import (
     ActiveStreamUpdate,
     MeasurementEvent,
+    SourceObservationBatchUpsert,
+    SourceObservationUpsert,
     TelemetryDataIngest,
     TelemetrySchemaCreate,
     WatchlistAddRequest,
@@ -206,6 +208,50 @@ def test_active_run_route_is_removed() -> None:
     paths = {route.path for route in telemetry_routes.router.routes}
     assert "/sources/active-run" not in paths
     assert "/sources/active-stream" in paths
+    assert "/sources/{source_id}/observations/upcoming" in paths
+    assert "/sources/{source_id}/observations/next" in paths
+    assert "/sources/{source_id}/observations:batch-upsert" in paths
+
+
+def test_source_observation_request_rejects_invalid_time_range() -> None:
+    with pytest.raises(ValueError, match="end_time must be after start_time"):
+        SourceObservationUpsert(
+            start_time=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+        )
+
+
+def test_source_observation_routes_normalize_source_and_call_service(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(telemetry_routes, "normalize_source_id", lambda source_id: f"normalized-{source_id}")
+    monkeypatch.setattr(
+        telemetry_routes,
+        "upsert_source_observations",
+        lambda db, *, source_id, batch, now: calls.update(
+            {"source_id": source_id, "provider": batch.provider, "now": now}
+        )
+        or SimpleNamespace(inserted=1, deleted=2),
+    )
+
+    response = telemetry_routes.batch_upsert_source_observations(
+        source_id="source-a",
+        body=SourceObservationBatchUpsert(
+            provider="satnogs",
+            observations=[
+                SourceObservationUpsert(
+                    start_time=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+                    end_time=datetime(2026, 4, 7, 12, 10, tzinfo=timezone.utc),
+                )
+            ],
+        ),
+        db=MagicMock(),
+    )
+
+    assert response.inserted == 1
+    assert response.deleted == 2
+    assert calls["source_id"] == "normalized-source-a"
+    assert calls["provider"] == "satnogs"
 
 
 def test_runtime_route_signature_no_longer_accepts_run_id() -> None:
