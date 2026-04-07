@@ -48,14 +48,14 @@ interface DataPoint {
 }
 
 interface Bounds {
-  p5: number;
-  p50: number;
-  p95: number;
-  mean?: number;
-  redLow?: number;
-  redHigh?: number;
-  minValue: number;
-  maxValue: number;
+  p5?: number | null;
+  p50?: number | null;
+  p95?: number | null;
+  mean?: number | null;
+  redLow?: number | null;
+  redHigh?: number | null;
+  minValue?: number | null;
+  maxValue?: number | null;
 }
 
 const RANGE_PRESETS = [
@@ -66,9 +66,11 @@ const RANGE_PRESETS = [
 ] as const;
 
 function formatWithUnits(
-  value: number,
+  value: number | null | undefined,
   units: string | null | undefined
 ): string {
+  if (value == null || !Number.isFinite(value)) return "No data";
+
   const formatted = value.toFixed(4);
   if (!units?.trim()) return formatted;
   const displayUnit = units === "C" ? "°C" : ` ${units}`;
@@ -359,26 +361,31 @@ export function TrendChartAnalysis({
     return downsampleByWidth(filtered, chartWidth);
   }, [chartData, timeRangePct, chartWidth]);
 
-  const hasBounds = bounds != null;
-  const p5 = bounds?.p5 ?? 0;
-  const p95 = bounds?.p95 ?? 0;
-  const p50 = bounds?.p50 ?? 0;
-  const mean = bounds?.mean ?? p50;
-  const redLow = bounds?.redLow;
-  const redHigh = bounds?.redHigh;
-  const minVal = bounds?.minValue;
-  const maxVal = bounds?.maxValue;
+  const isNumber = (value: number | null | undefined): value is number =>
+    typeof value === "number" && Number.isFinite(value);
+  const p5 = isNumber(bounds?.p5) ? bounds.p5 : null;
+  const p95 = isNumber(bounds?.p95) ? bounds.p95 : null;
+  const p50 = isNumber(bounds?.p50) ? bounds.p50 : null;
+  const mean = isNumber(bounds?.mean) ? bounds.mean : p50;
+  const redLow = isNumber(bounds?.redLow) ? bounds.redLow : null;
+  const redHigh = isNumber(bounds?.redHigh) ? bounds.redHigh : null;
+  const minVal = isNumber(bounds?.minValue) ? bounds.minValue : null;
+  const maxVal = isNumber(bounds?.maxValue) ? bounds.maxValue : null;
+  const hasPercentileBounds = p5 != null && p95 != null && p50 != null;
+  const hasBounds = hasPercentileBounds || redLow != null || redHigh != null || minVal != null || maxVal != null;
 
   const allYValues = useMemo(() => {
     const vals = [
       ...displayData.map((d) => d.value).filter((v) => !Number.isNaN(v)),
       ...displayData.map((d) => d.compareValue).filter((v) => v != null && !Number.isNaN(v)) as number[],
     ];
-    if (hasBounds) vals.push(p5, p95, p50, mean, minVal ?? 0, maxVal ?? 0);
+    [p5, p95, p50, mean, minVal, maxVal].forEach((value) => {
+      if (value != null) vals.push(value);
+    });
     if (redLow != null) vals.push(redLow);
     if (redHigh != null) vals.push(redHigh);
     return vals;
-  }, [displayData, hasBounds, p5, p95, p50, mean, minVal, maxVal, redLow, redHigh]);
+  }, [displayData, p5, p95, p50, mean, minVal, maxVal, redLow, redHigh]);
 
   const yMin = allYValues.length > 0 ? Math.min(...allYValues) : 0;
   const yMax = allYValues.length > 0 ? Math.max(...allYValues) : 1;
@@ -396,7 +403,8 @@ export function TrendChartAnalysis({
     compareYMax + comparePadding,
   ];
 
-  const isInNominalBand = (value: number) => value >= p5 && value <= p95;
+  const isInNominalBand = (value: number) =>
+    p5 == null || p95 == null || (value >= p5 && value <= p95);
 
   const rightMargin = useMemo(() => {
     if (compareChannel) return 90;
@@ -764,7 +772,7 @@ export function TrendChartAnalysis({
                     stroke="none"
                   />
                 )}
-                {redLow != null && (
+                {redLow != null && p5 != null && (
                   <ReferenceArea
                     yAxisId="left"
                     y1={redLow}
@@ -773,7 +781,7 @@ export function TrendChartAnalysis({
                     stroke="none"
                   />
                 )}
-                {redHigh != null && (
+                {redHigh != null && p95 != null && (
                   <ReferenceArea
                     yAxisId="left"
                     y1={p95}
@@ -782,7 +790,7 @@ export function TrendChartAnalysis({
                     stroke="none"
                   />
                 )}
-                {redLow == null && redHigh == null && minVal != null && maxVal != null && (
+                {redLow == null && redHigh == null && minVal != null && maxVal != null && p5 != null && p95 != null && (
                   <>
                     <ReferenceArea
                       yAxisId="left"
@@ -800,14 +808,16 @@ export function TrendChartAnalysis({
                     />
                   </>
                 )}
-                <ReferenceArea
-                  yAxisId="left"
-                  y1={p5}
-                  y2={p95}
-                  fill="rgba(34, 197, 94, 0.2)"
-                  stroke="none"
-                />
-                {showMeanP50 && (
+                {hasPercentileBounds && (
+                  <ReferenceArea
+                    yAxisId="left"
+                    y1={p5}
+                    y2={p95}
+                    fill="rgba(34, 197, 94, 0.2)"
+                    stroke="none"
+                  />
+                )}
+                {showMeanP50 && p50 != null && (
                   <ReferenceLine
                     yAxisId="left"
                     y={p50}
@@ -816,7 +826,7 @@ export function TrendChartAnalysis({
                     label={{ value: "P50", position: "right", offset: 8 }}
                   />
                 )}
-                {showMeanP50 && mean !== p50 && (
+                {showMeanP50 && mean != null && p50 != null && mean !== p50 && (
                   <ReferenceLine
                     yAxisId="left"
                     y={mean}
@@ -825,7 +835,7 @@ export function TrendChartAnalysis({
                     label={{ value: "Mean", position: "right", offset: 8 }}
                   />
                 )}
-                {showP5P95 && (
+                {showP5P95 && p5 != null && p95 != null && (
                   <>
                     <ReferenceLine
                       yAxisId="left"

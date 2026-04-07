@@ -3,9 +3,11 @@
  * Avoids fixed 4 decimals; shows meaningful digits per unit type.
  */
 export function formatSmartValue(
-  value: number,
+  value: number | null | undefined,
   units: string | null | undefined
 ): string {
+  if (value == null || !Number.isFinite(value)) return "No data";
+
   const abs = Math.abs(value);
   const displayUnit = !units?.trim() ? "" : units === "C" ? "°C" : ` ${units}`;
 

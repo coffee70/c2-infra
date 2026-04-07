@@ -559,6 +559,11 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
     meta = _get_channel_meta(db, source_id, name)
     if not meta:
         raise ValueError(f"Telemetry not found: {name}")
+    aliases = get_aliases_by_telemetry_ids(
+        db,
+        source_id=source_id,
+        telemetry_ids=[meta.id],
+    ).get(meta.id, [])
 
     stats_row = db.get(TelemetryStatistics, (data_source_id, meta.id))
     if not stats_row:
@@ -568,7 +573,38 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
         db.flush()
         stats_row = db.get(TelemetryStatistics, (data_source_id, meta.id))
     if not stats_row:
-        raise ValueError(f"Statistics not computed for: {name}")
+        red_low = float(meta.red_low) if meta.red_low is not None else None
+        red_high = float(meta.red_high) if meta.red_high is not None else None
+        return ExplainResponse(
+            name=meta.name,
+            aliases=aliases,
+            description=meta.description,
+            units=meta.units,
+            channel_origin=meta.channel_origin or "catalog",
+            discovery_namespace=meta.discovery_namespace,
+            statistics=StatisticsResponse(
+                mean=None,
+                std_dev=None,
+                min_value=None,
+                max_value=None,
+                p5=None,
+                p50=None,
+                p95=None,
+                n_samples=0,
+            ),
+            recent_value=None,
+            z_score=None,
+            is_anomalous=False,
+            state="no_data",
+            state_reason="no_samples",
+            last_timestamp=None,
+            red_low=red_low,
+            red_high=red_high,
+            what_this_means="",
+            what_to_check_next=[],
+            confidence_indicator=None,
+            llm_explanation="",
+        )
 
     rows = _get_recent_values_db_only(db, name, limit=1, source_id=data_source_id)
     recent_value: Optional[float] = float(rows[0][1]) if rows else None
@@ -592,11 +628,7 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
 
     return ExplainResponse(
         name=meta.name,
-        aliases=get_aliases_by_telemetry_ids(
-            db,
-            source_id=source_id,
-            telemetry_ids=[meta.id],
-        ).get(meta.id, []),
+        aliases=aliases,
         description=meta.description,
         units=meta.units,
         channel_origin=meta.channel_origin or "catalog",

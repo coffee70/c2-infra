@@ -88,13 +88,13 @@ class SearchResponse(BaseModel):
 class StatisticsResponse(BaseModel):
     """Statistics for explain response."""
 
-    mean: float
-    std_dev: float
-    min_value: float
-    max_value: float
-    p5: float
-    p50: float
-    p95: float
+    mean: Optional[float] = None
+    std_dev: Optional[float] = None
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    p5: Optional[float] = None
+    p50: Optional[float] = None
+    p95: Optional[float] = None
     n_samples: int
 
 
@@ -120,7 +120,7 @@ class ExplainResponse(BaseModel):
     channel_origin: str = "catalog"
     discovery_namespace: Optional[str] = None
     statistics: StatisticsResponse
-    recent_value: float
+    recent_value: Optional[float] = None
     z_score: Optional[float] = None
     is_anomalous: bool
     state: str  # normal, caution, warning

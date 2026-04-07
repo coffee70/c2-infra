@@ -8,7 +8,7 @@ The platform supports multiple telemetry sources and simulators. A **source** is
 
 In the **Context Banner** on the Overview and Telemetry Detail pages, you switch between logical sources only. The dropdown lists registered sources, not individual streams. Telemetry Detail URLs stay source-first: `/sources/{source_id}/telemetry/{channel_name}`. The app resolves the source's current stream for Overview data, Summary, Live & Trends, and the default stream in the History tab.
 
-Because channel catalogs are now source-scoped, a channel detail page is only valid for sources that actually expose that channel. If you switch to a source that does not provide the current channel, the app redirects you back to that source’s Overview with a notice instead of leaving you on a 404 page.
+Because channel catalogs are now source-scoped, a channel detail page is only valid for sources that actually expose that channel. Registered channels still open even before any samples arrive; the page shows **No data** and empty chart/history states until telemetry is ingested. If you switch to a source that does not provide the current channel, the app redirects you back to that source’s Overview with a notice instead of leaving you on a 404 page.
 
 ## Per-Source Feed Health
 
