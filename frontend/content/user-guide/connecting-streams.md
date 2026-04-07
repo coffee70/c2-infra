@@ -41,16 +41,16 @@ With anomalies:
 
 The streamer posts to `POST /telemetry/realtime/ingest` with the built-in mock vehicle source id. Its telemetry catalog also comes from a committed vehicle configuration file, so the backend and streamer agree on the expected channels.
 
-## Option C: SatNOGS ISS Adapter
+## Option C: SatNOGS Adapter
 
 Use the SatNOGS adapter when you want a real external packet-radio feed instead of simulator traffic.
 
 1. Start the backend so it can auto-register vehicle configuration files.
-2. Keep the adapter config pointed at `platform.source_resolve_url` and `vehicle.vehicle_config_path: "vehicles/iss.yaml"`.
+2. Keep the adapter config pointed at `platform.source_resolve_url` and set `vehicle.vehicle_config_path: "vehicles/lasarsat.yaml"`, `vehicle.norad_id: 62391`, `satnogs.transmitter_uuid: "C3RnLSSuaKzWhHrtJCqUgu"`, and `satnogs.status: "good"`.
 3. Start the compose-managed `satnogs-adapter` service.
-4. The adapter resolves the canonical backend vehicle source, polls SatNOGS observations for NORAD `25544`, maps one completed observation to one stream, and posts numeric telemetry events to realtime ingest.
+4. The adapter resolves the canonical backend vehicle source, polls SatNOGS observations for the configured satellite/transmitter/status using `Link` header pagination, maps one completed observation to one stream, and posts numeric telemetry events to realtime ingest without exposing transmitter UUID in backend payloads.
 
-The detailed workflow lives in [ISS SatNOGS Adapter](/docs/iss-satnogs-adapter).
+The detailed workflow lives in [SatNOGS Adapter](/docs/satnogs-adapter).
 
 If an external decoder or payload stream emits a field that is not in the seeded catalog, the backend now creates a source-scoped **discovered** channel instead of dropping the sample. When the producer sends structured decoder tags such as `decoder=APRS` and `field_name=Payload Temp`, the stored channel name is derived into a stable namespace like `decoder.aprs.payload_temp`.
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from telemetry_catalog.definitions import VehicleConfigurationFile, load_vehicle_config_file
 
@@ -28,30 +28,26 @@ class PlatformConfig(BaseModel):
         return self
 
 
-class SatnogsFilterConfig(BaseModel):
-    satellite_norad_cat_id: int
-    ground_station_allowlist: list[str] = Field(default_factory=list)
-    status_allowlist: list[str] = Field(default_factory=list)
-
-
-class PaginationConfig(BaseModel):
-    cursor_persistence_enabled: bool = True
-    max_pages_per_cycle: int = 5
-
-
 class DownloadConfig(BaseModel):
     max_concurrent_observation_fetches: int = 2
     max_concurrent_artifact_downloads: int = 2
 
 
-class SatnogsNetworkConfig(BaseModel):
-    base_url: str
+class SatnogsConfig(BaseModel):
+    base_url: str = "https://network.satnogs.org"
     api_token: str = ""
+    transmitter_uuid: str
+    status: str
     poll_interval_seconds: int = 60
-    lookback_window_minutes: int = 180
-    filters: SatnogsFilterConfig
-    pagination: PaginationConfig = Field(default_factory=PaginationConfig)
     download: DownloadConfig = Field(default_factory=DownloadConfig)
+
+    @model_validator(mode="after")
+    def validate_pair_fields(self) -> "SatnogsConfig":
+        if not self.transmitter_uuid.strip():
+            raise ValueError("satnogs.transmitter_uuid is required")
+        if not self.status.strip():
+            raise ValueError("satnogs.status is required")
+        return self
 
 
 class BackfillConfig(BaseModel):
@@ -87,28 +83,24 @@ class CheckpointConfig(BaseModel):
 
 
 class VehicleConfig(BaseModel):
-    slug: str = "iss"
-    name: str = "International Space Station"
-    norad_cat_id: int = 25544
-    allowed_source_callsigns: list[str] = Field(default_factory=lambda: ["NA1SS", "RS0ISS"])
-    vehicle_config_path: str = "vehicles/iss.yaml"
+    slug: str = "lasarsat"
+    name: str = "LASARSAT"
+    norad_id: int
+    allowed_source_callsigns: list[str] = Field(default_factory=lambda: ["OK0LSR"])
+    vehicle_config_path: str = "vehicles/lasarsat.yaml"
     stable_field_mappings: dict[str, str] = Field(default_factory=dict)
 
 
 class AdapterConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     platform: PlatformConfig
     vehicle: VehicleConfig
-    satnogs_network: SatnogsNetworkConfig
+    satnogs: SatnogsConfig
     backfill: BackfillConfig = Field(default_factory=BackfillConfig)
     publisher: PublisherConfig = Field(default_factory=PublisherConfig)
     checkpoints: CheckpointConfig = Field(default_factory=CheckpointConfig)
     dlq: DlqConfig = Field(default_factory=DlqConfig)
-
-    @model_validator(mode="after")
-    def validate_norad_match(self) -> "AdapterConfig":
-        if self.vehicle.norad_cat_id != self.satnogs_network.filters.satellite_norad_cat_id:
-            raise ValueError("vehicle.norad_cat_id must match satnogs_network.filters.satellite_norad_cat_id")
-        return self
 
     def load_definition(self) -> VehicleConfigurationFile:
         return load_vehicle_config_file(self.vehicle.vehicle_config_path)
@@ -126,9 +118,9 @@ def load_config(path: str) -> AdapterConfig:
     if not isinstance(payload, dict):
         raise ValueError("adapter config must contain a top-level object")
 
-    network = payload.get("satnogs_network")
-    if isinstance(network, dict) and not network.get("api_token"):
+    satnogs = payload.get("satnogs")
+    if isinstance(satnogs, dict) and not satnogs.get("api_token"):
         env_token = os.environ.get("SATNOGS_API_TOKEN")
         if env_token:
-            network["api_token"] = env_token
+            satnogs["api_token"] = env_token
     return AdapterConfig.model_validate(payload)

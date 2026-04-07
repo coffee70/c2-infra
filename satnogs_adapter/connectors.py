@@ -4,16 +4,23 @@ from __future__ import annotations
 
 import binascii
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin
 
 import httpx
 
-from satnogs_adapter.config import BackfillConfig, SatnogsNetworkConfig
+from satnogs_adapter.config import SatnogsConfig
 from satnogs_adapter.models import FrameRecord, ObservationRecord
 
 HEX_RE = re.compile(r"[^0-9A-Fa-f]")
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationPage:
+    results: list[dict[str, Any]]
+    next_url: str | None = None
 
 
 def _stringify(value: Any) -> str | None:
@@ -23,8 +30,9 @@ def _stringify(value: Any) -> str | None:
 
 
 class SatnogsNetworkConnector:
-    def __init__(self, config: SatnogsNetworkConfig, *, client: httpx.Client | None = None) -> None:
+    def __init__(self, config: SatnogsConfig, *, norad_id: int, client: httpx.Client | None = None) -> None:
         self.config = config
+        self.norad_id = norad_id
         self.client = client or httpx.Client(timeout=30.0)
 
     def _headers(self) -> dict[str, str]:
@@ -32,33 +40,65 @@ class SatnogsNetworkConnector:
             return {}
         return {"Authorization": f"Token {self.config.api_token}"}
 
-    def _get(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
+    def _build_url(self, path: str) -> str:
+        return path if path.startswith("http://") or path.startswith("https://") else urljoin(self.config.base_url.rstrip("/") + "/", path.lstrip("/"))
+
+    def _get_response(self, path: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
         response = self.client.get(
-            path if path.startswith("http://") or path.startswith("https://") else urljoin(self.config.base_url.rstrip("/") + "/", path.lstrip("/")),
+            self._build_url(path),
             params=params,
             headers=self._headers(),
         )
         response.raise_for_status()
+        return response
+
+    def _get(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
+        response = self._get_response(path, params=params)
         return response.json()
 
-    def list_recent_observations(self, *, cursor: str | None = None, now: datetime | None = None) -> dict[str, Any]:
-        end_time = now or datetime.now(timezone.utc)
-        start_time = end_time - timedelta(minutes=self.config.lookback_window_minutes)
+    def list_recent_observations(
+        self,
+        *,
+        now: datetime | None = None,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        next_url: str | None = None,
+    ) -> ObservationPage:
+        if next_url is not None:
+            response = self._get_response(next_url)
+            payload = response.json()
+            if isinstance(payload, list):
+                return ObservationPage(
+                    results=[item for item in payload if isinstance(item, dict)],
+                    next_url=self._extract_next_url(response),
+                )
+            raise ValueError("SatNOGS observations response must be an array")
+
         params: dict[str, Any] = {
-            "satellite__norad_cat_id": self.config.filters.satellite_norad_cat_id,
-            "start": start_time.isoformat(),
-            "end": end_time.isoformat(),
+            "satellite__norad_cat_id": self.norad_id,
+            "transmitter_uuid": self.config.transmitter_uuid,
+            "status": self.config.status,
         }
-        if self.config.filters.status_allowlist:
-            params["status"] = ",".join(self.config.filters.status_allowlist)
-        if cursor:
-            params["cursor"] = cursor
-        payload = self._get("/api/observations/", params=params)
+        if start_time is not None:
+            params["start"] = start_time
+        if end_time is not None:
+            params["end"] = end_time
+        response = self._get_response("/api/observations/", params=params)
+        payload = response.json()
         if isinstance(payload, list):
-            return {"results": payload, "next": None}
-        if isinstance(payload, dict):
-            return payload
-        raise ValueError("SatNOGS observations response must be a list or object")
+            return ObservationPage(
+                results=[item for item in payload if isinstance(item, dict)],
+                next_url=self._extract_next_url(response),
+            )
+        raise ValueError("SatNOGS observations response must be an array")
+
+    def _extract_next_url(self, response: httpx.Response) -> str | None:
+        next_link = response.links.get("next")
+        if next_link:
+            url = next_link.get("url")
+            if isinstance(url, str) and url:
+                return url
+        return None
 
     def get_observation_detail(self, observation_id: str) -> dict[str, Any]:
         payload = self._get(f"/api/observations/{observation_id}/")
@@ -67,15 +107,15 @@ class SatnogsNetworkConnector:
         return payload
 
     def is_eligible_observation(self, payload: dict[str, Any]) -> bool:
-        station_id = self._extract_ground_station_id(payload)
-        allowlist = set(self.config.filters.ground_station_allowlist)
-        if allowlist and (station_id is None or station_id not in allowlist):
+        try:
+            observation = self.normalize_observation(payload)
+        except (KeyError, TypeError, ValueError):
             return False
-
-        if self.config.filters.status_allowlist:
-            status = _stringify(payload.get("status"))
-            return status in set(self.config.filters.status_allowlist)
-        return True
+        return (
+            observation.satellite_norad_cat_id == self.norad_id
+            and observation.transmitter_uuid == self.config.transmitter_uuid
+            and _stringify(observation.status) == self.config.status
+        )
 
     def normalize_observation(self, payload: dict[str, Any]) -> ObservationRecord:
         return ObservationRecord(
@@ -119,7 +159,8 @@ class SatnogsNetworkConnector:
         return refs
 
     def _download_artifact_text(self, url: str) -> str:
-        response = self.client.get(url, headers=self._headers())
+        artifact_url = url if url.startswith("http://") or url.startswith("https://") else urljoin(self.config.base_url.rstrip("/") + "/", url.lstrip("/"))
+        response = self.client.get(artifact_url, headers=self._headers())
         response.raise_for_status()
         return response.text
 
@@ -142,14 +183,15 @@ class SatnogsNetworkConnector:
                     lines.append((item, None))
                     continue
                 if isinstance(item, dict):
-                    raw_line = (
-                        item.get("payload_demod")
-                        or item.get("payload")
-                        or item.get("frame")
-                        or item.get("hex")
-                    )
+                    raw_line = item.get("payload") or item.get("frame") or item.get("hex")
                     if isinstance(raw_line, str) and raw_line.strip():
                         lines.append((raw_line, _stringify(item.get("timestamp") or item.get("time"))))
+                        continue
+                    payload_demod = item.get("payload_demod")
+                    if isinstance(payload_demod, str) and payload_demod.strip():
+                        for downloaded_line in self._download_artifact_text(payload_demod).splitlines():
+                            if downloaded_line.strip():
+                                lines.append((downloaded_line, _stringify(item.get("timestamp") or item.get("time"))))
         elif demoddata is None and observation.artifact_refs:
             for ref in observation.artifact_refs:
                 for raw_line in self._download_artifact_text(ref).splitlines():
@@ -179,47 +221,3 @@ class SatnogsNetworkConnector:
                 )
             )
         return frames, invalid_lines
-
-
-class SatnogsDbBackfillConnector:
-    def __init__(self, config: BackfillConfig, *, base_url: str, client: httpx.Client | None = None) -> None:
-        self.config = config
-        self.base_url = base_url
-        self.client = client or httpx.Client(timeout=30.0)
-
-    def iter_frames(self, *, norad_cat_id: int) -> list[FrameRecord]:
-        if not self.config.enabled:
-            return []
-        params = {
-            "satellite": norad_cat_id,
-            "start": self.config.start_time,
-            "end": self.config.end_time,
-        }
-        response = self.client.get(urljoin(self.base_url.rstrip("/") + "/", "/api/telemetry/"), params=params)
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            return []
-        results = payload.get("results", [])
-        frames: list[FrameRecord] = []
-        for index, item in enumerate(results[: self.config.max_observations_per_run]):
-            if not isinstance(item, dict):
-                continue
-            frame = item.get("frame")
-            if not isinstance(frame, str):
-                continue
-            clean_hex = HEX_RE.sub("", frame)
-            if not clean_hex:
-                continue
-            frames.append(
-                FrameRecord(
-                    frame_bytes=binascii.unhexlify(clean_hex),
-                    reception_time=_stringify(item.get("timestamp")),
-                    observation_id=_stringify(item.get("observation_id") or f"dbwin-{index}") or f"dbwin-{index}",
-                    ground_station_id=_stringify(item.get("ground_station_id")),
-                    source="satnogs_db",
-                    frame_index=index,
-                    raw_line=frame,
-                )
-            )
-        return frames

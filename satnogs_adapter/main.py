@@ -7,7 +7,7 @@ import logging
 
 from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import AdapterConfig, load_config
-from satnogs_adapter.connectors import SatnogsDbBackfillConnector, SatnogsNetworkConnector
+from satnogs_adapter.connectors import SatnogsNetworkConnector
 from satnogs_adapter.dlq import FilesystemDlq
 from satnogs_adapter.publisher import IngestPublisher
 from satnogs_adapter.runner import AdapterRunner
@@ -49,8 +49,7 @@ def build_runner(config_path: str) -> AdapterRunner:
     source_id = resolve_runtime_source_id(config)
     checkpoint_store = FileCheckpointStore(config.checkpoints.path)
     dlq = FilesystemDlq(config.dlq.root_dir)
-    network_connector = SatnogsNetworkConnector(config.satnogs_network)
-    backfill_connector = SatnogsDbBackfillConnector(config.backfill, base_url=config.satnogs_network.base_url)
+    network_connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id)
     publisher = IngestPublisher(
         ingest_url=config.platform.ingest_url,
         config=config.publisher,
@@ -59,7 +58,6 @@ def build_runner(config_path: str) -> AdapterRunner:
     return AdapterRunner(
         config,
         network_connector=network_connector,
-        backfill_connector=backfill_connector,
         publisher=publisher,
         checkpoint_store=checkpoint_store,
         dlq=dlq,

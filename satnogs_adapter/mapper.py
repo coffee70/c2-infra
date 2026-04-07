@@ -47,8 +47,6 @@ class TelemetryMapper:
             "satnogs.ground_station_id": observation.ground_station_id or "",
             "satnogs.satellite_norad_cat_id": str(self.vehicle_norad_cat_id),
         }
-        if observation.transmitter_uuid:
-            tags["satnogs.transmitter_uuid"] = observation.transmitter_uuid
         if observation.start_time:
             tags["satnogs.observation_start"] = observation.start_time
         if observation.end_time:
@@ -109,4 +107,3 @@ class TelemetryMapper:
                 )
             )
         return events
-

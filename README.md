@@ -40,7 +40,7 @@ This starts:
 - **Backend** (port 8000) — FastAPI telemetry API
 - **Frontend** (port 3000) — Next.js dashboard
 - **Simulator** (port 8001) — mock vehicle streamer for testing scenarios
-- **SatNOGS adapter** — optional ISS AX.25/APRS observation ingestor that resolves its backend vehicle source at startup
+- **SatNOGS adapter** — optional AX.25 observation ingestor that resolves its backend vehicle source at startup
 
 Migrations run automatically on backend startup.
 
@@ -94,17 +94,18 @@ Or with anomalies:
 
 The Overview page will show live updates (green "Live" badge when connected). The Events Console supports Ack and Resolve for alerts.
 
-## SatNOGS ISS Adapter
+## SatNOGS Adapter
 
-The repo includes a compose-managed `satnogs-adapter` service for ISS AX.25/APRS telemetry ingestion from SatNOGS observations.
+The repo includes a compose-managed `satnogs-adapter` service for AX.25 telemetry ingestion from SatNOGS observations for one configured satellite/transmitter pair. The example config uses LASARSAT NORAD `62391` with transmitter UUID `C3RnLSSuaKzWhHrtJCqUgu`.
 
 Operational sequence:
 
-1. Add or confirm the ISS vehicle configuration file at `vehicle-configurations/vehicles/iss.yaml`.
+1. Add or confirm the LASARSAT vehicle configuration file at `vehicle-configurations/vehicles/lasarsat.yaml`.
 2. Start the backend so it can auto-register vehicle configs.
-3. Start the adapter with `docker compose up -d satnogs-adapter`.
+3. Configure `vehicle.norad_id`, `satnogs.transmitter_uuid`, and `satnogs.status`.
+4. Start the adapter with `docker compose up -d satnogs-adapter`.
 
-The adapter resolves the canonical backend source at startup through `POST /telemetry/sources/resolve` using `vehicle_config_path="vehicles/iss.yaml"`, then publishes batched events to `POST /telemetry/realtime/ingest`. `platform.source_id` remains available as an advanced override, but normal operation does not require copying backend UUIDs into adapter YAML.
+The adapter resolves the canonical backend source at startup through `POST /telemetry/sources/resolve` using `vehicle_config_path="vehicles/lasarsat.yaml"`, queries SatNOGS observations with `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, then publishes batched events to `POST /telemetry/realtime/ingest`. Backend telemetry remains vehicle-scoped; the transmitter UUID is not sent in ingest payloads or tags. `platform.source_id` remains available as an advanced override, but normal operation does not require copying backend UUIDs into adapter YAML.
 
 ## Browser Validation
 

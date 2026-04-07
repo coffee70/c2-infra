@@ -7,11 +7,10 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import AdapterConfig
-from satnogs_adapter.connectors import SatnogsDbBackfillConnector, SatnogsNetworkConnector
+from satnogs_adapter.connectors import SatnogsNetworkConnector
 from satnogs_adapter.decoders import parse_aprs_payload, parse_ax25_frame
 from satnogs_adapter.dlq import FilesystemDlq
 from satnogs_adapter.mapper import TelemetryMapper
@@ -27,7 +26,6 @@ class AdapterRunner:
         config: AdapterConfig,
         *,
         network_connector: SatnogsNetworkConnector,
-        backfill_connector: SatnogsDbBackfillConnector,
         publisher: IngestPublisher,
         checkpoint_store: FileCheckpointStore,
         dlq: FilesystemDlq,
@@ -35,7 +33,6 @@ class AdapterRunner:
     ) -> None:
         self.config = config
         self.network_connector = network_connector
-        self.backfill_connector = backfill_connector
         self.publisher = publisher
         self.checkpoint_store = checkpoint_store
         self.dlq = dlq
@@ -46,46 +43,55 @@ class AdapterRunner:
             source_id=resolved_source_id,
             stable_field_mappings=config.resolve_stable_field_mappings(),
             allowed_source_callsigns=config.vehicle.allowed_source_callsigns,
-            vehicle_norad_cat_id=config.vehicle.norad_cat_id,
+            vehicle_norad_cat_id=config.vehicle.norad_id,
         )
 
     def run_forever(self) -> None:
         while True:
-            self.run_live_once()
-            time.sleep(self.config.satnogs_network.poll_interval_seconds)
+            try:
+                self.run_live_once()
+            except Exception:
+                logger.exception("SatNOGS live poll failed")
+            time.sleep(self.config.satnogs.poll_interval_seconds)
 
     def run_live_once(self) -> None:
-        cursor = self.checkpoint_store.get("network_cursor")
-        pages_seen = 0
-        while pages_seen < self.config.satnogs_network.pagination.max_pages_per_cycle:
-            page = self.network_connector.list_recent_observations(cursor=cursor)
-            results = page.get("results", [])
-            if not isinstance(results, list):
-                return
-            for raw_observation in results:
-                if not isinstance(raw_observation, dict):
-                    continue
-                self._process_observation_payload(raw_observation)
-            pages_seen += 1
-            next_cursor = page.get("next")
-            if not next_cursor:
-                if cursor is not None and self.config.satnogs_network.pagination.cursor_persistence_enabled:
-                    self.checkpoint_store.set("network_cursor", None)
-                break
-            cursor = str(next_cursor)
-            if self.config.satnogs_network.pagination.cursor_persistence_enabled:
-                self.checkpoint_store.set("network_cursor", cursor)
+        self._run_observation_pages()
 
     def run_backfill_once(self) -> None:
-        for frame in self.backfill_connector.iter_frames(norad_cat_id=self.config.vehicle.norad_cat_id):
-            observation = ObservationRecord(
-                observation_id=frame.observation_id,
-                satellite_norad_cat_id=self.config.vehicle.norad_cat_id,
-                start_time=frame.reception_time,
-                end_time=frame.reception_time,
-                ground_station_id=frame.ground_station_id,
+        if not self.config.backfill.enabled:
+            return
+        self._run_observation_pages(
+            start_time=self.config.backfill.start_time,
+            end_time=self.config.backfill.end_time,
+            max_observations=self.config.backfill.max_observations_per_run,
+        )
+
+    def _run_observation_pages(
+        self,
+        *,
+        start_time: str | None = None,
+        end_time: str | None = None,
+        max_observations: int | None = None,
+    ) -> None:
+        next_url: str | None = None
+        observations_seen = 0
+        while True:
+            observation_page = self.network_connector.list_recent_observations(
+                next_url=next_url,
+                start_time=None if next_url else start_time,
+                end_time=None if next_url else end_time,
             )
-            self._process_frames(observation, [frame])
+            results = observation_page.results
+            if not results:
+                return
+            for raw_observation in results:
+                if max_observations is not None and observations_seen >= max_observations:
+                    return
+                observations_seen += 1
+                self._process_observation_payload(raw_observation)
+            if not observation_page.next_url:
+                return
+            next_url = observation_page.next_url
 
     def replay_batch_dlq(self, *, max_age_seconds: int | None = None) -> int:
         replayed = 0
@@ -113,7 +119,13 @@ class AdapterRunner:
         detail = raw_observation
         if not raw_observation.get("demoddata"):
             detail = self.network_connector.get_observation_detail(observation_id)
+        if not self.network_connector.is_eligible_observation(detail):
+            logger.info("Skipping observation %s after detail mismatch", observation_id)
+            return
         observation = self.network_connector.normalize_observation(detail)
+        if not self._has_demoddata(observation):
+            logger.info("Skipping observation %s without demoddata", observation_id)
+            return
         if observation.ground_station_id is None:
             self._write_observation_dlq("missing_ground_station_id", observation)
             return
@@ -135,10 +147,27 @@ class AdapterRunner:
             )
 
         if not frames:
-            self._write_observation_dlq("missing_demoddata", observation)
             return
 
         self._process_frames(observation, frames)
+
+    def _has_demoddata(self, observation: ObservationRecord) -> bool:
+        demoddata = observation.demoddata
+        if isinstance(demoddata, str):
+            return bool(demoddata.strip())
+        if isinstance(demoddata, list):
+            return any(self._has_demoddata_item(item) for item in demoddata)
+        return bool(observation.artifact_refs)
+
+    def _has_demoddata_item(self, item: object) -> bool:
+        if isinstance(item, str):
+            return bool(item.strip())
+        if isinstance(item, dict):
+            for key in ("payload_demod", "payload", "frame", "hex"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    return True
+        return False
 
     def _process_frames(self, observation: ObservationRecord, frames: list[FrameRecord]) -> None:
         receiver_id = self.mapper.build_receiver_id(observation)
@@ -252,13 +281,11 @@ class AdapterRunner:
 def replay_dlq(config: AdapterConfig, *, max_age_seconds: int | None = None) -> int:
     dlq = FilesystemDlq(config.dlq.root_dir)
     checkpoint_store = FileCheckpointStore(config.checkpoints.path)
-    network_connector = SatnogsNetworkConnector(config.satnogs_network)
-    backfill_connector = SatnogsDbBackfillConnector(config.backfill, base_url=config.satnogs_network.base_url)
+    network_connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id)
     publisher = IngestPublisher(ingest_url=config.platform.ingest_url, config=config.publisher, dlq=dlq)
     runner = AdapterRunner(
         config,
         network_connector=network_connector,
-        backfill_connector=backfill_connector,
         publisher=publisher,
         checkpoint_store=checkpoint_store,
         dlq=dlq,

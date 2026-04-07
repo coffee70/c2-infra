@@ -8,7 +8,7 @@ import pytest
 
 from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import RetryConfig, load_config
-from satnogs_adapter.connectors import SatnogsNetworkConnector
+from satnogs_adapter.connectors import ObservationPage, SatnogsNetworkConnector
 from satnogs_adapter.decoders import parse_aprs_payload, parse_ax25_frame
 from satnogs_adapter.dlq import FilesystemDlq
 from satnogs_adapter.main import build_runner
@@ -48,24 +48,26 @@ def _config_yaml(*, source_id: str | None = None, source_resolve_url: str | None
             "vehicle:",
             '  slug: "iss"',
             '  name: "International Space Station"',
-            "  norad_cat_id: 25544",
+            "  norad_id: 25544",
             "  allowed_source_callsigns:",
             '    - "NA1SS"',
             '    - "RS0ISS"',
             '  vehicle_config_path: "vehicles/iss.yaml"',
             "",
-            "satnogs_network:",
+            "satnogs:",
             '  base_url: "https://network.satnogs.org"',
             '  api_token: ""',
-            "  filters:",
-            "    satellite_norad_cat_id: 25544",
+            '  transmitter_uuid: "tx-uuid"',
+            '  status: "good"',
             "",
         ]
     )
 
 
-def test_load_config_prefers_definition_stable_field_mappings() -> None:
-    config = load_config("satnogs_adapter/config.example.yaml")
+def test_load_config_prefers_definition_stable_field_mappings(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(_config_yaml(source_id="source-uuid"), encoding="utf-8")
+    config = load_config(str(path))
 
     assert config.resolve_stable_field_mappings()["latitude"] == "ISS_POS_LAT_DEG"
 
@@ -98,15 +100,70 @@ def test_config_requires_source_id_or_resolve_url(tmp_path: Path) -> None:
         load_config(str(path))
 
 
+def test_config_requires_satnogs_pair_fields(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        _config_yaml(source_id="source-uuid").replace('  transmitter_uuid: "tx-uuid"\n', ""),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="transmitter_uuid"):
+        load_config(str(path))
+
+
+def test_config_rejects_old_satellite_only_shape(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "\n".join(
+            [
+                "platform:",
+                '  ingest_url: "http://backend:8000/telemetry/realtime/ingest"',
+                '  source_id: "source-uuid"',
+                "",
+                "vehicle:",
+                '  slug: "iss"',
+                '  name: "International Space Station"',
+                "  norad_cat_id: 25544",
+                '  vehicle_config_path: "vehicles/iss.yaml"',
+                "",
+                "satnogs_network:",
+                '  base_url: "https://network.satnogs.org"',
+                "  filters:",
+                "    satellite_norad_cat_id: 25544",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        load_config(str(path))
+
+
 def test_extract_frames_collects_invalid_hex_without_aborting() -> None:
-    connector = SatnogsNetworkConnector(load_config("satnogs_adapter/config.example.yaml").satnogs_network)
+    class FakeClient:
+        def get(self, url, params=None, headers=None):
+            class Response:
+                def raise_for_status(self):
+                    return None
+
+                @property
+                def text(self):
+                    if url.endswith("/good.txt"):
+                        return "414243"
+                    return "not-hex"
+
+            return Response()
+
+    config = load_config("satnogs_adapter/config.example.yaml")
+    connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id, client=FakeClient())
     observation = ObservationRecord(
         observation_id="123",
         satellite_norad_cat_id=25544,
         start_time="2026-04-01T00:00:00Z",
         end_time="2026-04-01T00:01:00Z",
         ground_station_id="42",
-        demoddata=[{"payload_demod": "414243"}, {"payload_demod": "not-hex"}],
+        demoddata=[{"payload_demod": "/good.txt"}, {"payload_demod": "/bad.txt"}],
     )
 
     frames, invalid_lines = connector.extract_frames(observation)
@@ -116,24 +173,59 @@ def test_extract_frames_collects_invalid_hex_without_aborting() -> None:
     assert invalid_lines[0]["frame_index"] == 1
 
 
-def test_list_recent_observations_accepts_list_payload() -> None:
-    class FakeClient:
-        def get(self, url, params=None, headers=None):
-            class Response:
-                def raise_for_status(self):
-                    return None
+def test_list_recent_observations_uses_status_filter_and_link_header() -> None:
+    seen: dict[str, object] = {}
 
-                def json(self):
-                    return [{"id": 1}, {"id": 2}]
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(
+            200,
+            json=[{"id": 1}, {"id": 2}],
+            headers={
+                "Link": '<https://network.satnogs.org/api/observations/?cursor=abc&status=good>; rel="next"',
+            },
+        )
 
-            return Response()
+    config = load_config("satnogs_adapter/config.example.yaml")
+    connector = SatnogsNetworkConnector(
+        config.satnogs,
+        norad_id=config.vehicle.norad_id,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
 
-    connector = SatnogsNetworkConnector(load_config("satnogs_adapter/config.example.yaml").satnogs_network, client=FakeClient())
+    observation_page = connector.list_recent_observations()
 
-    page = connector.list_recent_observations()
+    assert [item["id"] for item in observation_page.results] == [1, 2]
+    assert observation_page.next_url == "https://network.satnogs.org/api/observations/?cursor=abc&status=good"
+    assert seen["params"]["satellite__norad_cat_id"] == "62391"
+    assert seen["params"]["transmitter_uuid"] == "C3RnLSSuaKzWhHrtJCqUgu"
+    assert seen["params"]["status"] == "good"
+    assert "page" not in seen["params"]
+    assert "cursor" not in seen["params"]
+    assert "vetted_status" not in seen["params"]
+    assert "start" not in seen["params"]
+    assert "end" not in seen["params"]
 
-    assert [item["id"] for item in page["results"]] == [1, 2]
-    assert page["next"] is None
+
+def test_list_recent_observations_follows_next_link_without_reapplying_params() -> None:
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, json=[{"id": 3}])
+
+    config = load_config("satnogs_adapter/config.example.yaml")
+    connector = SatnogsNetworkConnector(
+        config.satnogs,
+        norad_id=config.vehicle.norad_id,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    observation_page = connector.list_recent_observations(next_url="https://network.satnogs.org/api/observations/?cursor=abc&status=good")
+
+    assert [item["id"] for item in observation_page.results] == [3]
+    assert seen_urls == ["https://network.satnogs.org/api/observations/?cursor=abc&status=good"]
 
 
 def test_ax25_and_aprs_decode_position_payload() -> None:
@@ -158,6 +250,7 @@ def test_mapper_emits_stable_and_dynamic_events() -> None:
     observation = ObservationRecord(
         observation_id="obs-1",
         satellite_norad_cat_id=25544,
+        transmitter_uuid="tx-uuid",
         start_time="2026-04-01T00:00:00Z",
         end_time="2026-04-01T00:01:00Z",
         ground_station_id="42",
@@ -177,8 +270,10 @@ def test_mapper_emits_stable_and_dynamic_events() -> None:
     dynamic = next(event for event in events if event.channel_name is None and event.tags and event.tags["field_name"] == "temp")
     assert stable.tags is not None
     assert "decoder" not in stable.tags
+    assert "satnogs.transmitter_uuid" not in stable.tags
     assert dynamic.tags is not None
     assert dynamic.tags["decoder"] == "aprs"
+    assert "satnogs.transmitter_uuid" not in dynamic.tags
 
 
 def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path: Path) -> None:
@@ -189,8 +284,20 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
     dlq = FilesystemDlq(config.dlq.root_dir)
 
     class FakeNetworkConnector:
-        def list_recent_observations(self, *, cursor=None, now=None):
-            return {"results": [{"id": 123, "status": "good", "demoddata": "414243"}], "next": None}
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            if next_url is None:
+                return ObservationPage(
+                    results=[
+                        {
+                            "id": 123,
+                            "status": "good",
+                            "satellite__norad_cat_id": 62391,
+                            "transmitter_uuid": "C3RnLSSuaKzWhHrtJCqUgu",
+                            "demoddata": "414243",
+                        }
+                    ]
+                )
+            return ObservationPage(results=[])
 
         def is_eligible_observation(self, payload):
             return True
@@ -201,7 +308,8 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
         def normalize_observation(self, payload):
             return ObservationRecord(
                 observation_id=str(payload["id"]),
-                satellite_norad_cat_id=25544,
+                satellite_norad_cat_id=62391,
+                transmitter_uuid="C3RnLSSuaKzWhHrtJCqUgu",
                 start_time="2026-04-01T00:00:00Z",
                 end_time="2026-04-01T00:01:00Z",
                 ground_station_id=None,
@@ -212,10 +320,6 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
         def extract_frames(self, observation, *, source="satnogs_network"):
             raise AssertionError("frames should not be extracted without ground_station_id")
 
-    class FakeBackfillConnector:
-        def iter_frames(self, *, norad_cat_id):
-            return []
-
     class FakePublisher:
         def publish(self, events, *, context):
             raise AssertionError("publisher should not be called")
@@ -223,7 +327,6 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
     runner = AdapterRunner(
         config,
         network_connector=FakeNetworkConnector(),
-        backfill_connector=FakeBackfillConnector(),
         publisher=FakePublisher(),
         checkpoint_store=checkpoint_store,
         dlq=dlq,
@@ -236,6 +339,117 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
     assert len(observation_dlq) == 1
     payload = json.loads(observation_dlq[0].read_text(encoding="utf-8"))
     assert payload["reason"] == "missing_ground_station_id"
+
+
+def test_runner_uses_link_pagination_and_observation_id_dedupe(tmp_path: Path) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.checkpoints.path = str(tmp_path / "checkpoints.json")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    checkpoint_store = FileCheckpointStore(config.checkpoints.path)
+    checkpoint_store.mark_processed_observation("obs-1")
+    dlq = FilesystemDlq(config.dlq.root_dir)
+    next_urls_seen: list[str | None] = []
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            next_urls_seen.append(next_url)
+            if next_url is None:
+                return ObservationPage(
+                    results=[
+                        {
+                            "id": "obs-1",
+                            "status": "good",
+                            "satellite__norad_cat_id": 62391,
+                            "transmitter_uuid": "C3RnLSSuaKzWhHrtJCqUgu",
+                            "demoddata": [{"payload_demod": "/frame.txt"}],
+                            "ground_station_id": "42",
+                        }
+                    ],
+                    next_url="https://network.satnogs.org/api/observations/?cursor=abc",
+                )
+            if next_url == "https://network.satnogs.org/api/observations/?cursor=abc":
+                return ObservationPage(
+                    results=[
+                        {
+                            "id": "obs-1",
+                            "status": "good",
+                            "satellite__norad_cat_id": 62391,
+                            "transmitter_uuid": "C3RnLSSuaKzWhHrtJCqUgu",
+                            "demoddata": [{"payload_demod": "/frame.txt"}],
+                            "ground_station_id": "42",
+                        }
+                    ]
+                )
+            raise AssertionError(f"unexpected next_url={next_url}")
+
+        def is_eligible_observation(self, payload):
+            raise AssertionError("processed observations should be deduped before eligibility checks")
+
+    class FakePublisher:
+        def publish(self, events, *, context):
+            raise AssertionError("publisher should not be called for processed observations")
+
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=FakePublisher(),
+        checkpoint_store=checkpoint_store,
+        dlq=dlq,
+        source_id="source-uuid",
+    )
+
+    runner.run_live_once()
+
+    assert next_urls_seen == [None, "https://network.satnogs.org/api/observations/?cursor=abc"]
+    assert checkpoint_store.is_processed_observation("obs-1")
+
+
+def test_backfill_uses_linked_observations_with_configured_bounds(tmp_path: Path) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.backfill.enabled = True
+    config.backfill.start_time = "2026-04-01T00:00:00Z"
+    config.backfill.end_time = "2026-04-02T00:00:00Z"
+    config.checkpoints.path = str(tmp_path / "checkpoints.json")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    seen: list[tuple[str | None, str | None, str | None]] = []
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            seen.append((next_url, start_time, end_time))
+            if next_url is None:
+                return ObservationPage(results=[], next_url=None)
+            raise AssertionError("backfill should stop on the empty first page")
+
+    class FakePublisher:
+        def publish(self, events, *, context):
+            raise AssertionError("publisher should not be called")
+
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=FakePublisher(),
+        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        dlq=FilesystemDlq(config.dlq.root_dir),
+        source_id="source-uuid",
+    )
+
+    runner.run_backfill_once()
+
+    assert seen == [(None, "2026-04-01T00:00:00Z", "2026-04-02T00:00:00Z")]
+
+
+def test_satnogs_connector_rejects_mismatched_status() -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id)
+
+    assert connector.is_eligible_observation(
+        {
+            "id": "obs-1",
+            "satellite__norad_cat_id": 62391,
+            "transmitter_uuid": "C3RnLSSuaKzWhHrtJCqUgu",
+            "status": "bad",
+        }
+    ) is False
 
 
 def test_publisher_retries_timeout_then_succeeds(tmp_path: Path) -> None:
@@ -292,11 +506,11 @@ def test_source_resolver_posts_vehicle_request_and_parses_response() -> None:
             200,
             json={
                 "id": "resolved-source",
-                "name": "International Space Station",
+                "name": "LASARSAT",
                 "description": None,
                 "source_type": "vehicle",
                 "base_url": None,
-                "vehicle_config_path": "vehicles/iss.yaml",
+                "vehicle_config_path": "vehicles/lasarsat.yaml",
                 "created": False,
             },
         )
@@ -315,9 +529,9 @@ def test_source_resolver_posts_vehicle_request_and_parses_response() -> None:
     assert source.created is False
     assert seen["json"] == {
         "source_type": "vehicle",
-        "name": "International Space Station",
-        "description": "Auto-resolved from vehicle configuration: vehicles/iss.yaml",
-        "vehicle_config_path": "vehicles/iss.yaml",
+        "name": "LASARSAT",
+        "description": "Auto-resolved from vehicle configuration: vehicles/lasarsat.yaml",
+        "vehicle_config_path": "vehicles/lasarsat.yaml",
     }
 
 

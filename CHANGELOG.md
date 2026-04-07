@@ -9,13 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **ISS SatNOGS adapter service** — Added a compose-managed `satnogs-adapter` service that polls SatNOGS observations, decodes AX.25/APRS telemetry, maps stable and dynamic numeric fields, and publishes batched realtime ingest events for an ISS vehicle source registered in the backend.
-- **ISS vehicle configuration** — Added `vehicle-configurations/vehicles/iss.yaml` with stable ISS position/speed channels, a position mapping, and ingestion-side stable field mappings for the SatNOGS adapter.
+- **SatNOGS adapter service** — Added a compose-managed `satnogs-adapter` service that polls SatNOGS observations, decodes AX.25/APRS telemetry, maps stable and dynamic numeric fields, and publishes batched realtime ingest events for a vehicle source registered in the backend.
+- **SatNOGS vehicle configuration** — Added the LASARSAT vehicle configuration used by the adapter example pair.
 - **Startup source auto-registration** — The backend now scans valid vehicle configuration files during startup and auto-registers missing config-backed telemetry sources through the existing source creation and metadata seeding path. Already-registered sources are left alone, invalid configs are skipped without aborting startup, and non-built-in simulator configs remain skipped unless a valid simulator `base_url` is already known.
 - **Vehicle source resolution endpoint** — Added `POST /telemetry/sources/resolve` so vehicle adapters can resolve or create a canonical backend source from `vehicle_config_path` during startup, then publish telemetry with the existing ingest contract.
 
 ### Changed
 
+- **SatNOGS adapter satellite/transmitter identity** — The adapter now requires `vehicle.norad_id`, `satnogs.transmitter_uuid`, and `satnogs.status`, queries observations with `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, deduplicates by SatNOGS observation ID, and keeps transmitter UUID out of backend ingest payloads and tags.
 - **SatNOGS adapter source identity** — The adapter now resolves its backend vehicle source automatically at startup through `platform.source_resolve_url`. `platform.source_id` remains available as an override, but normal operation no longer requires copying backend UUIDs into YAML.
 - **Vehicle configuration workspace layout** — The Vehicle Configurations page now uses a full-screen split workspace instead of a centered card layout. A VS Code-style explorer on the left derives folders from `VEHICLE_CONFIGURATION_PATH`, the editor fills the right pane, the divider is resizable, the toolbar separates title/actions from file-summary badges, and validate/save notices appear centered over the editor.
 - **Runtime identity contract cleanup** — Runtime telemetry APIs now use `source_id + stream_id` consistently across ingest, telemetry, realtime, and ops. `run` / `run_id` compatibility routes and wrappers were removed, explicit `stream_id` is authoritative at route boundaries, and the frontend now carries `stream_id` instead of `run_id` in telemetry detail links and queries.

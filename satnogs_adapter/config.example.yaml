@@ -4,26 +4,19 @@ platform:
   # source_id: "00000000-0000-0000-0000-000000000000"  # optional override; normally omitted
 
 vehicle:
-  slug: "iss"
-  name: "International Space Station"
-  norad_cat_id: 25544
+  slug: "lasarsat"
+  name: "LASARSAT"
+  norad_id: 62391
   allowed_source_callsigns:
-    - "NA1SS"
-    - "RS0ISS"
-  vehicle_config_path: "vehicles/iss.yaml"
+    - "OK0LSR"
+  vehicle_config_path: "vehicles/lasarsat.yaml"
 
-satnogs_network:
+satnogs:
   base_url: "https://network.satnogs.org"
   api_token: ""
+  transmitter_uuid: "C3RnLSSuaKzWhHrtJCqUgu"
+  status: "good"
   poll_interval_seconds: 60
-  lookback_window_minutes: 180
-  filters:
-    satellite_norad_cat_id: 25544
-    ground_station_allowlist: []
-    status_allowlist: []
-  pagination:
-    cursor_persistence_enabled: true
-    max_pages_per_cycle: 5
   download:
     max_concurrent_observation_fetches: 2
     max_concurrent_artifact_downloads: 2
