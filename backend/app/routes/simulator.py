@@ -18,7 +18,6 @@ from app.services.source_stream_service import (
     clear_active_stream,
     register_stream,
 )
-from telemetry_catalog.definitions import resolve_source_id_alias
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -26,8 +25,7 @@ logger = logging.getLogger(__name__)
 
 def _resolve_simulator_url(db: Session, source_id: str) -> str:
     """Resolve simulator base URL from DB. Raises 404 if not found or not a simulator."""
-    resolved_source_id = resolve_source_id_alias(source_id) or source_id
-    src = db.get(TelemetrySource, resolved_source_id)
+    src = db.get(TelemetrySource, source_id)
     if not src:
         raise HTTPException(status_code=404, detail="Source not found")
     if src.source_type != "simulator":
@@ -39,8 +37,7 @@ def _resolve_simulator_url(db: Session, source_id: str) -> str:
 
 def _resolve_simulator_source(db: Session, source_id: str) -> TelemetrySource:
     """Return canonical simulator row or raise HTTPException."""
-    resolved_source_id = resolve_source_id_alias(source_id) or source_id
-    src = db.get(TelemetrySource, resolved_source_id)
+    src = db.get(TelemetrySource, source_id)
     if not src or src.source_type != "simulator":
         raise HTTPException(status_code=404, detail="Simulator source not found")
     return src
@@ -131,7 +128,7 @@ async def simulator_status(
     """Get simulator state and config. Always returns 200; use 'connected' to detect reachability."""
     if vehicle_id is None:
         raise HTTPException(status_code=400, detail="vehicle_id is required")
-    resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
+    resolved_source_id = vehicle_id
     try:
         base_url = _resolve_with_audit(db, resolved_source_id, "status")
         payload = await _proxy_get(base_url, "/status")
@@ -199,7 +196,7 @@ async def simulator_start(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """Start the simulator with given config."""
-    resolved_source_id = resolve_source_id_alias(config.vehicle_id) or config.vehicle_id
+    resolved_source_id = config.vehicle_id
     src = _resolve_simulator_source(db, resolved_source_id)
     base_url = _resolve_with_audit(db, resolved_source_id, "start")
     audit_log(
@@ -291,7 +288,7 @@ async def simulator_pause(
     """Pause the simulator."""
     if vehicle_id is None:
         raise HTTPException(status_code=400, detail="vehicle_id is required")
-    resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
+    resolved_source_id = vehicle_id
     base_url = _resolve_with_audit(db, resolved_source_id, "pause")
     try:
         result = await _proxy_post(base_url, "/pause")
@@ -318,7 +315,7 @@ async def simulator_resume(
     """Resume the simulator."""
     if vehicle_id is None:
         raise HTTPException(status_code=400, detail="vehicle_id is required")
-    resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
+    resolved_source_id = vehicle_id
     base_url = _resolve_with_audit(db, resolved_source_id, "resume")
     try:
         result = await _proxy_post(base_url, "/resume")
@@ -345,7 +342,7 @@ async def simulator_stop(
     """Stop the simulator."""
     if vehicle_id is None:
         raise HTTPException(status_code=400, detail="vehicle_id is required")
-    resolved_source_id = resolve_source_id_alias(vehicle_id) or vehicle_id
+    resolved_source_id = vehicle_id
     base_url = _resolve_with_audit(db, resolved_source_id, "stop")
     try:
         result = await _proxy_post(base_url, "/stop")

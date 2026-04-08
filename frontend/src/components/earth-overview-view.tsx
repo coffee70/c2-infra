@@ -65,7 +65,7 @@ interface TelemetrySource {
 
 interface EarthOverviewViewProps {
   sources: TelemetrySource[];
-  initialSelectedSourceId: string;
+  initialSelectedSourceId?: string;
   variant?: "panel" | "background";
 }
 
@@ -89,7 +89,7 @@ export function EarthOverviewView({
   initialSelectedSourceId,
 }: EarthOverviewViewProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
-    const fallback = sources.some((s) => s.id === initialSelectedSourceId)
+    const fallback = initialSelectedSourceId && sources.some((s) => s.id === initialSelectedSourceId)
       ? [initialSelectedSourceId]
       : sources.map((s) => s.id);
     if (typeof window === "undefined") return fallback;

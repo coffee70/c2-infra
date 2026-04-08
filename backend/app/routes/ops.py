@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.database import get_db
 from app.realtime.feed_health import get_feed_health_tracker
@@ -14,7 +14,7 @@ router = APIRouter()
 
 
 @router.get("/feed-status")
-def get_feed_status(source_id: str = "default"):
+def get_feed_status(source_id: str = Query(...)):
     """Get feed health status for a source."""
     status = get_feed_health_tracker().get_status(source_id)
     return {
@@ -29,7 +29,7 @@ def get_feed_status(source_id: str = "default"):
 
 @router.get("/events", response_model=OpsEventsResponse)
 def get_timeline_events(
-    source_id: str = "default",
+    source_id: str = Query(...),
     stream_id: Optional[str] = None,
     since_minutes: int = 60,
     until_minutes: Optional[int] = None,

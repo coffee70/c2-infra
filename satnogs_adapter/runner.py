@@ -92,6 +92,13 @@ class AdapterRunner:
             )
             if not result.success:
                 logger.warning("SatNOGS observation sync failed: status=%s body=%s", result.status_code, result.response_body)
+            else:
+                logger.info(
+                    "Synced SatNOGS upcoming observations: source_id=%s count=%s status=%s",
+                    self.mapper.source_id,
+                    len(observations),
+                    result.status_code,
+                )
         except SatnogsRateLimitError as exc:
             logger.warning("SatNOGS observation sync throttled; retry after %ss", exc.retry_after_seconds)
         except Exception:
@@ -160,7 +167,13 @@ class AdapterRunner:
                 return
             results = observation_page.results
             if not results:
+                logger.info("SatNOGS observation poll returned no results")
                 return
+            logger.info(
+                "SatNOGS observation poll returned page: count=%s has_next=%s",
+                len(results),
+                bool(observation_page.next_url),
+            )
             for raw_observation in results:
                 if max_observations is not None and observations_seen >= max_observations:
                     return
@@ -188,6 +201,7 @@ class AdapterRunner:
     def _process_observation_payload(self, raw_observation: dict[str, object]) -> None:
         observation_id = str(raw_observation.get("id"))
         if self.checkpoint_store.is_processed_observation(observation_id):
+            logger.info("Skipping already-processed observation %s", observation_id)
             return
         if not self.network_connector.is_eligible_observation(raw_observation):
             logger.info("Skipping non-eligible observation %s", observation_id)
@@ -204,14 +218,23 @@ class AdapterRunner:
             logger.info("Skipping observation %s without demoddata", observation_id)
             return
         if observation.ground_station_id is None:
+            logger.warning("Skipping observation %s without ground_station_id", observation_id)
             self._write_observation_dlq("missing_ground_station_id", observation)
             return
 
         try:
             frames, invalid_lines = self.network_connector.extract_frames(observation)
         except (binascii.Error, ValueError) as exc:
+            logger.warning("Frame extraction failed for observation %s: %r", observation.observation_id, exc)
             self._write_observation_dlq("frame_extraction_failed", observation, extra={"error": repr(exc)})
             return
+        logger.info(
+            "Extracted SatNOGS frames: observation_id=%s ground_station_id=%s frames=%s invalid_lines=%s",
+            observation.observation_id,
+            observation.ground_station_id,
+            len(frames),
+            len(invalid_lines),
+        )
         for item in invalid_lines:
             self.dlq.write(
                 "frame",
@@ -224,6 +247,7 @@ class AdapterRunner:
             )
 
         if not frames:
+            logger.info("No frames extracted for observation %s", observation.observation_id)
             return
 
         self._process_frames(observation, frames)
@@ -257,13 +281,21 @@ class AdapterRunner:
         batch: list[TelemetryEvent] = []
         batch_last_frame_index = resume_index
         sequence_seed = int(self.checkpoint_store.get(f"observation:{observation.observation_id}:sequence", 0))
+        skipped_non_originated = 0
+        failed_ax25_decode = 0
+        failed_aprs_decode = 0
+        mapped_frame_count = 0
+        mapped_event_count = 0
+        skipped_published_frame_count = 0
 
         for frame in frames:
             if frame.frame_index <= resume_index:
+                skipped_published_frame_count += 1
                 continue
             try:
                 ax25 = parse_ax25_frame(frame.frame_bytes)
             except ValueError as exc:
+                failed_ax25_decode += 1
                 self.dlq.write(
                     "frame",
                     {
@@ -278,11 +310,13 @@ class AdapterRunner:
                 continue
 
             if not self.mapper.is_originated_packet(ax25):
+                skipped_non_originated += 1
                 continue
 
             try:
                 aprs = parse_aprs_payload(ax25.info_bytes)
             except ValueError as exc:
+                failed_aprs_decode += 1
                 self.dlq.write(
                     "frame",
                     {
@@ -306,6 +340,8 @@ class AdapterRunner:
             if not frame_events:
                 continue
 
+            mapped_frame_count += 1
+            mapped_event_count += len(frame_events)
             sequence_seed = frame_events[-1].sequence or sequence_seed
             batch.extend(frame_events)
             batch_last_frame_index = frame.frame_index
@@ -317,6 +353,18 @@ class AdapterRunner:
 
         if batch and not self._flush_batch(batch, observation=observation, last_frame_index=batch_last_frame_index):
             return
+
+        logger.info(
+            "Processed SatNOGS frames: observation_id=%s total_frames=%s mapped_frames=%s mapped_events=%s skipped_already_published=%s skipped_non_originated=%s failed_ax25_decode=%s failed_aprs_decode=%s",
+            observation.observation_id,
+            len(frames),
+            mapped_frame_count,
+            mapped_event_count,
+            skipped_published_frame_count,
+            skipped_non_originated,
+            failed_ax25_decode,
+            failed_aprs_decode,
+        )
 
         self.checkpoint_store.mark_processed_observation(observation.observation_id)
         self.checkpoint_store.pop(partial_key)
@@ -333,7 +381,25 @@ class AdapterRunner:
             },
         )
         if not result.success:
+            logger.warning(
+                "Failed publishing SatNOGS telemetry batch: observation_id=%s stream_id=%s events=%s last_frame_index=%s status=%s body=%s",
+                observation.observation_id,
+                self.mapper.stream_id_for_observation(observation),
+                len(batch),
+                last_frame_index,
+                result.status_code,
+                result.response_body,
+            )
             return False
+        logger.info(
+            "Published SatNOGS telemetry batch: observation_id=%s stream_id=%s events=%s last_frame_index=%s status=%s attempts=%s",
+            observation.observation_id,
+            self.mapper.stream_id_for_observation(observation),
+            len(batch),
+            last_frame_index,
+            result.status_code,
+            result.attempts,
+        )
         self.checkpoint_store.set(
             f"observation:{observation.observation_id}:last_published_frame_index",
             last_frame_index,

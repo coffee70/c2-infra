@@ -36,7 +36,6 @@ class TelemetryMetadata(Base):
         ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
-        default="default",
     )
     name: Mapped[str] = mapped_column(Text, index=True, nullable=False)
     units: Mapped[str] = mapped_column(Text, nullable=False)
@@ -158,7 +157,6 @@ class WatchlistEntry(Base):
         ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
-        default="default",
     )
     telemetry_name: Mapped[str] = mapped_column(Text, index=True, nullable=False)
     display_order: Mapped[int] = mapped_column(nullable=False)

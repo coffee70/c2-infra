@@ -116,11 +116,11 @@ def _install_lifespan_dependencies(monkeypatch, realtime_service_module) -> None
     )
 
 
-def test_lifespan_runs_bootstrap_then_auto_register(monkeypatch) -> None:
+def test_lifespan_runs_repair_then_auto_register(monkeypatch) -> None:
     calls: list[object] = []
     provider = object()
     realtime_service_module = SimpleNamespace(
-        bootstrap_builtin_sources=lambda session: calls.append(("bootstrap", session)) or [],
+        repair_registered_sources_on_startup=lambda session: calls.append(("repair", session)) or [],
         auto_register_sources_from_configs=lambda session, embedding_provider: calls.append(
             ("auto_register", session, embedding_provider)
         )
@@ -140,7 +140,7 @@ def test_lifespan_runs_bootstrap_then_auto_register(monkeypatch) -> None:
 
     asyncio.run(run_lifespan())
 
-    assert [call[0] for call in calls] == ["bootstrap", "auto_register"]
+    assert [call[0] for call in calls] == ["repair", "auto_register"]
     assert calls[1][2] is provider
 
 
@@ -148,7 +148,7 @@ def test_lifespan_skips_auto_register_when_embedding_provider_init_fails(monkeyp
     bootstrap = MagicMock(return_value=[])
     auto_register = MagicMock()
     realtime_service_module = SimpleNamespace(
-        bootstrap_builtin_sources=bootstrap,
+        repair_registered_sources_on_startup=bootstrap,
         auto_register_sources_from_configs=auto_register,
         refresh_source_embeddings=lambda *args, **kwargs: None,
     )

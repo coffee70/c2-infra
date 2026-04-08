@@ -17,9 +17,6 @@ import httpx
 from satnogs_adapter.config import SatnogsConfig
 from satnogs_adapter.models import FrameRecord, ObservationRecord
 
-HEX_RE = re.compile(r"[^0-9A-Fa-f]")
-
-
 @dataclass(frozen=True, slots=True)
 class ObservationPage:
     results: list[dict[str, Any]]
@@ -214,11 +211,33 @@ class SatnogsNetworkConnector:
                 refs.append(payload[key])
         return refs
 
-    def _download_artifact_text(self, url: str) -> str:
+    def _download_artifact_lines(self, url: str) -> list[str | bytes]:
         artifact_url = url if url.startswith("http://") or url.startswith("https://") else urljoin(self.config.base_url.rstrip("/") + "/", url.lstrip("/"))
         response = self.client.get(artifact_url, headers=self._headers())
         response.raise_for_status()
-        return response.text
+        content = getattr(response, "content", None)
+        if content is None:
+            return [line for line in response.text.splitlines() if line.strip()]
+        return [line for line in content.splitlines() if line.strip()]
+
+    def _decode_frame_line(self, raw_line: str | bytes) -> tuple[bytes | None, str, str | None]:
+        if isinstance(raw_line, bytes):
+            stripped = raw_line.strip()
+            raw_display = stripped.decode("utf-8", errors="replace")
+            if not stripped:
+                return None, raw_display, None
+            return stripped, raw_display, None
+
+        stripped_text = raw_line.strip()
+        if not stripped_text:
+            return None, stripped_text, None
+        compact_hex = "".join(stripped_text.split())
+        if compact_hex and len(compact_hex) % 2 == 0 and re.fullmatch(r"[0-9A-Fa-f]+", compact_hex):
+            try:
+                return binascii.unhexlify(compact_hex), stripped_text, None
+            except binascii.Error as exc:
+                return None, stripped_text, repr(exc)
+        return None, stripped_text, "line is not hex-encoded"
 
     def extract_frames(
         self,
@@ -226,7 +245,7 @@ class SatnogsNetworkConnector:
         *,
         source: str = "satnogs_network",
     ) -> tuple[list[FrameRecord], list[dict[str, Any]]]:
-        lines: list[tuple[str, str | None]] = []
+        lines: list[tuple[str | bytes, str | None]] = []
         demoddata = observation.demoddata
 
         if isinstance(demoddata, str):
@@ -245,25 +264,21 @@ class SatnogsNetworkConnector:
                         continue
                     payload_demod = item.get("payload_demod")
                     if isinstance(payload_demod, str) and payload_demod.strip():
-                        for downloaded_line in self._download_artifact_text(payload_demod).splitlines():
-                            if downloaded_line.strip():
-                                lines.append((downloaded_line, _stringify(item.get("timestamp") or item.get("time"))))
+                        for downloaded_line in self._download_artifact_lines(payload_demod):
+                            lines.append((downloaded_line, _stringify(item.get("timestamp") or item.get("time"))))
         elif demoddata is None and observation.artifact_refs:
             for ref in observation.artifact_refs:
-                for raw_line in self._download_artifact_text(ref).splitlines():
-                    if raw_line.strip():
-                        lines.append((raw_line, None))
+                for raw_line in self._download_artifact_lines(ref):
+                    lines.append((raw_line, None))
 
         frames: list[FrameRecord] = []
         invalid_lines: list[dict[str, Any]] = []
         for index, (raw_line, explicit_time) in enumerate(lines):
-            clean_hex = HEX_RE.sub("", raw_line)
-            if not clean_hex:
+            frame_bytes, raw_display, error = self._decode_frame_line(raw_line)
+            if error is not None:
+                invalid_lines.append({"frame_index": index, "raw_line": raw_display, "error": error})
                 continue
-            try:
-                frame_bytes = binascii.unhexlify(clean_hex)
-            except binascii.Error as exc:
-                invalid_lines.append({"frame_index": index, "raw_line": raw_line, "error": repr(exc)})
+            if not frame_bytes:
                 continue
             frames.append(
                 FrameRecord(
@@ -273,7 +288,7 @@ class SatnogsNetworkConnector:
                     ground_station_id=observation.ground_station_id,
                     source=source,
                     frame_index=index,
-                    raw_line=raw_line,
+                    raw_line=raw_display,
                 )
             )
         return frames, invalid_lines

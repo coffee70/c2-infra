@@ -21,7 +21,9 @@ from app.services.source_stream_service import (
     resolve_active_stream_id,
     resolve_latest_stream_id,
 )
-from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID
+
+
+DROGONSAT_SOURCE_ID = "test-drogonsat-source"
 
 
 class _EmptyResult:
@@ -72,8 +74,8 @@ class _HttpxClient:
         return self._response
 
 
-def test_normalize_source_id_resolves_known_alias() -> None:
-    assert normalize_source_id("simulator") == DROGONSAT_SOURCE_ID
+def test_normalize_source_id_keeps_source_id_exact() -> None:
+    assert normalize_source_id("simulator") == "simulator"
 
 
 def test_resolve_active_stream_id_uses_simulator_status(monkeypatch) -> None:

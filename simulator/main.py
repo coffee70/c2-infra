@@ -16,8 +16,9 @@ app = FastAPI(title="Telemetry Simulator", version="1.0.0")
 
 _streamer: TelemetryStreamer | None = None
 
-# Default vehicle_id sent by callers when they want a unique stream; we replace it with a per-run stream ID.
-DEFAULT_VEHICLE_ID = os.environ.get("SIMULATOR_SOURCE_ID") or "simulator"
+# Optional vehicle_id for standalone simulator starts. Backend-managed starts pass
+# the persisted source id explicitly.
+DEFAULT_VEHICLE_ID = os.environ.get("SIMULATOR_SOURCE_ID") or ""
 
 
 def _supported_scenarios_payload() -> list[dict[str, str]]:

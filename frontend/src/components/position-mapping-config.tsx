@@ -49,7 +49,7 @@ export function PositionMappingConfig({ sources }: PositionMappingConfigProps) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const telemetryListQuery = useTelemetryListQuery(selectedSourceId ?? "default", open);
+  const telemetryListQuery = useTelemetryListQuery(selectedSourceId ?? "", open && !!selectedSourceId);
   const allNames = (telemetryListQuery.data ?? []).map((channel) => channel.name);
 
   const currentSource = useMemo(

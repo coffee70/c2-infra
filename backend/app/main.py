@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     from app.services.ops_events_service import write_event as write_ops_event
     from app.services.realtime_service import (
         auto_register_sources_from_configs,
-        bootstrap_builtin_sources,
+        repair_registered_sources_on_startup,
         refresh_source_embeddings,
     )
 
@@ -79,11 +79,8 @@ async def lifespan(app: FastAPI):
     bus.subscribe_alerts(on_alert)
 
     bootstrap_session = get_session_factory()()
-    created_builtin_source_ids: list[str] = []
     try:
-        created_builtin_source_ids = bootstrap_builtin_sources(
-            bootstrap_session,
-        )
+        repaired_source_ids = repair_registered_sources_on_startup(bootstrap_session)
         try:
             from app.services.embedding_service import SentenceTransformerEmbeddingProvider
 
@@ -96,8 +93,8 @@ async def lifespan(app: FastAPI):
     finally:
         bootstrap_session.close()
 
-    async def backfill_builtin_embeddings():
-        if not created_builtin_source_ids:
+    async def backfill_repaired_source_embeddings():
+        if not repaired_source_ids:
             return
         def run_backfill_sync() -> None:
             session = get_session_factory()()
@@ -106,18 +103,18 @@ async def lifespan(app: FastAPI):
 
                 refresh_source_embeddings(
                     session,
-                    source_ids=created_builtin_source_ids,
+                    source_ids=repaired_source_ids,
                     embedding_provider=SentenceTransformerEmbeddingProvider(),
                 )
             except Exception as e:
-                logger.exception("Failed to backfill built-in embeddings after startup: %s", e)
+                logger.exception("Failed to backfill repaired source embeddings after startup: %s", e)
                 session.rollback()
             finally:
                 session.close()
 
         await asyncio.to_thread(run_backfill_sync)
 
-    embedding_backfill_task = asyncio.create_task(backfill_builtin_embeddings())
+    embedding_backfill_task = asyncio.create_task(backfill_repaired_source_embeddings())
 
     async def broadcast_feed_status_periodically():
         while True:

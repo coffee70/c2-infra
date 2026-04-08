@@ -255,7 +255,10 @@ async def websocket_realtime(websocket: WebSocket) -> None:
 
             elif msg_type == "subscribe_watchlist":
                 channels = msg.get("channels", [])
-                source_id = msg.get("source_id", "default")
+                source_id = msg.get("source_id")
+                if not source_id:
+                    await websocket.send_text(json.dumps({"error": "source_id required"}))
+                    continue
                 stream_id = msg.get("stream_id")
                 snapshot_stream_id = _resolve_requested_stream_id(session_factory, source_id, stream_id)
                 if not channels:
@@ -320,7 +323,10 @@ async def websocket_realtime(websocket: WebSocket) -> None:
 
             elif msg_type == "subscribe_channel":
                 name = msg.get("name", "")
-                source_id = msg.get("source_id", "default")
+                source_id = msg.get("source_id")
+                if not source_id:
+                    await websocket.send_text(json.dumps({"error": "source_id required"}))
+                    continue
                 stream_id = msg.get("stream_id")
                 snapshot_stream_id = _resolve_requested_stream_id(session_factory, source_id, stream_id)
                 if name:
@@ -347,7 +353,10 @@ async def websocket_realtime(websocket: WebSocket) -> None:
                         session.close()
 
             elif msg_type == "subscribe_alerts":
-                source_id = msg.get("source_id", "default")
+                source_id = msg.get("source_id")
+                if not source_id:
+                    await websocket.send_text(json.dumps({"error": "source_id required"}))
+                    continue
                 stream_id = msg.get("stream_id")
                 snapshot_stream_id = _resolve_requested_stream_id(session_factory, source_id, stream_id)
                 await hub.subscribe_alerts(

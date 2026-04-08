@@ -11,8 +11,6 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-from telemetry_catalog.builtins import LEGACY_SOURCE_ID_ALIASES
-
 FrameType = Literal["gps_lla", "ecef", "eci"]
 
 
@@ -85,6 +83,7 @@ class TelemetryIngestionDefinition(BaseModel):
 class VehicleConfigurationFile(BaseModel):
     version: int = 1
     name: str | None = None
+    base_url: str | None = None
     vehicle_profile: VehicleProfileDefinition | None = None
     channels: list[TelemetryChannelDefinition]
     position_mapping: PositionMappingDefinition | None = None
@@ -147,12 +146,6 @@ def vehicle_config_root() -> Path:
     if configured:
         return Path(configured).resolve()
     return (Path(__file__).resolve().parent.parent / "vehicle-configurations").resolve()
-
-
-def resolve_source_id_alias(source_id: str | None) -> str | None:
-    if source_id is None:
-        return None
-    return LEGACY_SOURCE_ID_ALIASES.get(source_id, source_id)
 
 
 def resolve_vehicle_config_path(path_str: str, *, root: Path | None = None) -> Path:

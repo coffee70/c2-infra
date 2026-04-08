@@ -4,7 +4,6 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Sparkline } from "@/components/sparkline";
-import { DEFAULT_SOURCE_ID } from "@/lib/source-ids";
 import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 
 const STALE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
@@ -92,7 +91,7 @@ export function WatchlistCard({
         ? "Statistical anomaly (out of family)"
         : undefined;
 
-  const href = buildTelemetryDetailHref(sourceId || DEFAULT_SOURCE_ID, name);
+  const href = sourceId ? buildTelemetryDetailHref(sourceId, name) : "#";
 
   return (
     <Link

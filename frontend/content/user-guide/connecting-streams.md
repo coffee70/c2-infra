@@ -22,7 +22,7 @@ By default, live Overview and watchlist subscriptions stay **source-scoped**: if
 5. Adjust duration, speed, dropout, and jitter if desired.
 6. Click **Start**.
 
-The simulator posts to the ingest API; the Overview will show live updates and the **Live** badge when connected. Position mapping is now seeded from the vehicle configuration file, so built-in simulators are ready for the Planning globe without a separate mapping step. `DrogonSat` emits GPS/LLA position channels, while `RhaegalSat` emits ECEF XYZ channels. Nominal orbit scenarios keep motion smooth by default, while orbit-analysis edge cases come from the explicit orbit presets—see [Monitoring the Overview](/docs/monitoring-overview#workflow-simulator-on-the-planning-globe).
+The simulator posts to the ingest API; the Overview will show live updates and the **Live** badge when connected. Position mapping is seeded from the vehicle configuration file, so simulator sources with mappings are ready for the Planning globe without a separate mapping step. `DrogonSat` emits GPS/LLA position channels, while `RhaegalSat` emits ECEF XYZ channels. Nominal orbit scenarios keep motion smooth by default, while orbit-analysis edge cases come from the explicit orbit presets—see [Monitoring the Overview](/docs/monitoring-overview#workflow-simulator-on-the-planning-globe).
 
 ## Option B: External Mock Streamer
 
@@ -39,7 +39,7 @@ With anomalies:
 ./scripts/mock_vehicle_streamer.sh --scenario thermal_runaway --duration 90
 ```
 
-The streamer posts to `POST /telemetry/realtime/ingest` with the built-in mock vehicle source id. Its telemetry catalog also comes from a committed vehicle configuration file, so the backend and streamer agree on the expected channels.
+The streamer posts to `POST /telemetry/realtime/ingest` with a registered source id. Its telemetry catalog also comes from a committed vehicle configuration file, so the backend and streamer agree on the expected channels.
 
 ## Option C: SatNOGS Adapter
 

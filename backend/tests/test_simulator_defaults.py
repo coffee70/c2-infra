@@ -9,13 +9,13 @@ def _reload_simulator_main():
     return importlib.import_module("simulator.main")
 
 
-def test_simulator_default_source_id_falls_back_to_stable_alias(monkeypatch) -> None:
+def test_simulator_default_source_id_is_empty_without_env(monkeypatch) -> None:
     monkeypatch.delenv("SIMULATOR_SOURCE_ID", raising=False)
 
     module = _reload_simulator_main()
 
-    assert module.DEFAULT_VEHICLE_ID == "simulator"
-    assert module._generate_stream_id(None).startswith("simulator-")
+    assert module.DEFAULT_VEHICLE_ID == ""
+    assert not module._generate_stream_id(None).startswith("simulator-")
 
 
 def test_simulator_default_source_id_honors_env_override(monkeypatch) -> None:

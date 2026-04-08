@@ -92,4 +92,4 @@ For sources that have a **position mapping** (and thus a position telemetry stre
 
 - **What anomalies mean** — *Escape trajectory*: orbital energy ≥ 0 (unbound). *Suborbital*: velocity < 7 km/s at altitude < 1000 km. *Orbit decay*: predicted perigee below 120 km. *Highly elliptical*: eccentricity > 0.2 for an expected LEO mission. Status updates are pushed in real time over the same WebSocket as telemetry and alerts.
 
-The built-in simulators keep their nominal position telemetry smooth and bounded so Planning trails stay readable. `DrogonSat` exercises GPS/LLA feeds, while `RhaegalSat` exercises ECEF feeds. Orbit-analysis edge cases are exposed as explicit simulator presets instead of random position spikes.
+The local simulator example configs keep nominal position telemetry smooth and bounded so Planning trails stay readable. `DrogonSat` exercises GPS/LLA feeds, while `RhaegalSat` exercises ECEF feeds. Orbit-analysis edge cases are exposed as explicit simulator presets instead of random position spikes.

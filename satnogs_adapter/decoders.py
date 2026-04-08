@@ -16,6 +16,7 @@ POSITION_RE = re.compile(
 COURSE_SPEED_RE = re.compile(r"^(?P<course>\d{3})/(?P<speed>\d{3})")
 ALTITUDE_RE = re.compile(r"/A=(?P<altitude>\d{6})")
 KEY_VALUE_RE = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9_ -]{1,32})\s*[:=]\s*(?P<value>-?\d+(?:\.\d+)?)")
+CSV_PACKET_RE = re.compile(r"(?P<family>[A-Za-z][A-Za-z0-9_]{1,16}),(?P<values>.*)")
 
 
 def _decode_ax25_callsign(chunk: bytes) -> str:
@@ -109,6 +110,19 @@ def parse_aprs_payload(info_bytes: bytes) -> APRSPacket:
         fields.setdefault(key, value)
 
     if not fields:
+        csv_match = CSV_PACKET_RE.search(payload)
+        if csv_match:
+            packet_type = f"csv:{csv_match.group('family').lower()}"
+            family = csv_match.group("family").strip().lower()
+            for index, raw_value in enumerate(csv_match.group("values").split(","), start=1):
+                value_text = raw_value.strip()
+                if not value_text:
+                    continue
+                try:
+                    fields[f"{family}_{index:02d}"] = float(value_text)
+                except ValueError:
+                    continue
+
+    if not fields:
         raise ValueError("APRS payload did not contain numeric telemetry")
     return APRSPacket(packet_type=packet_type, fields=fields, kv_fields=kv_fields, raw_payload=payload)
-

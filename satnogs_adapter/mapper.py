@@ -82,9 +82,10 @@ class TelemetryMapper:
                 continue
 
             event_tags = dict(tags)
+            decoder_name = "lasarsat_csv" if aprs_packet.packet_type.startswith("csv:") else "aprs"
             event_tags.update(
                 {
-                    "decoder": "aprs",
+                    "decoder": decoder_name,
                     "field_name": field_name,
                     "aprs.type": aprs_packet.packet_type,
                     "ax25.src": frame.src_callsign,

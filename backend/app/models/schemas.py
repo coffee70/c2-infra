@@ -20,7 +20,7 @@ class ChannelListItem(BaseModel):
 class TelemetrySchemaCreate(BaseModel):
     """Request body for POST /telemetry/schema."""
 
-    source_id: str = "default"
+    source_id: str
     name: str
     units: str
     description: Optional[str] = None

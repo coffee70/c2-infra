@@ -137,14 +137,14 @@ function downsampleByWidth<T extends { timestamp: string; value: number }>(
 
 export function TrendChartAnalysis({
   channelName,
-  vehicleId = "default",
+  vehicleId,
   streamId = null,
   units,
   bounds,
   lastTimestamp,
 }: {
   channelName: string;
-  vehicleId?: string;
+  vehicleId: string;
   streamId?: string | null;
   units?: string | null;
   bounds?: Bounds;

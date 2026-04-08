@@ -26,13 +26,15 @@ class StatisticsService:
         source_id: Optional[str] = None,
         all_sources: bool = False,
     ) -> int:
-        """Recompute statistics. source_id filters to one source; all_sources recomputes per source when source-aware. Default: single source 'default'."""
+        """Recompute statistics. source_id filters to one source; all_sources recomputes per source."""
         sources_to_process: list[str] = []
         if all_sources:
             stmt = select(TelemetryData.stream_id).distinct()
             sources_to_process = [r[0] for r in self._db.execute(stmt).fetchall()]
         else:
-            sources_to_process = [resolve_latest_stream_id(self._db, source_id or "default")]
+            if source_id is None:
+                raise ValueError("source_id is required unless all_sources=True")
+            sources_to_process = [resolve_latest_stream_id(self._db, source_id)]
 
         count = 0
         for sid in sources_to_process:
@@ -55,7 +57,7 @@ class StatisticsService:
         return count
 
     def _recompute_one(
-        self, telemetry_id, source_id: str = "default"
+        self, telemetry_id, source_id: str
     ) -> None:
         """Compute and upsert statistics for a single telemetry point. source_id filters when telemetry_data is source-aware."""
         data_source_id = normalize_source_id(source_id)

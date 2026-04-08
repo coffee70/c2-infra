@@ -32,12 +32,9 @@ from app.services.source_stream_service import (
 )
 from app.services.vehicle_config_service import list_vehicle_configs, load_vehicle_config
 from app.utils.subsystem import infer_subsystem
-from telemetry_catalog.builtins import BUILT_IN_SOURCES
-from telemetry_catalog.builtins import LEGACY_SOURCE_ID_ALIASES
 from telemetry_catalog.definitions import (
     canonical_vehicle_config_path,
     load_vehicle_config_file,
-    resolve_source_id_alias,
 )
 
 logger = logging.getLogger(__name__)
@@ -675,494 +672,16 @@ def _seed_metadata_for_source(
     return needs_embedding_backfill
 
 
-def _merge_builtin_duplicate_source(
-    db: Session,
-    *,
-    old_source_id: str,
-    new_source_id: str,
-) -> None:
-    """Merge an obsolete built-in source row into the canonical built-in source id."""
-    params = {
-        "old_source_id": old_source_id,
-        "new_source_id": new_source_id,
-    }
-    scope_table = "tmp_builtin_stream_scope"
-
-    _create_stream_scope_table(db, table_name=scope_table, source_id=old_source_id)
-
-    db.execute(text("DROP TABLE IF EXISTS tmp_builtin_meta_map"))
-    db.execute(
-        text(
-            """
-            CREATE TEMP TABLE tmp_builtin_meta_map ON COMMIT DROP AS
-            SELECT
-              old_meta.id AS old_id,
-              COALESCE(new_meta.id, old_meta.id) AS new_id,
-              (new_meta.id IS NOT NULL) AS target_exists
-            FROM telemetry_metadata old_meta
-            LEFT JOIN telemetry_metadata new_meta
-              ON new_meta.source_id = :new_source_id
-             AND new_meta.name = old_meta.name
-            WHERE old_meta.source_id = :old_source_id
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            UPDATE telemetry_metadata AS new_meta
-            SET
-              units = COALESCE(NULLIF(new_meta.units, ''), old_meta.units),
-              description = COALESCE(new_meta.description, old_meta.description),
-              subsystem_tag = COALESCE(new_meta.subsystem_tag, old_meta.subsystem_tag),
-              red_low = COALESCE(new_meta.red_low, old_meta.red_low),
-              red_high = COALESCE(new_meta.red_high, old_meta.red_high),
-              embedding = COALESCE(new_meta.embedding, old_meta.embedding)
-            FROM telemetry_metadata AS old_meta
-            JOIN tmp_builtin_meta_map AS map
-              ON map.old_id = old_meta.id
-             AND map.target_exists
-            WHERE new_meta.id = map.new_id
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            UPDATE telemetry_metadata AS old_meta
-            SET source_id = :new_source_id
-            FROM tmp_builtin_meta_map AS map
-            WHERE old_meta.id = map.old_id
-              AND map.target_exists = FALSE
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            INSERT INTO telemetry_channel_aliases (
-              source_id,
-              alias_name,
-              telemetry_id,
-              created_at
-            )
-            SELECT
-              :new_source_id,
-              tca.alias_name,
-              map.new_id,
-              tca.created_at
-            FROM telemetry_channel_aliases AS tca
-            JOIN tmp_builtin_meta_map AS map
-              ON map.old_id = tca.telemetry_id
-            WHERE tca.source_id = :old_source_id
-            ON CONFLICT (source_id, alias_name) DO UPDATE
-            SET telemetry_id = EXCLUDED.telemetry_id
-            """
-        ),
-        params,
-    )
-    db.execute(
-        text(
-            """
-            DELETE FROM telemetry_channel_aliases
-            WHERE source_id = :old_source_id
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            INSERT INTO telemetry_data (
-              source_id,
-              telemetry_id,
-              timestamp,
-              value,
-              packet_source,
-              receiver_id
-            )
-            SELECT
-              CASE WHEN td.source_id = :old_source_id THEN :new_source_id ELSE td.source_id END,
-              map.new_id,
-              td.timestamp,
-              td.value,
-              td.packet_source,
-              td.receiver_id
-            FROM telemetry_data AS td
-            JOIN tmp_builtin_meta_map AS map
-              ON map.old_id = td.telemetry_id
-            WHERE (
-              td.source_id = :old_source_id
-              OR td.source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-            )
-            ON CONFLICT (source_id, telemetry_id, timestamp) DO NOTHING
-            """
-        ),
-        params,
-    )
-    db.execute(
-        text(
-            """
-            DELETE FROM telemetry_data
-            WHERE (
-              source_id = :old_source_id
-              OR source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-            )
-              AND telemetry_id IN (SELECT old_id FROM tmp_builtin_meta_map)
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            INSERT INTO telemetry_current (
-              source_id,
-              telemetry_id,
-              generation_time,
-              reception_time,
-              value,
-              state,
-              state_reason,
-              z_score,
-              quality,
-              sequence,
-              packet_source,
-              receiver_id
-            )
-            SELECT
-              CASE WHEN tc.source_id = :old_source_id THEN :new_source_id ELSE tc.source_id END,
-              map.new_id,
-              tc.generation_time,
-              tc.reception_time,
-              tc.value,
-              tc.state,
-              tc.state_reason,
-              tc.z_score,
-              tc.quality,
-              tc.sequence,
-              tc.packet_source,
-              tc.receiver_id
-            FROM telemetry_current AS tc
-            JOIN tmp_builtin_meta_map AS map
-              ON map.old_id = tc.telemetry_id
-            WHERE (
-              tc.source_id = :old_source_id
-              OR tc.source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-            )
-            ON CONFLICT (source_id, telemetry_id) DO UPDATE
-            SET
-              generation_time = CASE
-                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
-                  THEN EXCLUDED.generation_time
-                ELSE telemetry_current.generation_time
-              END,
-              reception_time = GREATEST(telemetry_current.reception_time, EXCLUDED.reception_time),
-              value = CASE
-                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
-                  THEN EXCLUDED.value
-                ELSE telemetry_current.value
-              END,
-              state = CASE
-                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
-                  THEN EXCLUDED.state
-                ELSE telemetry_current.state
-              END,
-              state_reason = CASE
-                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
-                  THEN EXCLUDED.state_reason
-                ELSE telemetry_current.state_reason
-              END,
-              z_score = CASE
-                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
-                  THEN EXCLUDED.z_score
-                ELSE telemetry_current.z_score
-              END,
-              quality = CASE
-                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
-                  THEN EXCLUDED.quality
-                ELSE telemetry_current.quality
-              END,
-              sequence = CASE
-                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
-                  THEN EXCLUDED.sequence
-                ELSE telemetry_current.sequence
-              END,
-              packet_source = CASE
-                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
-                  THEN EXCLUDED.packet_source
-                ELSE telemetry_current.packet_source
-              END,
-              receiver_id = CASE
-                WHEN EXCLUDED.reception_time >= telemetry_current.reception_time
-                  THEN EXCLUDED.receiver_id
-                ELSE telemetry_current.receiver_id
-              END
-            """
-        ),
-        params,
-    )
-    db.execute(
-        text(
-            """
-            DELETE FROM telemetry_current
-            WHERE (
-              source_id = :old_source_id
-              OR source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-            )
-              AND telemetry_id IN (SELECT old_id FROM tmp_builtin_meta_map)
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            INSERT INTO telemetry_statistics (
-              source_id,
-              telemetry_id,
-              mean,
-              std_dev,
-              min_value,
-              max_value,
-              p5,
-              p50,
-              p95,
-              n_samples,
-              last_computed_at
-            )
-            SELECT
-              CASE WHEN ts.source_id = :old_source_id THEN :new_source_id ELSE ts.source_id END,
-              map.new_id,
-              ts.mean,
-              ts.std_dev,
-              ts.min_value,
-              ts.max_value,
-              ts.p5,
-              ts.p50,
-              ts.p95,
-              ts.n_samples,
-              ts.last_computed_at
-            FROM telemetry_statistics AS ts
-            JOIN tmp_builtin_meta_map AS map
-              ON map.old_id = ts.telemetry_id
-            WHERE (
-              ts.source_id = :old_source_id
-              OR ts.source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-            )
-            ON CONFLICT (source_id, telemetry_id) DO UPDATE
-            SET
-              mean = CASE
-                WHEN EXCLUDED.last_computed_at >= telemetry_statistics.last_computed_at
-                  THEN EXCLUDED.mean
-                ELSE telemetry_statistics.mean
-              END,
-              std_dev = CASE
-                WHEN EXCLUDED.last_computed_at >= telemetry_statistics.last_computed_at
-                  THEN EXCLUDED.std_dev
-                ELSE telemetry_statistics.std_dev
-              END,
-              min_value = LEAST(telemetry_statistics.min_value, EXCLUDED.min_value),
-              max_value = GREATEST(telemetry_statistics.max_value, EXCLUDED.max_value),
-              p5 = CASE
-                WHEN EXCLUDED.last_computed_at >= telemetry_statistics.last_computed_at
-                  THEN EXCLUDED.p5
-                ELSE telemetry_statistics.p5
-              END,
-              p50 = CASE
-                WHEN EXCLUDED.last_computed_at >= telemetry_statistics.last_computed_at
-                  THEN EXCLUDED.p50
-                ELSE telemetry_statistics.p50
-              END,
-              p95 = CASE
-                WHEN EXCLUDED.last_computed_at >= telemetry_statistics.last_computed_at
-                  THEN EXCLUDED.p95
-                ELSE telemetry_statistics.p95
-              END,
-              n_samples = GREATEST(telemetry_statistics.n_samples, EXCLUDED.n_samples),
-              last_computed_at = GREATEST(
-                telemetry_statistics.last_computed_at,
-                EXCLUDED.last_computed_at
-              )
-            """
-        ),
-        params,
-    )
-    db.execute(
-        text(
-            """
-            DELETE FROM telemetry_statistics
-            WHERE (
-              source_id = :old_source_id
-              OR source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-            )
-              AND telemetry_id IN (SELECT old_id FROM tmp_builtin_meta_map)
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            UPDATE telemetry_alerts AS ta
-            SET
-              source_id = CASE WHEN ta.source_id = :old_source_id THEN :new_source_id ELSE ta.source_id END,
-              telemetry_id = map.new_id
-            FROM tmp_builtin_meta_map AS map
-            WHERE ta.telemetry_id = map.old_id
-              AND (
-                ta.source_id = :old_source_id
-                OR ta.source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-              )
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            UPDATE telemetry_streams
-            SET source_id = :new_source_id
-            WHERE id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text("DELETE FROM position_channel_mappings WHERE source_id = :new_source_id"),
-        params,
-    )
-    db.execute(
-        text(
-            """
-            UPDATE position_channel_mappings
-            SET source_id = :new_source_id
-            WHERE source_id = :old_source_id
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            UPDATE watchlist
-            SET source_id = :new_source_id
-            WHERE source_id = :old_source_id
-            """
-        ),
-        params,
-    )
-    db.execute(
-        text(
-            """
-            DELETE FROM watchlist
-            WHERE id IN (
-              SELECT id
-              FROM (
-                SELECT
-                  id,
-                  row_number() OVER (
-                    PARTITION BY source_id, telemetry_name
-                    ORDER BY display_order, created_at, id
-                  ) AS row_num
-                FROM watchlist
-                WHERE source_id = :new_source_id
-              ) AS ranked
-              WHERE row_num > 1
-            )
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            UPDATE ops_events
-            SET
-              source_id = CASE WHEN source_id = :old_source_id THEN :new_source_id ELSE source_id END,
-              entity_id = CASE WHEN entity_id = :old_source_id THEN :new_source_id ELSE entity_id END
-            WHERE source_id = :old_source_id
-               OR source_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-               OR entity_id = :old_source_id
-               OR entity_id IN (SELECT stream_id FROM tmp_builtin_stream_scope)
-            """
-        ),
-        params,
-    )
-
-    db.execute(
-        text(
-            """
-            DELETE FROM telemetry_metadata
-            WHERE source_id = :old_source_id
-            """
-        ),
-        params,
-    )
-    db.execute(
-        text("DELETE FROM telemetry_sources WHERE id = :old_source_id"),
-        params,
-    )
-
-
-def reconcile_builtin_source_duplicates(db: Session) -> None:
-    """Collapse duplicate built-in source rows onto their canonical ids."""
-    legacy_duplicate_ids = tuple(LEGACY_SOURCE_ID_ALIASES.keys())
-    for spec in BUILT_IN_SOURCES:
-        canonical = db.get(TelemetrySource, spec.id)
-        if canonical is None:
-            continue
-        duplicates = db.execute(
-            select(TelemetrySource)
-            .where(TelemetrySource.id.in_(legacy_duplicate_ids))
-            .where(TelemetrySource.id != spec.id)
-            .order_by(TelemetrySource.created_at, TelemetrySource.id)
-        ).scalars().all()
-        for duplicate in duplicates:
-            if duplicate.id not in legacy_duplicate_ids:
-                continue
-            if duplicate.vehicle_config_path != spec.vehicle_config_path:
-                continue
-            if duplicate.source_type != spec.source_type:
-                continue
-            if canonical.name == spec.name and duplicate.name:
-                canonical.name = duplicate.name
-            if canonical.description in (None, spec.description) and duplicate.description:
-                canonical.description = duplicate.description
-            if canonical.base_url in (None, spec.base_url) and duplicate.base_url:
-                canonical.base_url = duplicate.base_url
-            _merge_builtin_duplicate_source(
-                db,
-                old_source_id=duplicate.id,
-                new_source_id=spec.id,
-            )
-
-
 def source_has_telemetry_history(db: Session, source_id: str) -> bool:
-    resolved_source_id = resolve_source_id_alias(source_id) or source_id
     owned_stream_ids = select(TelemetryStream.id).where(
-        TelemetryStream.source_id == resolved_source_id
+        TelemetryStream.source_id == source_id
     )
     history_count = db.execute(
         select(func.count())
         .select_from(TelemetryData)
         .where(
             or_(
-                TelemetryData.stream_id == resolved_source_id,
+                TelemetryData.stream_id == source_id,
                 TelemetryData.stream_id.in_(owned_stream_ids),
             )
         )
@@ -1174,7 +693,7 @@ def get_realtime_snapshot_for_channels(
     db: Session,
     channel_names: list[str],
     *,
-    source_id: str = "default",
+    source_id: str,
     stream_id: str | None = None,
 ) -> list[RealtimeChannelUpdate]:
     """Get current values from telemetry_current for given channels and source."""
@@ -1250,7 +769,7 @@ def get_watchlist_channel_names(db: Session, source_id: str) -> list[str]:
 def get_active_alerts(
     db: Session,
     *,
-    source_id: str = "default",
+    source_id: str,
     stream_id: str | None = None,
     subsystems: list[str] | None = None,
     severities: list[str] | None = None,
@@ -1399,8 +918,7 @@ def update_source(
     vehicle_config_path: str | None = None,
 ) -> dict | None:
     """Update a telemetry source. Returns updated source dict or None if not found."""
-    resolved_source_id = resolve_source_id_alias(source_id)
-    src = db.get(TelemetrySource, resolved_source_id)
+    src = db.get(TelemetrySource, source_id)
     if not src:
         return None
     if name is not None:
@@ -1430,8 +948,7 @@ def update_source(
 
 def get_source_by_id(db: Session, source_id: str) -> dict | None:
     """Get a single source by id."""
-    resolved_source_id = resolve_source_id_alias(source_id)
-    src = db.get(TelemetrySource, resolved_source_id)
+    src = db.get(TelemetrySource, source_id)
     if not src:
         return None
     return _source_to_dict(src)
@@ -1521,17 +1038,6 @@ def _is_simulator_category(category: str | None) -> bool:
     return normalized in {"simulator", "simulators"}
 
 
-def _built_in_source_for_config_path(vehicle_config_path: str):
-    try:
-        resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
-    except ValueError:
-        return None
-    for spec in BUILT_IN_SOURCES:
-        if spec.vehicle_config_path == resolved_vehicle_config_path:
-            return spec
-    return None
-
-
 def infer_auto_registration_fields(
     config_path: str,
     config_item,
@@ -1539,12 +1045,11 @@ def infer_auto_registration_fields(
 ) -> dict:
     source_type = "simulator" if _is_simulator_category(getattr(config_item, "category", None)) else "vehicle"
     display_name = loaded_config.parsed.name or Path(config_path).stem
-    built_in_spec = _built_in_source_for_config_path(loaded_config.path) if source_type == "simulator" else None
     return {
         "source_type": source_type,
         "name": display_name,
         "description": f"Auto-registered from vehicle configuration: {loaded_config.path}",
-        "base_url": built_in_spec.base_url if built_in_spec is not None else None,
+        "base_url": getattr(loaded_config.parsed, "base_url", None) if source_type == "simulator" else None,
         "vehicle_config_path": loaded_config.path,
     }
 
@@ -1637,28 +1142,12 @@ def auto_register_sources_from_configs(
     return summary
 
 
-def bootstrap_builtin_sources(
+def repair_registered_sources_on_startup(
     db: Session,
 ) -> list[str]:
-    """Ensure all registered sources and built-in local-stack sources have seeded metadata."""
+    """Repair metadata for already-registered sources from their own config paths."""
     repaired_source_ids: set[str] = set()
     sources_needing_embedding_backfill: set[str] = set()
-    for spec in BUILT_IN_SOURCES:
-        src = db.get(TelemetrySource, spec.id)
-        if src is None:
-            src = _create_source_row(
-                db,
-                source_id=spec.id,
-                name=spec.name,
-                description=spec.description,
-                source_type=spec.source_type,
-                base_url=spec.base_url,
-                vehicle_config_path=spec.vehicle_config_path,
-            )
-            repaired_source_ids.add(spec.id)
-
-    reconcile_builtin_source_duplicates(db)
-
     all_sources = db.execute(select(TelemetrySource).order_by(TelemetrySource.id)).scalars().all()
 
     for src in all_sources:
@@ -1675,7 +1164,7 @@ def bootstrap_builtin_sources(
                 sources_needing_embedding_backfill.add(src.id)
         except Exception:
             logger.exception(
-                "Skipping bootstrap metadata repair for source %s due to invalid vehicle configuration path %s",
+                "Skipping startup metadata repair for source %s due to invalid vehicle configuration path %s",
                 src.id,
                 src.vehicle_config_path,
             )
@@ -1687,7 +1176,7 @@ def bootstrap_builtin_sources(
             provider = SentenceTransformerEmbeddingProvider()
         except Exception:
             logger.exception(
-                "Skipping bootstrap embedding backfill for promoted channels due to provider initialization failure"
+                "Skipping startup embedding backfill for promoted channels due to provider initialization failure"
             )
         else:
             for source_id in sorted(sources_needing_embedding_backfill):
@@ -1706,7 +1195,7 @@ def bootstrap_builtin_sources(
                     )
                 except Exception:
                     logger.exception(
-                        "Skipping bootstrap embedding backfill for source %s",
+                        "Skipping startup embedding backfill for source %s",
                         src.id,
                     )
     db.commit()

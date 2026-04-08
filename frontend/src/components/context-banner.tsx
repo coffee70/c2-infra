@@ -5,7 +5,6 @@ import { FeedStatusBadge } from "@/components/feed-status-badge";
 import { SimulatorStatusBadge } from "@/components/simulator-status-badge";
 import { useRealtimeFeedStatus } from "@/lib/realtime-telemetry-context";
 import type { FeedState } from "@/lib/feed-status";
-import { resolveSourceAlias } from "@/lib/source-ids";
 import {
   useSimulatorRuntime,
   type SimulatorRuntimeStatus,
@@ -62,11 +61,6 @@ function scrollToAlerts(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
 }
 
-/** Label when sourceId is not in sources list; prefer resolving configured aliases. */
-function fallbackSourceLabel(sourceId: string): string {
-  return resolveSourceAlias(sourceId);
-}
-
 export function ContextBanner({
   sourceId,
   onSourceChange,
@@ -99,7 +93,7 @@ export function ContextBanner({
     ?? initialSimulatorStatusForSource;
 
   const sourceLabel =
-    sources.find((s) => s.id === sourceId)?.name ?? fallbackSourceLabel(sourceId);
+    sources.find((s) => s.id === sourceId)?.name ?? sourceId;
   const feedState: FeedState = isSimulator && resolvedSimulatorStatus?.state === "idle"
     ? "disconnected"
     :
@@ -116,7 +110,7 @@ export function ContextBanner({
         <span className="text-muted-foreground font-medium">Source:</span>
         {sources.length > 1 && onSourceChange ? (
           <Select
-            value={sources.some((s) => s.id === sourceId) ? sourceId : resolveSourceAlias(sourceId)}
+            value={sources.some((s) => s.id === sourceId) ? sourceId : ""}
             onValueChange={onSourceChange}
           >
             <SelectTrigger className="h-8 w-auto min-w-[120px] text-xs">

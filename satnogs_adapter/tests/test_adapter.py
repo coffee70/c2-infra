@@ -152,6 +152,16 @@ def test_config_rejects_old_satellite_only_shape(tmp_path: Path) -> None:
         load_config(str(path))
 
 
+def test_parse_lasarsat_csv_payload() -> None:
+    packet = parse_aprs_payload(b"\x00PSU,4,22104888,40839616,8106,2389,2030,1,133,7e,1,84\x00")
+
+    assert packet.packet_type == "csv:psu"
+    assert packet.fields["psu_01"] == 4.0
+    assert packet.fields["psu_02"] == 22104888.0
+    assert packet.fields["psu_08"] == 133.0
+    assert "psu_09" not in packet.fields
+
+
 def test_extract_frames_collects_invalid_hex_without_aborting() -> None:
     class FakeClient:
         def get(self, url, params=None, headers=None):

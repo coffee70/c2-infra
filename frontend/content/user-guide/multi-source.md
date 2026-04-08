@@ -54,12 +54,12 @@ The backend seeds the source catalog from that definition so searches, watchlist
 
 Each time you **start** a simulator from the Sources page, the platform creates a new stream for that source. You are taken to the **Overview** with that source selected; the Overview and Telemetry Detail then show data for the source's current stream. History, trends, and exports remain stream-scoped, while the page URL stays at the source level.
 
-## Built-in Local Sources
+## Local Config-Backed Sources
 
-The default local stack includes four built-ins:
+The local stack can include ordinary vehicle and simulator configuration files:
 
-- `Aegon Relay` and `Balerion Surveyor` as vehicle sources
-- `DrogonSat` as a lighter simulator that emits GPS/LLA position channels
-- `RhaegalSat` as a heavier simulator that emits ECEF position channels
+- `Aegon Relay` and `Balerion Surveyor` as vehicle source examples
+- `DrogonSat` as a lighter simulator example that emits GPS/LLA position channels
+- `RhaegalSat` as a heavier simulator example that emits ECEF position channels
 
-`DrogonSat` and `RhaegalSat` intentionally share only a small common core. `RhaegalSat` has more onboard computer temperature/load channels, a split propulsion system, and a larger payload/comms catalog, so source switching exercises real source-specific workflows instead of identical feeds with different names.
+These are not privileged backend identities. If the configuration files are removed, the sources do not auto-register. `DrogonSat` and `RhaegalSat` intentionally share only a small common core. `RhaegalSat` has more onboard computer temperature/load channels, a split propulsion system, and a larger payload/comms catalog, so source switching exercises real source-specific workflows instead of identical feeds with different names.

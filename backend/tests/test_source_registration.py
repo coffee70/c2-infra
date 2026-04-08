@@ -9,19 +9,15 @@ from unittest.mock import MagicMock
 from types import SimpleNamespace
 from sqlalchemy.exc import IntegrityError
 
-from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID
-from telemetry_catalog.builtins import MOCK_VEHICLE_SOURCE_ID
-from telemetry_catalog.builtins import BUILT_IN_SOURCES
-
 from app.services.realtime_service import _seed_metadata_for_source
 from app.services.realtime_service import _source_to_dict
 from app.services.realtime_service import auto_register_sources_from_configs
 from app.services.realtime_service import create_discovered_channel_metadata
 from app.services.realtime_service import create_source
-from app.services.realtime_service import bootstrap_builtin_sources
 from app.services.realtime_service import get_source_by_vehicle_config_path
 from app.services.realtime_service import infer_auto_registration_fields
 from app.services.realtime_service import refresh_source_embeddings
+from app.services.realtime_service import repair_registered_sources_on_startup
 from app.services.realtime_service import register_source_if_missing
 from app.services.realtime_service import resolve_source
 from app.services.realtime_service import source_has_telemetry_history
@@ -30,6 +26,10 @@ from app.models.telemetry import TelemetryChannelAlias
 from app.models.telemetry import TelemetryMetadata
 from app.models.telemetry import TelemetrySource
 from app.models.schemas import SourceResolveRequest
+
+
+DROGONSAT_SOURCE_ID = "test-drogonsat-source"
+MOCK_VEHICLE_SOURCE_ID = "test-mock-vehicle-source"
 
 
 def test_source_api_payload_uses_only_vehicle_config_path() -> None:
@@ -307,11 +307,11 @@ def test_telemetry_source_vehicle_config_path_is_unique() -> None:
     )
 
 
-def test_infer_auto_registration_fields_prefers_parsed_name_and_builtin_simulator_url() -> None:
+def test_infer_auto_registration_fields_prefers_parsed_name_and_configured_simulator_url() -> None:
     config_item = SimpleNamespace(category="simulators")
     loaded = SimpleNamespace(
         path="simulators/drogonsat.yaml",
-        parsed=SimpleNamespace(name="DrogonSat"),
+        parsed=SimpleNamespace(name="DrogonSat", base_url="http://simulator:8001"),
     )
 
     result = infer_auto_registration_fields("simulators/drogonsat.yaml", config_item, loaded)
@@ -345,8 +345,8 @@ def test_infer_auto_registration_fields_uses_category_and_filename_fallback(cate
     assert result["base_url"] is None
 
 
-def test_bootstrap_builtin_sources_preserves_existing_operator_edits(monkeypatch) -> None:
-    """Existing built-in sources should keep operator-edited fields across restarts."""
+def test_repair_registered_sources_on_startup_preserves_existing_operator_edits(monkeypatch) -> None:
+    """Existing local-stack sources should keep operator-edited fields across restarts."""
 
     db = MagicMock()
     existing = MagicMock()
@@ -379,7 +379,7 @@ def test_bootstrap_builtin_sources_preserves_existing_operator_edits(monkeypatch
     )
     db.execute.return_value = ScalarResult([existing])
 
-    bootstrap_builtin_sources(
+    repair_registered_sources_on_startup(
         db,
     )
 
@@ -542,8 +542,8 @@ def test_auto_register_sources_from_configs_continues_after_failure_and_audits_c
     ]
 
 
-def test_bootstrap_builtin_sources_flushes_before_seeding_new_sources(monkeypatch) -> None:
-    """Built-in bootstrap must flush new source rows before seeding FK-backed metadata."""
+def test_repair_registered_sources_on_startup_does_not_create_sources(monkeypatch) -> None:
+    """Startup repair reseeds metadata for existing rows without creating source rows."""
 
     db = MagicMock()
     call_order: list[str] = []
@@ -566,7 +566,6 @@ def test_bootstrap_builtin_sources_flushes_before_seeding_new_sources(monkeypatc
         call_order.append("flush")
 
     def fake_seed_metadata_for_source(*args, **kwargs) -> None:
-        assert "flush" in call_order
         call_order.append("seed")
 
     db.add.side_effect = add
@@ -576,16 +575,16 @@ def test_bootstrap_builtin_sources_flushes_before_seeding_new_sources(monkeypatc
         "app.services.realtime_service._seed_metadata_for_source",
         fake_seed_metadata_for_source,
     )
-    built_in_rows = [MagicMock(id=DROGONSAT_SOURCE_ID, vehicle_config_path="simulators/drogonsat.yaml")]
-    db.execute.return_value = ScalarResult(built_in_rows)
+    source_rows = [MagicMock(id=DROGONSAT_SOURCE_ID, vehicle_config_path="simulators/drogonsat.yaml")]
+    db.execute.return_value = ScalarResult(source_rows)
 
-    bootstrap_builtin_sources(
+    repair_registered_sources_on_startup(
         db,
     )
 
-    assert "add" in call_order
-    assert "flush" in call_order
     assert "seed" in call_order
+    assert "add" not in call_order
+    assert "flush" not in call_order
 
 
 def test_seed_metadata_for_source_creates_channel_alias_rows(tmp_path, monkeypatch) -> None:
@@ -654,8 +653,8 @@ def test_seed_metadata_for_source_creates_channel_alias_rows(tmp_path, monkeypat
     assert all(alias.telemetry_id is not None for alias in aliases)
 
 
-def test_bootstrap_builtin_sources_does_not_prune_existing_metadata(monkeypatch) -> None:
-    """Startup bootstrap must not delete historical telemetry via metadata pruning."""
+def test_repair_registered_sources_on_startup_does_not_prune_existing_metadata(monkeypatch) -> None:
+    """Startup repair must not delete historical telemetry via metadata pruning."""
 
     db = MagicMock()
     db.get.return_value = None
@@ -682,7 +681,7 @@ def test_bootstrap_builtin_sources_does_not_prune_existing_metadata(monkeypatch)
         [MagicMock(id=MOCK_VEHICLE_SOURCE_ID, vehicle_config_path="vehicles/balerion-surveyor.json")]
     )
 
-    bootstrap_builtin_sources(
+    repair_registered_sources_on_startup(
         db,
     )
 
@@ -692,8 +691,8 @@ def test_bootstrap_builtin_sources_does_not_prune_existing_metadata(monkeypatch)
     assert all(call.get("overwrite_position_mapping") is False for call in seed_calls)
 
 
-def test_bootstrap_builtin_sources_preserves_existing_position_mappings(monkeypatch) -> None:
-    """Startup bootstrap must not overwrite operator-managed active position mappings."""
+def test_repair_registered_sources_on_startup_preserves_existing_position_mappings(monkeypatch) -> None:
+    """Startup repair must not overwrite operator-managed active position mappings."""
 
     db = MagicMock()
     existing_source = MagicMock()
@@ -718,13 +717,13 @@ def test_bootstrap_builtin_sources_preserves_existing_position_mappings(monkeypa
     )
     db.execute.return_value = ScalarResult([existing_source])
 
-    bootstrap_builtin_sources(db)
+    repair_registered_sources_on_startup(db)
 
     assert any(call.get("overwrite_position_mapping") is False for call in seed_calls)
 
 
-def test_bootstrap_builtin_sources_seeds_existing_custom_sources(monkeypatch) -> None:
-    """Startup bootstrap must repair metadata for persisted custom sources, not just built-ins."""
+def test_repair_registered_sources_on_startup_seeds_existing_custom_sources(monkeypatch) -> None:
+    """Startup repair must repair metadata for persisted custom sources, not just registered sources."""
 
     db = MagicMock()
     custom = MagicMock()
@@ -749,7 +748,7 @@ def test_bootstrap_builtin_sources_seeds_existing_custom_sources(monkeypatch) ->
     )
     db.execute.return_value = ScalarResult([custom])
 
-    bootstrap_builtin_sources(db)
+    repair_registered_sources_on_startup(db)
 
     assert any(call["source_id"] == custom.id for call in seed_calls)
     assert any(
@@ -758,8 +757,8 @@ def test_bootstrap_builtin_sources_seeds_existing_custom_sources(monkeypatch) ->
     )
 
 
-def test_bootstrap_builtin_sources_returns_repaired_sources_for_embedding_backfill(monkeypatch) -> None:
-    """Startup bootstrap should backfill embeddings for every source it repaired."""
+def test_repair_registered_sources_on_startup_returns_repaired_sources_for_embedding_backfill(monkeypatch) -> None:
+    """Startup repair should backfill embeddings for every source it repaired."""
 
     db = MagicMock()
     built_in = MagicMock()
@@ -786,9 +785,9 @@ def test_bootstrap_builtin_sources_returns_repaired_sources_for_embedding_backfi
     )
     db.execute.return_value = ScalarResult([built_in, custom])
 
-    repaired_source_ids = bootstrap_builtin_sources(db)
+    repaired_source_ids = repair_registered_sources_on_startup(db)
 
-    expected_ids = {custom.id, *(spec.id for spec in BUILT_IN_SOURCES)}
+    expected_ids = {built_in.id, custom.id}
 
     assert set(repaired_source_ids) == expected_ids
 
@@ -829,116 +828,7 @@ def test_refresh_source_embeddings_backfills_real_embeddings(monkeypatch) -> Non
     db.commit.assert_called_once()
 
 
-def test_bootstrap_builtin_sources_reconciles_duplicates_before_seeding(monkeypatch) -> None:
-    """Startup bootstrap should collapse duplicate built-ins before metadata repair runs."""
-
-    db = MagicMock()
-    source = MagicMock()
-    source.id = DROGONSAT_SOURCE_ID
-    source.vehicle_config_path = "simulators/drogonsat.yaml"
-    call_order: list[str] = []
-
-    class ScalarResult:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def scalars(self):
-            return self
-
-        def all(self):
-            return self._rows
-
-    db.get.return_value = source
-    db.execute.return_value = ScalarResult([source])
-
-    monkeypatch.setattr(
-        "app.services.realtime_service.reconcile_builtin_source_duplicates",
-        lambda _db: call_order.append("reconcile"),
-    )
-    monkeypatch.setattr(
-        "app.services.realtime_service._seed_metadata_for_source",
-        lambda *args, **kwargs: call_order.append("seed"),
-    )
-
-    bootstrap_builtin_sources(db)
-
-    assert call_order == ["reconcile", "seed"]
-
-
-def test_reconcile_builtin_source_duplicates_ignores_custom_sources(monkeypatch) -> None:
-    """Custom sources that reuse built-in catalogs must not be collapsed at startup."""
-
-    from app.services.realtime_service import reconcile_builtin_source_duplicates
-
-    db = MagicMock()
-    canonical = MagicMock()
-    canonical.id = DROGONSAT_SOURCE_ID
-    canonical.name = "DrogonSat"
-    canonical.description = "Agile tactical simulator with GPS LLA telemetry"
-    canonical.base_url = "http://simulator:8001"
-    canonical.source_type = "simulator"
-    canonical.vehicle_config_path = "simulators/drogonsat.yaml"
-    custom = MagicMock()
-    custom.id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-    custom.source_type = "simulator"
-    custom.vehicle_config_path = "simulators/drogonsat.yaml"
-    custom.name = "Custom Drogon"
-    custom.description = "Independent simulator"
-    custom.base_url = "http://remote-sim:9000"
-
-    class ScalarResult:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def scalars(self):
-            return self
-
-        def all(self):
-            return self._rows
-
-    db.get.side_effect = lambda model, source_id: canonical if source_id == DROGONSAT_SOURCE_ID else None
-    db.execute.return_value = ScalarResult([custom])
-    merge_calls: list[tuple[str, str]] = []
-
-    monkeypatch.setattr(
-        "app.services.realtime_service._merge_builtin_duplicate_source",
-        lambda _db, *, old_source_id, new_source_id: merge_calls.append((old_source_id, new_source_id)),
-    )
-
-    reconcile_builtin_source_duplicates(db)
-
-    assert merge_calls == []
-
-
-def test_merge_builtin_duplicate_source_moves_channel_aliases() -> None:
-    from app.services.realtime_service import _merge_builtin_duplicate_source
-
-    db = MagicMock()
-    statements: list[str] = []
-
-    def fake_execute(statement, params=None):
-        statements.append(str(statement))
-        return MagicMock()
-
-    db.execute.side_effect = fake_execute
-
-    _merge_builtin_duplicate_source(
-        db,
-        old_source_id="old-source",
-        new_source_id="new-source",
-    )
-
-    assert any("INSERT INTO telemetry_channel_aliases" in stmt for stmt in statements)
-    assert any("DELETE FROM telemetry_channel_aliases" in stmt for stmt in statements)
-    assert any("CREATE TEMP TABLE tmp_builtin_stream_scope" in stmt for stmt in statements)
-    assert any("UPDATE telemetry_streams" in stmt for stmt in statements)
-    assert any("packet_source" in stmt and "receiver_id" in stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt or "INSERT INTO telemetry_current" in stmt)
-    assert "packet_source" in next(stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt)
-    assert "receiver_id" in next(stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt)
-    assert all("LIKE :old_run_prefix" not in stmt for stmt in statements)
-
-
-def test_bootstrap_builtin_sources_skips_invalid_catalogs_without_aborting(monkeypatch) -> None:
+def test_repair_registered_sources_on_startup_skips_invalid_catalogs_without_aborting(monkeypatch) -> None:
     """One stale vehicle configuration path should not prevent startup repair for other sources."""
 
     db = MagicMock()
@@ -971,7 +861,7 @@ def test_bootstrap_builtin_sources_skips_invalid_catalogs_without_aborting(monke
     )
     db.execute.return_value = ScalarResult([bad, good])
 
-    bootstrap_builtin_sources(db)
+    repair_registered_sources_on_startup(db)
 
     assert good.id in seed_calls
     db.commit.assert_called_once()
@@ -1548,7 +1438,7 @@ def test_seed_metadata_flags_promoted_discovered_channel_without_embedding_for_b
     assert needs_backfill is True
 
 
-def test_bootstrap_builtin_sources_backfills_embeddings_for_promoted_channels(monkeypatch) -> None:
+def test_repair_registered_sources_on_startup_backfills_embeddings_for_promoted_channels(monkeypatch) -> None:
     db = MagicMock()
     source = MagicMock()
     source.id = DROGONSAT_SOURCE_ID
@@ -1583,7 +1473,7 @@ def test_bootstrap_builtin_sources_backfills_embeddings_for_promoted_channels(mo
     )
     db.execute.return_value = ScalarResult([source])
 
-    bootstrap_builtin_sources(db)
+    repair_registered_sources_on_startup(db)
 
     assert seed_calls[0]["refresh_embeddings"] is False
     assert seed_calls[1]["refresh_embeddings"] is True
@@ -1591,7 +1481,7 @@ def test_bootstrap_builtin_sources_backfills_embeddings_for_promoted_channels(mo
     db.commit.assert_called_once()
 
 
-def test_bootstrap_builtin_sources_ignores_embedding_provider_init_failures(monkeypatch) -> None:
+def test_repair_registered_sources_on_startup_ignores_embedding_provider_init_failures(monkeypatch) -> None:
     db = MagicMock()
     source = MagicMock()
     source.id = DROGONSAT_SOURCE_ID
@@ -1630,13 +1520,13 @@ def test_bootstrap_builtin_sources_ignores_embedding_provider_init_failures(monk
     )
     db.execute.return_value = ScalarResult([source])
 
-    bootstrap_builtin_sources(db)
+    repair_registered_sources_on_startup(db)
 
     assert [call["refresh_embeddings"] for call in seed_calls] == [False]
     db.commit.assert_called_once()
 
 
-def test_bootstrap_builtin_sources_ignores_backfill_failures_per_source(monkeypatch) -> None:
+def test_repair_registered_sources_on_startup_ignores_backfill_failures_per_source(monkeypatch) -> None:
     db = MagicMock()
     source = MagicMock()
     source.id = DROGONSAT_SOURCE_ID
@@ -1673,7 +1563,7 @@ def test_bootstrap_builtin_sources_ignores_backfill_failures_per_source(monkeypa
     )
     db.execute.return_value = ScalarResult([source])
 
-    bootstrap_builtin_sources(db)
+    repair_registered_sources_on_startup(db)
 
     assert [call["refresh_embeddings"] for call in seed_calls] == [False, True]
     assert seed_calls[1]["embedding_provider"] is fake_provider

@@ -46,7 +46,7 @@ class RealtimeWsHub:
         await ws.accept()
         async with self._lock:
             self._connections[ws] = {
-                "active_source_id": "default",
+                "active_source_id": None,
                 "active_stream_id": None,
                 "stream_subscription_mode": SUBSCRIPTION_MODE_SOURCE_WIDE,
                 "watchlist_channels": set(),
@@ -75,7 +75,7 @@ class RealtimeWsHub:
         """Get connections that should receive this update."""
         result = []
         for ws, subs in self._connections.items():
-            conn_source_id = subs.get("active_source_id", "default")
+            conn_source_id = subs.get("active_source_id")
             conn_stream_id = subs.get("active_stream_id")
             subscription_mode = subs.get(
                 "stream_subscription_mode",
@@ -267,7 +267,7 @@ class RealtimeWsHub:
         self,
         ws: WebSocket,
         channels: list[str],
-        source_id: str = "default",
+        source_id: str,
         stream_id: str | None = None,
     ) -> None:
         """Subscribe client to watchlist channels for a source."""
@@ -285,7 +285,7 @@ class RealtimeWsHub:
     async def subscribe_alerts(
         self,
         ws: WebSocket,
-        source_id: str = "default",
+        source_id: str,
         stream_id: str | None = None,
     ) -> None:
         """Subscribe client to alert stream for a source."""
@@ -304,7 +304,7 @@ class RealtimeWsHub:
         self,
         ws: WebSocket,
         name: str,
-        source_id: str = "default",
+        source_id: str,
         stream_id: str | None = None,
     ) -> None:
         """Subscribe client to single channel detail for a source."""
