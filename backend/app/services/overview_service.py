@@ -167,7 +167,7 @@ def remove_from_watchlist(db: Session, source_id: str, telemetry_name: str) -> N
 
 
 def _get_latest_value_and_ts(
-    db: Session, telemetry_id, source_id: str = "default"
+    db: Session, telemetry_id, source_id: str
 ) -> Optional[tuple[float, datetime]]:
     """Get latest value and timestamp for a telemetry point, filtered by source."""
     data_source_id = normalize_source_id(source_id)
@@ -187,7 +187,7 @@ def _get_latest_value_and_ts(
 
 
 def _get_recent_for_sparkline(
-    db: Session, telemetry_id, source_id: str = "default", limit: int = SPARKLINE_POINTS
+    db: Session, telemetry_id, source_id: str, limit: int = SPARKLINE_POINTS
 ) -> list[dict]:
     """Get recent data points for sparkline (oldest first for chart), filtered by source."""
     data_source_id = normalize_source_id(source_id)
@@ -208,7 +208,7 @@ def _get_recent_for_sparkline(
     ]
 
 
-def get_overview(db: Session, source_id: str = "default") -> list[dict]:
+def get_overview(db: Session, source_id: str) -> list[dict]:
     """Get overview data for all watchlist channels, optionally filtered by source."""
     data_source_id = resolve_latest_stream_id(db, source_id)
     logical_source_id = _resolve_logical_source_id(db, source_id)
@@ -280,7 +280,7 @@ def get_overview(db: Session, source_id: str = "default") -> list[dict]:
     return result
 
 
-def get_anomalies(db: Session, source_id: str = "default") -> dict[str, list[dict]]:
+def get_anomalies(db: Session, source_id: str) -> dict[str, list[dict]]:
     """Get anomalous channels grouped by subsystem, optionally filtered by source."""
     data_source_id = resolve_latest_stream_id(db, source_id)
     logical_source_id = _resolve_logical_source_id(db, source_id)

@@ -11,3 +11,5 @@ A **spacecraft telemetry monitoring and analysis platform** for mission operatio
 ## Get Started
 
 [Quick Start →](/docs/quick-start) — First-time setup: start services, generate data, and see your Overview dashboard.
+
+[SatNOGS Adapter →](/docs/satnogs-adapter) — Resolve the configured vehicle source automatically and ingest completed SatNOGS observations.

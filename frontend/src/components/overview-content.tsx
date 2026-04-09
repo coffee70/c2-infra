@@ -11,7 +11,6 @@ import {
   useSimulatorRuntime,
   type SimulatorRuntimeStatus,
 } from "@/lib/simulator-runtime";
-import { DEFAULT_SOURCE_ID, resolveSourceAlias } from "@/lib/source-ids";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const API_FALLBACK_URL = process.env.NEXT_PUBLIC_API_FALLBACK_URL || "";
@@ -214,6 +213,7 @@ export function OverviewContent() {
   const [channels, setChannels] = useState<OverviewChannel[]>([]);
   const [anomalies, setAnomalies] = useState<AnomaliesData>(EMPTY_ANOMALIES);
   const [sources, setSources] = useState<TelemetrySource[]>([]);
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const [initialSimulatorSourceId, setInitialSimulatorSourceId] = useState<
     string | null
   >(null);
@@ -233,9 +233,8 @@ export function OverviewContent() {
     setError(unavailableMessage);
   }, [unavailableChannel, unavailableMessage]);
 
-  const effectiveSource = resolveSourceAlias(
-    sourceFromUrl ?? storedSource ?? DEFAULT_SOURCE_ID
-  );
+  const requestedSource = sourceFromUrl ?? storedSource;
+  const effectiveSource = selectedSource ?? requestedSource ?? "";
   const sourceReady = sourceFromUrl !== null || storageChecked;
   const sourceType = useMemo(
     () => sources.find((s) => s.id === effectiveSource)?.source_type,
@@ -244,7 +243,7 @@ export function OverviewContent() {
   const isSimulatorSource = sourceType === "simulator";
   const simulatorRuntime = useSimulatorRuntime({
     sourceId: effectiveSource,
-    enabled: sourceReady && isSimulatorSource,
+    enabled: sourceReady && !!effectiveSource && isSimulatorSource,
     initialStatus:
       initialSimulatorSourceId === effectiveSource ? initialSimulatorStatus : null,
   });
@@ -255,7 +254,7 @@ export function OverviewContent() {
     desiredStreamId !== committedStreamId;
 
   const refreshCommittedSnapshot = useCallback(async () => {
-    if (!committedStreamId) return;
+    if (!effectiveSource || !committedStreamId) return;
 
     try {
       setError(unavailableMessage);
@@ -303,17 +302,7 @@ export function OverviewContent() {
         setShowSwitchingIndicator(false);
         setLatestSimulatorStreamId(null);
 
-        const sourcesPromise = fetchWithTimeoutAndFallback(
-          "/telemetry/sources"
-        );
-        const runsPromise = fetchWithTimeoutAndFallback(
-          `/telemetry/sources/${encodeURIComponent(effectiveSource)}/streams`
-        );
-
-        const [sourcesRes, runsRes] = await Promise.all([
-          sourcesPromise,
-          runsPromise,
-        ]);
+        const sourcesRes = await fetchWithTimeoutAndFallback("/telemetry/sources");
 
         if (cancelled) return;
 
@@ -323,10 +312,34 @@ export function OverviewContent() {
               "/telemetry/sources"
             )
           : [];
+        const resolvedSourceId =
+          requestedSource && sourcesList.some((source) => source.id === requestedSource)
+            ? requestedSource
+            : sourcesList[0]?.id ?? null;
+        setSources(Array.isArray(sourcesList) ? sourcesList : []);
+        setSelectedSource(resolvedSourceId);
+
+        if (!resolvedSourceId) {
+          setChannels([]);
+          setAnomalies(EMPTY_ANOMALIES);
+          setCommittedStreamId(null);
+          setDesiredStreamId(null);
+          setInitialSimulatorSourceId(null);
+          setInitialSimulatorStatus(null);
+          setLatestSimulatorStreamId(null);
+          setError(unavailableMessage ?? "No telemetry sources are registered");
+          return;
+        }
+
+        const runsRes = await fetchWithTimeoutAndFallback(
+          `/telemetry/sources/${encodeURIComponent(resolvedSourceId)}/streams`
+        );
+        if (cancelled) return;
+
         const streamsData = runsRes.ok
           ? await readJsonResponse<{ sources?: Array<{ stream_id?: string }> }>(
               runsRes,
-              `/telemetry/sources/${encodeURIComponent(effectiveSource)}/streams`
+              `/telemetry/sources/${encodeURIComponent(resolvedSourceId)}/streams`
             )
           : { sources: [] };
         const streamsList = Array.isArray(streamsData.sources)
@@ -336,7 +349,7 @@ export function OverviewContent() {
         const isSimulatorSource = Array.isArray(sourcesList)
           && sourcesList.some(
             (s: TelemetrySource) =>
-              s.id === effectiveSource && s.source_type === "simulator"
+              s.id === resolvedSourceId && s.source_type === "simulator"
           );
 
         let simSourceId: string | null = null;
@@ -344,18 +357,18 @@ export function OverviewContent() {
         if (isSimulatorSource) {
           try {
             const simRes = await fetchWithTimeoutAndFallback(
-              `/simulator/status?vehicle_id=${encodeURIComponent(effectiveSource)}`
+              `/simulator/status?vehicle_id=${encodeURIComponent(resolvedSourceId)}`
             );
             simStatus = simRes.ok
               ? await readJsonResponse<SimulatorRuntimeStatus>(
                   simRes,
-                  `/simulator/status?vehicle_id=${encodeURIComponent(effectiveSource)}`
+                  `/simulator/status?vehicle_id=${encodeURIComponent(resolvedSourceId)}`
                 )
               : { connected: false };
-            simSourceId = effectiveSource;
+            simSourceId = resolvedSourceId;
           } catch {
             simStatus = { connected: false };
-            simSourceId = effectiveSource;
+            simSourceId = resolvedSourceId;
           }
         }
 
@@ -364,13 +377,12 @@ export function OverviewContent() {
             ? simStatus.config?.stream_id ?? null
             : null;
         const effectiveStreamId = isSimulatorSource
-          ? runtimeStreamId ?? streamsList[0]?.stream_id ?? effectiveSource
-          : streamsList[0]?.stream_id ?? effectiveSource;
-        const snapshot = await fetchOverviewSnapshot(effectiveSource, effectiveStreamId);
+          ? runtimeStreamId ?? streamsList[0]?.stream_id ?? resolvedSourceId
+          : streamsList[0]?.stream_id ?? resolvedSourceId;
+        const snapshot = await fetchOverviewSnapshot(resolvedSourceId, effectiveStreamId);
 
         if (cancelled) return;
 
-        setSources(Array.isArray(sourcesList) ? sourcesList : []);
         setChannels(snapshot.channels);
         setAnomalies(snapshot.anomalies);
         setCommittedStreamId(effectiveStreamId);
@@ -399,17 +411,17 @@ export function OverviewContent() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveSource, sourceReady, unavailableMessage]);
+  }, [requestedSource, sourceReady, unavailableMessage]);
 
   useEffect(() => {
-    if (!isSimulatorSource || !simulatorRuntime.activeStreamId) return;
+    if (!effectiveSource || !isSimulatorSource || !simulatorRuntime.activeStreamId) return;
     setLatestSimulatorStreamId((current) =>
       current === simulatorRuntime.activeStreamId ? current : simulatorRuntime.activeStreamId
     );
   }, [isSimulatorSource, simulatorRuntime.activeStreamId]);
 
   useEffect(() => {
-    if (!sourceReady || !isSimulatorSource) return;
+    if (!effectiveSource || !sourceReady || !isSimulatorSource) return;
 
     const nextStreamId = simulatorRuntime.isActive
       ? simulatorRuntime.activeStreamId ?? desiredStreamId ?? effectiveSource
@@ -428,6 +440,7 @@ export function OverviewContent() {
 
   useEffect(() => {
     if (
+      !effectiveSource ||
       !sourceReady ||
       bootstrapLoading ||
       !committedStreamId ||
@@ -561,9 +574,9 @@ export function OverviewContent() {
           initialAnomalies={anomalies}
           hasError={!!error}
           sources={sources}
-          sourceId={effectiveSource || DEFAULT_SOURCE_ID}
+          sourceId={effectiveSource}
           feedSourceId={committedStreamId ?? undefined}
-          defaultSourceId={DEFAULT_SOURCE_ID}
+          defaultSourceId={effectiveSource}
           initialSimulatorSourceId={initialSimulatorSourceId}
           initialSimulatorStatus={initialSimulatorStatus}
           simulatorStatus={simulatorRuntime.status}

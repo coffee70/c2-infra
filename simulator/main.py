@@ -16,8 +16,9 @@ app = FastAPI(title="Telemetry Simulator", version="1.0.0")
 
 _streamer: TelemetryStreamer | None = None
 
-# Default vehicle_id sent by callers when they want a unique stream; we replace it with a per-run stream ID.
-DEFAULT_VEHICLE_ID = os.environ.get("SIMULATOR_SOURCE_ID") or "simulator"
+# Optional vehicle_id for standalone simulator starts. Backend-managed starts pass
+# the persisted source id explicitly.
+DEFAULT_VEHICLE_ID = os.environ.get("SIMULATOR_SOURCE_ID") or ""
 
 
 def _supported_scenarios_payload() -> list[dict[str, str]]:
@@ -41,7 +42,7 @@ def _generate_stream_id(vehicle_id: str | None) -> str:
 class StartConfig(BaseModel):
     scenario: str = Field(
         default="nominal",
-        description=f"Scenario from runtime definition: {', '.join(sorted(SCENARIOS))}",
+        description=f"Scenario from runtime vehicle configuration: {', '.join(sorted(SCENARIOS))}",
     )
     duration: float = Field(default=300, ge=0, description="Duration in seconds (0 = infinite)")
     speed: float = Field(default=1.0, ge=0.1, description="Time speed factor")
@@ -49,7 +50,7 @@ class StartConfig(BaseModel):
     jitter: float = Field(default=0.1, ge=0, le=1, description="Inter-sample jitter")
     vehicle_id: str = Field(default=DEFAULT_VEHICLE_ID, description="Logical vehicle ID for ingest")
     base_url: str | None = Field(default=None, description="Backend ingest URL (default: BACKEND_URL env)")
-    telemetry_definition_path: str | None = Field(default=None, description="Catalog file to load for this run")
+    vehicle_config_path: str | None = Field(default=None, description="Vehicle configuration file to load for this run")
     packet_source: str | None = Field(default="simulator-link", description="Packet origin identifier")
     receiver_id: str | None = Field(default=None, description="Receiving endpoint identifier")
 
@@ -122,7 +123,7 @@ def start(config: StartConfig) -> dict[str, Any]:
         stream_id=resolved_stream_id,
         packet_source=config.packet_source,
         receiver_id=config.receiver_id,
-        telemetry_definition_path=config.telemetry_definition_path,
+        vehicle_config_path=config.vehicle_config_path,
     )
     if not _streamer.start():
         audit_log("simulator.start.failed", reason="TelemetryStreamer.start() returned False", level="error")

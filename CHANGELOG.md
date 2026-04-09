@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Source upcoming observations** — Added source-scoped observation windows with backend batch-upsert/read APIs, Planning UI display for expected contact windows, and SatNOGS adapter schedule publishing.
+- **SatNOGS adapter service** — Added a compose-managed `satnogs-adapter` service that polls SatNOGS observations, decodes AX.25/APRS telemetry, maps stable and dynamic numeric fields, and publishes batched realtime ingest events for a vehicle source registered in the backend.
+- **SatNOGS vehicle configuration** — Added the LASARSAT vehicle configuration used by the adapter example pair.
+- **Startup source auto-registration** — The backend now scans valid vehicle configuration files during startup and auto-registers missing config-backed telemetry sources through the existing source creation and metadata seeding path. Already-registered sources are left alone, invalid configs are skipped without aborting startup, and simulator configs register only when the config file defines `base_url`.
+- **Vehicle source resolution endpoint** — Added `POST /telemetry/sources/resolve` so vehicle adapters can resolve or create a canonical backend source from `vehicle_config_path` during startup, then publish telemetry with the existing ingest contract.
+
 ### Changed
 
+- **SatNOGS adapter satellite/transmitter identity** — The adapter now requires `vehicle.norad_id`, `satnogs.transmitter_uuid`, and `satnogs.status`, queries observations with `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, deduplicates by SatNOGS observation ID, and keeps transmitter UUID out of backend ingest payloads and tags.
+- **SatNOGS adapter source identity** — The adapter now resolves its backend vehicle source automatically at startup through `platform.source_resolve_url`. `platform.source_id` remains available as an override, but normal operation no longer requires copying backend UUIDs into YAML.
+- **Vehicle configuration workspace layout** — The Vehicle Configurations page now uses a full-screen split workspace instead of a centered card layout. A VS Code-style explorer on the left derives folders from `VEHICLE_CONFIGURATION_PATH`, the editor fills the right pane, the divider is resizable, the toolbar separates title/actions from file-summary badges, and validate/save notices appear centered over the editor.
 - **Runtime identity contract cleanup** — Runtime telemetry APIs now use `source_id + stream_id` consistently across ingest, telemetry, realtime, and ops. `run` / `run_id` compatibility routes and wrappers were removed, explicit `stream_id` is authoritative at route boundaries, and the frontend now carries `stream_id` instead of `run_id` in telemetry detail links and queries.
 - **Schema and migration reset** — The SQLAlchemy runtime models now expose canonical `source_id` and `stream_id` fields directly without compatibility synonyms, and Alembic history was collapsed to one baseline migration for clean rebuilds.
 - **Explicit vehicle and stream identity** — Realtime ingest and simulator runtime now distinguish logical `vehicle_id` from per-session `stream_id`, with first-class packet-path metadata for `packet_source` and `receiver_id`. The backend now tracks active telemetry streams explicitly instead of inferring them from overloaded `source_id-run` strings.
@@ -16,9 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Telemetry detail routing** — Channel detail pages now keep the vehicle in the path and carry the selected run in `?run=...`, so opaque stream IDs no longer break navigation or summary lookups.
 - **WebSocket default stream following** — Realtime WebSocket subscriptions now stay vehicle-scoped when the client omits `stream_id`, while snapshots still resolve against the vehicle's current stream at subscribe time.
 - **Realtime ingest timestamp fallback** — `POST /telemetry/realtime/ingest` now accepts packets that provide only `reception_time`. When `generation_time` is absent, the backend synthesizes `generation_time = reception_time`, which allows APRS-style decoder traffic to flow through realtime ingest while keeping downstream timestamps populated.
+- **Dynamic source identity** — Removed built-in source IDs, source aliases, and startup creation of known local-stack sources. Sources now come only from configuration files plus persisted `telemetry_sources` rows, and simulator routing uses each row's `base_url`.
 
 ### Fixed
 
+- **Registered channel no-data detail pages** — Source-scoped channel detail pages now render for registered channels that have no samples or computed statistics yet, showing explicit no-data empty states instead of redirecting to Overview as if the channel were unavailable.
 - **Planning per-source feed health** — The Planning Earth view no longer shows one global `Live` banner for all selected sources. Each selected source now renders its own `Live` / `Degraded` / `No data` badge, and stopped simulators switch to `No data` immediately instead of inheriting another source’s live state.
 - **Simulator realtime runtime contract** — The simulator now sends `source_id` in realtime ingest payloads instead of the legacy runtime `vehicle_id`, restoring compatibility with `POST /telemetry/realtime/ingest`.
 - **Source-wide stream following and explicit stream pinning** — WebSocket subscriptions that omit `stream_id` now keep following the source’s active/latest stream across rollover, while explicitly selected streams remain pinned exactly, including explicit base-stream selections.
@@ -38,10 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Source-scoped channel aliases** — Telemetry definition files can now declare alias names for catalog channels. Ingest, watchlist changes, position mapping, channel detail APIs, and channel search accept either the canonical name or a configured alias, then normalize back to the canonical channel identity for storage and URLs.
+- **Source-scoped channel aliases** — Vehicle configuration files can now declare alias names for catalog channels. Ingest, watchlist changes, position mapping, channel detail APIs, and channel search accept either the canonical name or a configured alias, then normalize back to the canonical channel identity for storage and URLs.
 - **Dynamic telemetry channel discovery** — Realtime ingest now creates durable source-scoped `discovered` channels for unknown live fields instead of dropping them. Decoder-tagged payloads can derive stable names such as `decoder.aprs.payload_temp`, and those channels now appear in source-scoped lists, search, summaries, and watchlist configuration.
-- **Per-source telemetry definition files** — Vehicles and simulators now register with a JSON or YAML `telemetry_definition_path`. The backend validates the file, seeds that source’s telemetry catalog automatically, and seeds any inline position mapping so the system knows which channels to expect before the source goes live.
-- **Built-in source catalog refresh** — The local stack now ships with four named built-ins backed by fixed UUID source IDs: `Aegon Relay`, `Balerion Surveyor`, `DrogonSat`, and `RhaegalSat`.
+- **Per-source vehicle configuration files** — Vehicles and simulators now register with a JSON or YAML `vehicle_config_path`. The backend validates the file, seeds that source’s telemetry catalog automatically, and seeds any inline position mapping so the system knows which channels to expect before the source goes live.
+- **Config-backed local source catalog** — Local development source examples now come from ordinary vehicle configuration files instead of fixed backend source IDs.
 - **Simulator orbit anomaly presets** — The simulator now includes explicit `orbit_nominal`, `orbit_decay`, `orbit_highly_elliptical`, `orbit_suborbital`, and `orbit_escape` scenarios so operators can drive Planning and orbit-analysis workflows with intentional trajectory cases instead of random GPS corruption.
 - **Real-time orbit validation** — Backend orbit validation for sources with an active position channel mapping. Assembles position from GPS/LLA (or ECEF) channels, computes orbital parameters (perigee, apogee, eccentricity, velocity), classifies LEO/MEO/GEO, and detects anomalies (escape trajectory, suborbital, orbit decay, highly elliptical LEO). Status is exposed via `GET /telemetry/orbit/status` and broadcast over WebSocket (`orbit_status`) when status changes.
 - **Planning page orbit status and anomaly banner** — For sources with a position mapping that are shown on the globe, the left panel shows orbit status (VALID/LEO nominal or anomaly type). When any visible source has an orbit anomaly, a prominent alert banner appears in the left panel with source name and reason. Status updates in real time via WebSocket.
@@ -61,8 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Operator-facing **Position mapping** UI on the Planning page (overlay control) to configure which telemetry channels (e.g. `GPS_LAT`/`GPS_LON`/`GPS_ALT` or XYZ) should be treated as position for each source.
 - **Constellation: Sources tab and multi-sim support**
   - **Sources** tab (replaces Simulator): lists Vehicles and Simulators in separate sections
-  - Add-source wizard: add vehicles or simulators with a telemetry definition path; simulators also include a Base URL (server-reachable URL)
-  - Edit sources: update name, Base URL, and telemetry definition path from the Sources page
+  - Add-source wizard: add vehicles or simulators with a vehicle configuration path; simulators also include a Base URL (server-reachable URL)
+  - Edit sources: update name, Base URL, and vehicle configuration path from the Sources page
   - Overview source selector grouped by **Vehicles** and **Simulators**
   - Per-simulator backend proxy: simulator routes resolve URL from DB using the selected vehicle context
   - Two simulator containers (`simulator`, `simulator2`) in docker-compose for testing multi-sim
@@ -127,6 +140,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telemetry channel detail 404 for simulator sources: summary and explain endpoints now compute statistics on-the-fly when missing (e.g. new simulator sources that have data but no precomputed stats)
 - Feed status: API now exposes three-state `state` (connected/degraded/disconnected) so the context banner can show "No data" when a previously active source goes silent for >60s instead of staying "Degraded"
 - Removed unused `.cursor` volume mounts from backend and simulator in docker-compose
-- Overview default source set to `"default"` so the dashboard shows data after Quick Start (telemetry and backend APIs use `source_id=default` when none is provided)
+- Overview selects from registered sources instead of using a hard-coded default source ID.
 - Simulator ingest timeout: backend ingest endpoint now async (avoids thread pool contention), bus uses dedicated processor pool, simulator uses HTTP session with retries and separate connect/read timeouts
 - Changelog and agent rule for keeping docs up to date

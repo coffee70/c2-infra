@@ -21,7 +21,9 @@ from app.services.source_stream_service import (
     resolve_active_stream_id,
     resolve_latest_stream_id,
 )
-from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID
+
+
+DROGONSAT_SOURCE_ID = "test-drogonsat-source"
 
 
 class _EmptyResult:
@@ -72,8 +74,8 @@ class _HttpxClient:
         return self._response
 
 
-def test_normalize_source_id_resolves_known_alias() -> None:
-    assert normalize_source_id("simulator") == DROGONSAT_SOURCE_ID
+def test_normalize_source_id_keeps_source_id_exact() -> None:
+    assert normalize_source_id("simulator") == "simulator"
 
 
 def test_resolve_active_stream_id_uses_simulator_status(monkeypatch) -> None:
@@ -84,7 +86,7 @@ def test_resolve_active_stream_id_uses_simulator_status(monkeypatch) -> None:
         name="DrogonSat",
         source_type="simulator",
         base_url="http://simulator:8001",
-        telemetry_definition_path="defs/drogonsat.yaml",
+        vehicle_config_path="defs/drogonsat.yaml",
     )
     stream = SimpleNamespace(
         id=stream_id,
@@ -127,7 +129,7 @@ def test_resolve_active_stream_id_returns_logical_source_when_simulator_is_idle(
         name="DrogonSat",
         source_type="simulator",
         base_url="http://simulator:8001",
-        telemetry_definition_path="defs/drogonsat.yaml",
+        vehicle_config_path="defs/drogonsat.yaml",
     )
     db = MagicMock()
     db.get.side_effect = lambda model, key: source if model is TelemetrySource and key == DROGONSAT_SOURCE_ID else None
@@ -226,14 +228,14 @@ def test_register_stream_rejects_reserved_source_collision() -> None:
                 id=source_id,
                 name="Source A",
                 source_type="vehicle",
-                telemetry_definition_path="defs/source-a.yaml",
+                vehicle_config_path="defs/source-a.yaml",
             )
         if model is TelemetrySource and key == "source-b":
             return TelemetrySource(
                 id="source-b",
                 name="Source B",
                 source_type="vehicle",
-                telemetry_definition_path="defs/source-b.yaml",
+                vehicle_config_path="defs/source-b.yaml",
             )
         return None
 
@@ -268,7 +270,7 @@ def test_upsert_mapping_keeps_vehicle_surface_and_persists_source_id(monkeypatch
         id="vehicle-a",
         name="Vehicle A",
         source_type="vehicle",
-        telemetry_definition_path="defs/vehicle-a.yaml",
+        vehicle_config_path="defs/vehicle-a.yaml",
     )
 
     class _LockResult:
@@ -323,7 +325,7 @@ def test_get_latest_positions_uses_vehicle_ids_filter_and_latest_stream(monkeypa
         id="vehicle-a",
         name="Vehicle A",
         source_type="vehicle",
-        telemetry_definition_path="defs/vehicle-a.yaml",
+        vehicle_config_path="defs/vehicle-a.yaml",
     )
     db = MagicMock()
 

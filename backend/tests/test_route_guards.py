@@ -111,7 +111,7 @@ async def test_simulator_start_preserves_runtime_validation_errors(monkeypatch) 
     config.speed = 1.0
 
     mock_src = MagicMock()
-    mock_src.telemetry_definition_path = "simulators/drogonsat.yaml"
+    mock_src.vehicle_config_path = "simulators/drogonsat.yaml"
     monkeypatch.setattr(
         "app.routes.simulator._resolve_simulator_source",
         lambda _db, _source_id: mock_src,
@@ -215,7 +215,7 @@ async def test_simulator_status_returns_disconnected_on_missing_source(monkeypat
 
 
 @pytest.mark.anyio
-async def test_simulator_status_normalizes_legacy_source_alias(monkeypatch) -> None:
+async def test_simulator_status_uses_exact_source_id(monkeypatch) -> None:
     db = MagicMock()
     seen: dict[str, str] = {}
 
@@ -236,7 +236,7 @@ async def test_simulator_status_normalizes_legacy_source_alias(monkeypatch) -> N
 
     payload = await simulator_status(vehicle_id="simulator", db=db)
 
-    assert seen["source_id"] == "27a7e3d4-bbcc-4fa1-9e14-8ebabbea1be6"
+    assert seen["source_id"] == "simulator"
     assert payload["connected"] is True
 
 

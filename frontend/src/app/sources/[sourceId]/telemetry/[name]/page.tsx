@@ -24,16 +24,16 @@ interface ExplainResponse {
   channel_origin?: string | null;
   discovery_namespace?: string | null;
   statistics: {
-    mean: number;
-    std_dev: number;
-    min_value: number;
-    max_value: number;
-    p5: number;
-    p50: number;
-    p95: number;
+    mean: number | null;
+    std_dev: number | null;
+    min_value: number | null;
+    max_value: number | null;
+    p5: number | null;
+    p50: number | null;
+    p95: number | null;
     n_samples?: number;
   };
-  recent_value: number;
+  recent_value: number | null;
   z_score: number | null;
   is_anomalous: boolean;
   state: string;
@@ -52,11 +52,16 @@ interface RecentPoint {
   value: number;
 }
 
+interface SummaryFetchResult {
+  explain: ExplainResponse | null;
+  channelUnavailable: boolean;
+}
+
 async function fetchSummary(
   name: string,
   sourceId: string,
   streamId?: string | null,
-): Promise<ExplainResponse | null> {
+): Promise<SummaryFetchResult> {
   try {
     const params = new URLSearchParams();
     if (streamId) params.set("stream_id", streamId);
@@ -65,10 +70,18 @@ async function fetchSummary(
       `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/summary${suffix}`,
       { cache: "no-store" },
     );
-    if (!res.ok) return null;
-    return res.json();
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      const detail = typeof body?.detail === "string" ? body.detail : "";
+      return {
+        explain: null,
+        channelUnavailable:
+          res.status === 404 && detail.startsWith("Telemetry not found"),
+      };
+    }
+    return { explain: await res.json(), channelUnavailable: false };
   } catch {
-    return null;
+    return { explain: null, channelUnavailable: false };
   }
 }
 
@@ -110,12 +123,13 @@ export default async function TelemetryDetailPage({
       : null;
   const sourceId = requestedSourceId;
 
-  const [explain, recentData] = await Promise.all([
+  const [summary, recentData] = await Promise.all([
     fetchSummary(decodedName, sourceId, requestedStreamId),
     fetchRecent(decodedName, sourceId, requestedStreamId),
   ]);
+  const explain = summary.explain;
 
-  if (!explain) {
+  if (summary.channelUnavailable) {
     redirect(`/overview?source=${encodeURIComponent(sourceId)}&channel_unavailable=${encodeURIComponent(decodedName)}`);
   }
   if (!explain) notFound();

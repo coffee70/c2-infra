@@ -7,7 +7,7 @@ import { useOpsEventsQuery } from "@/lib/query-hooks";
 
 interface ChannelRecentEventsProps {
   channelName: string;
-  vehicleId?: string;
+  vehicleId: string;
   streamId?: string;
   sinceMinutes?: number;
 }
@@ -30,7 +30,7 @@ function formatTime(iso: string): string {
 
 export function ChannelRecentEvents({
   channelName,
-  vehicleId = "default",
+  vehicleId,
   streamId,
   sinceMinutes = 60,
 }: ChannelRecentEventsProps) {

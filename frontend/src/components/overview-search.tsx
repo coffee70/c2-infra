@@ -41,7 +41,6 @@ import {
   useTelemetryUnitsQuery,
   useWatchlistNames,
 } from "@/lib/query-hooks";
-import { DEFAULT_SOURCE_ID } from "@/lib/source-ids";
 import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
 export const AUTO_FOCUS_STORAGE_KEY = "overviewSearchAutoFocus";
 export const OVERVIEW_SEARCH_FOCUS_EVENT = "telemetry-overview-search-focus";
@@ -87,7 +86,7 @@ function statusVariant(status: string | null | undefined) {
 }
 
 function buildDetailHref(name: string, sourceId: string) {
-  return buildTelemetryDetailHref(sourceId || DEFAULT_SOURCE_ID, name);
+  return buildTelemetryDetailHref(sourceId, name);
 }
 
 function readSearchState(searchParams: { get(name: string): string | null }) {
@@ -131,11 +130,11 @@ export function OverviewSearch({
   const [favoriteError, setFavoriteError] = useState<string | null>(null);
 
   const sourceName = useMemo(
-    () => sources.find((entry) => entry.id === sourceId)?.name ?? sourceId ?? DEFAULT_SOURCE_ID,
+    () => sources.find((entry) => entry.id === sourceId)?.name ?? sourceId,
     [sourceId, sources]
   );
   const recentForSource = useMemo(
-    () => recent.filter((entry) => entry.sourceId === (sourceId || DEFAULT_SOURCE_ID)),
+    () => recent.filter((entry) => entry.sourceId === sourceId),
     [recent, sourceId]
   );
   const searchState = useMemo(() => readSearchState(searchParams), [searchParams]);
@@ -181,15 +180,15 @@ export function OverviewSearch({
     router.replace(next ? `${pathname}?${next}` : pathname);
   }, [pathname, router, searchParams]);
 
-  const subsystemQuery = useTelemetrySubsystemsQuery(sourceId || DEFAULT_SOURCE_ID);
-  const unitsQuery = useTelemetryUnitsQuery(sourceId || DEFAULT_SOURCE_ID);
-  const watchlistQuery = useWatchlistNames(sourceId || DEFAULT_SOURCE_ID);
-  const addMutation = useAddToWatchlistMutation(sourceId || DEFAULT_SOURCE_ID, {
+  const subsystemQuery = useTelemetrySubsystemsQuery(sourceId);
+  const unitsQuery = useTelemetryUnitsQuery(sourceId);
+  const watchlistQuery = useWatchlistNames(sourceId);
+  const addMutation = useAddToWatchlistMutation(sourceId, {
     onSuccess: async () => {
       await onWatchlistChanged?.();
     },
   });
-  const removeMutation = useRemoveFromWatchlistMutation(sourceId || DEFAULT_SOURCE_ID, {
+  const removeMutation = useRemoveFromWatchlistMutation(sourceId, {
     onSuccess: async () => {
       await onWatchlistChanged?.();
     },
@@ -197,7 +196,7 @@ export function OverviewSearch({
   const searchQuery = useTelemetrySearchQuery(
     {
       q: searchState.query,
-      sourceId: sourceId || DEFAULT_SOURCE_ID,
+      sourceId,
       subsystem: searchState.filters.subsystem,
       units: searchState.filters.units,
       anomalousOnly: searchState.filters.anomalousOnly,
@@ -248,7 +247,7 @@ export function OverviewSearch({
 
     const signature = JSON.stringify({
       q: searchState.query.trim(),
-      source_id: sourceId || DEFAULT_SOURCE_ID,
+      source_id: sourceId,
       subsystem: searchState.filters.subsystem || undefined,
       anomalous_only: searchState.filters.anomalousOnly,
       units: searchState.filters.units || undefined,

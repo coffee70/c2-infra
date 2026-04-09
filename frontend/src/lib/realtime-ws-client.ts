@@ -106,9 +106,9 @@ export class RealtimeWsClient {
   private subscriptions: {
     watchlist: string[];
     alerts: boolean;
-    sourceId: string;
+    sourceId: string | null;
     streamId: string | null;
-  } = { watchlist: [], alerts: true, sourceId: "default", streamId: null };
+  } = { watchlist: [], alerts: true, sourceId: null, streamId: null };
 
   constructor(url?: string) {
     this.url = url || getWsUrl();
@@ -121,23 +121,24 @@ export class RealtimeWsClient {
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
         this.send({ type: "hello", client_version: "1.0" });
-        // Always send subscribe_watchlist (empty channels = backend uses default watchlist)
-        this.send({
-          type: "subscribe_watchlist",
-          channels: this.subscriptions.watchlist,
-          source_id: this.subscriptions.sourceId,
-          ...(this.subscriptions.streamId
-            ? { stream_id: this.subscriptions.streamId }
-            : {}),
-        });
-        if (this.subscriptions.alerts) {
+        if (this.subscriptions.sourceId) {
           this.send({
-            type: "subscribe_alerts",
+            type: "subscribe_watchlist",
+            channels: this.subscriptions.watchlist,
             source_id: this.subscriptions.sourceId,
             ...(this.subscriptions.streamId
               ? { stream_id: this.subscriptions.streamId }
               : {}),
           });
+          if (this.subscriptions.alerts) {
+            this.send({
+              type: "subscribe_alerts",
+              source_id: this.subscriptions.sourceId,
+              ...(this.subscriptions.streamId
+                ? { stream_id: this.subscriptions.streamId }
+                : {}),
+            });
+          }
         }
       };
       this.ws.onmessage = (ev) => {
@@ -198,7 +199,7 @@ export class RealtimeWsClient {
 
   subscribeWatchlist(
     channels: string[],
-    sourceId: string = "default",
+    sourceId: string,
     streamId: string | null = null
   ): void {
     this.subscriptions.watchlist = channels;
@@ -213,7 +214,7 @@ export class RealtimeWsClient {
   }
 
   subscribeAlerts(
-    sourceId: string = "default",
+    sourceId: string,
     streamId: string | null = null
   ): void {
     this.subscriptions.alerts = true;

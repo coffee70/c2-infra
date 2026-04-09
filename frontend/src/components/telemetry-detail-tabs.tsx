@@ -42,16 +42,16 @@ interface ExplainResponse {
   channel_origin?: string | null;
   discovery_namespace?: string | null;
   statistics: {
-    mean: number;
-    std_dev: number;
-    min_value: number;
-    max_value: number;
-    p5: number;
-    p50: number;
-    p95: number;
+    mean: number | null;
+    std_dev: number | null;
+    min_value: number | null;
+    max_value: number | null;
+    p5: number | null;
+    p50: number | null;
+    p95: number | null;
     n_samples?: number;
   };
-  recent_value: number;
+  recent_value: number | null;
   z_score: number | null;
   is_anomalous: boolean;
   state: string;
@@ -83,6 +83,17 @@ interface TelemetrySource {
   name: string;
   description?: string | null;
   source_type?: string;
+}
+
+function hasNumericStatistics(stats: ExplainResponse["statistics"]) {
+  return (
+    (stats.n_samples ?? 0) > 0 &&
+    stats.p5 != null &&
+    stats.p50 != null &&
+    stats.p95 != null &&
+    stats.min_value != null &&
+    stats.max_value != null
+  );
 }
 
 export function TelemetryDetailTabs({
@@ -140,6 +151,7 @@ function TelemetryDetailTabsContent({
   const sourcesQuery = useTelemetrySourcesQuery<TelemetrySource[]>();
   const sources = sourcesQuery.data ?? [];
   const sourceName = sources.find((source) => source.id === sourceId)?.name ?? sourceId;
+  const hasStats = hasNumericStatistics(explain.statistics);
 
   const handleSourceChange = (newSourceId: string) => {
     if (newSourceId === sourceId) return;
@@ -278,6 +290,12 @@ function TelemetryDetailTabsContent({
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                    {!hasStats ? (
+                      <p className="text-muted-foreground text-sm">
+                        No statistics yet. This channel is registered, but no samples have been received.
+                      </p>
+                    ) : (
+                    <>
                     <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
                         <dt className="text-muted-foreground text-xs">
@@ -293,8 +311,8 @@ function TelemetryDetailTabsContent({
                         <dt className="text-muted-foreground text-xs">Spread</dt>
                         <dd className="mt-0.5 font-medium">
                           {formatSmartValue(
-                            explain.statistics.max_value -
-                              explain.statistics.min_value,
+                            explain.statistics.max_value! -
+                              explain.statistics.min_value!,
                             explain.units,
                           )}
                         </dd>
@@ -372,6 +390,8 @@ function TelemetryDetailTabsContent({
                         </dl>
                       </CollapsibleContent>
                     </Collapsible>
+                    </>
+                    )}
                   </CardContent>
                 </Card>
                 </div>
@@ -406,14 +426,14 @@ function TelemetryDetailTabsContent({
                       streamId={currentStreamId ?? null}
                       units={explain.units}
                       bounds={{
-                        p5: explain.statistics.p5,
-                        p50: explain.statistics.p50,
-                        p95: explain.statistics.p95,
-                        mean: explain.statistics.mean,
+                        p5: hasStats ? explain.statistics.p5 : null,
+                        p50: hasStats ? explain.statistics.p50 : null,
+                        p95: hasStats ? explain.statistics.p95 : null,
+                        mean: hasStats ? explain.statistics.mean : null,
                         redLow: explain.red_low ?? undefined,
                         redHigh: explain.red_high ?? undefined,
-                        minValue: explain.statistics.min_value,
-                        maxValue: explain.statistics.max_value,
+                        minValue: hasStats ? explain.statistics.min_value : null,
+                        maxValue: hasStats ? explain.statistics.max_value : null,
                       }}
                       lastTimestamp={explain.last_timestamp}
                     />

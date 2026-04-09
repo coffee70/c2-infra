@@ -26,6 +26,7 @@ If you open the page using an alias instead of the canonical channel name, the a
 The page is organized into **vertical tabs** so you can quickly switch between different views of the same channel:
 
 - **Summary** – current value, state badge (Normal, Caution, Warning), compact statistics (P5/P95, min/max, sample count), and description.
+- Registered catalog channels can open before data arrives. In that case, the detail page shows **No data**, omits percentile/statistics values, and keeps History and Trend Analysis in their empty states until samples are ingested.
 - Discovered channels stay queryable like catalog channels, but they may have no units, no description, and no engineering limits until you curate them.
 - **Live & Trends** – live time-series view plus the full **Trend Analysis** chart with range presets (15m, 1h, 6h, 24h, Custom), UTC/local toggle, comparison channels, and zoom controls.
 - **History** – a tabular view of archived samples for this channel:

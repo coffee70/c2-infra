@@ -4,9 +4,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 function formatWithUnits(
-  value: number,
+  value: number | null | undefined,
   units: string | null | undefined
 ): string {
+  if (value == null || !Number.isFinite(value)) return "No data";
+
   const formatted = value.toFixed(4);
   if (!units?.trim()) return formatted;
   const displayUnit = units === "C" ? "°C" : ` ${units}`;
@@ -31,6 +33,7 @@ function formatOperationalStatus(
   stateReason?: string | null,
   zScore?: number | null
 ): string {
+  if (state === "no_data") return "No data";
   if (state === "normal") return "In family";
   if (stateReason === "out_of_limits") return "Out of limits";
   if (stateReason === "out_of_family" && zScore != null)
@@ -59,10 +62,10 @@ function computeSlope(
 }
 
 interface CurrentValueBlockProps {
-  value: number;
+  value: number | null;
   units?: string | null;
   lastTimestamp?: string | null;
-  p50: number;
+  p50: number | null;
   state: string;
   stateReason?: string | null;
   zScore?: number | null;
@@ -79,11 +82,11 @@ export function CurrentValueBlock({
   zScore,
   recentData,
 }: CurrentValueBlockProps) {
-  const delta = value - p50;
+  const delta = value != null && p50 != null ? value - p50 : null;
   const slope = computeSlope(recentData);
   const statusLabel = formatOperationalStatus(state, stateReason, zScore);
   const stateVariant =
-    state === "warning" ? "destructive" : state === "caution" ? "secondary" : "success";
+    state === "warning" ? "destructive" : state === "normal" ? "success" : "secondary";
 
   return (
     <Card className="border-2">
@@ -109,10 +112,14 @@ export function CurrentValueBlock({
             )}
           </div>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-            <span>
-              {delta >= 0 ? "+" : ""}
-              {formatWithUnits(delta, units)} vs P50
-            </span>
+            {delta != null ? (
+              <span>
+                {delta >= 0 ? "+" : ""}
+                {formatWithUnits(delta, units)} vs P50
+              </span>
+            ) : (
+              <span className="text-muted-foreground">No percentile baseline yet</span>
+            )}
             {slope != null && (
               <>
                 <span className="text-muted-foreground">·</span>

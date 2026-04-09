@@ -15,7 +15,7 @@ export function getRecentChannels(): RecentTelemetryEntry[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.flatMap((entry) => {
       if (typeof entry === "string") {
-        return [{ sourceId: "default", name: entry }];
+        return [];
       }
       if (entry && typeof entry.sourceId === "string" && typeof entry.name === "string") {
         return [entry];

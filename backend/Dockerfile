@@ -25,11 +25,11 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY backend /app/backend
 COPY telemetry_catalog /app/telemetry_catalog
-COPY telemetry-definitions /app/telemetry-definitions
+COPY vehicle-configurations /app/vehicle-configurations
 
 ENV PYTHONPATH=/app/backend:/app
 ENV PYTHONUNBUFFERED=1
-ENV TELEMETRY_DEFINITIONS_ROOT=/app/telemetry-definitions
+ENV VEHICLE_CONFIG_ROOT=/app/vehicle-configurations
 
 EXPOSE 8000
 

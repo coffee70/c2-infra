@@ -21,8 +21,10 @@ import app.orbit as orbit_module
 from app.orbit import submit_position_sample, get_status
 from app.orbit.state import get_orbit_state
 from app.realtime.processor import RealtimeProcessor
-from telemetry_catalog.builtins import DROGONSAT_SOURCE_ID, RHAEGALSAT_SOURCE_ID
 from telemetry_catalog.coordinates import ecef_to_eci_m
+
+DROGONSAT_SOURCE_ID = "test-drogonsat-source"
+RHAEGALSAT_SOURCE_ID = "test-rhaegalsat-source"
 
 
 class TestLlaToEcefKm:

@@ -12,7 +12,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.models.telemetry import TelemetryCurrent, TelemetryData, TelemetryMetadata, TelemetrySource, TelemetryStream
-from telemetry_catalog.definitions import resolve_source_id_alias
 
 ACTIVE_STREAM_CACHE_TTL_SEC = 30.0
 SIMULATOR_STATUS_CACHE_TTL_SEC = 2.0
@@ -33,8 +32,8 @@ class SourceNotFoundError(ValueError):
 
 
 def normalize_source_id(source_id: str) -> str:
-    """Normalize a source id alias to its stored id."""
-    return resolve_source_id_alias(source_id) or source_id
+    """Return the persisted source id unchanged."""
+    return source_id
 
 
 def _cache_stream_owner(stream_id: str, source_id: str, *, seen_at: float | None = None) -> None:

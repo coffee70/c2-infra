@@ -2,10 +2,8 @@
 
 import { useSearchParams } from "next/navigation";
 import { EarthOverviewView } from "@/components/earth-overview-view";
-import { resolveSourceAlias } from "@/lib/source-ids";
 import { Spinner } from "@/components/ui/spinner";
 import { useTelemetrySourcesQuery } from "@/lib/query-hooks";
-import { DEFAULT_SOURCE_ID } from "@/lib/source-ids";
 
 interface TelemetrySource {
   id: string;
@@ -17,9 +15,6 @@ interface TelemetrySource {
 export function PlanningEarthPage() {
   const searchParams = useSearchParams();
   const sourceFromUrl = searchParams.get("source");
-  const normalizedSourceFromUrl = sourceFromUrl
-    ? resolveSourceAlias(sourceFromUrl)
-    : null;
 
   const sourcesQuery = useTelemetrySourcesQuery<TelemetrySource[]>();
   const loading = sourcesQuery.isLoading;
@@ -27,12 +22,9 @@ export function PlanningEarthPage() {
   const sources = sourcesQuery.data ?? [];
 
   const initialSourceId =
-    normalizedSourceFromUrl &&
-    sources.some((s) => s.id === normalizedSourceFromUrl)
-      ? normalizedSourceFromUrl
-      : sources.some((s) => s.id === DEFAULT_SOURCE_ID)
-        ? DEFAULT_SOURCE_ID
-        : sources[0]?.id ?? DEFAULT_SOURCE_ID;
+    sourceFromUrl && sources.some((s) => s.id === sourceFromUrl)
+      ? sourceFromUrl
+      : sources[0]?.id;
 
   if (loading) {
     return (

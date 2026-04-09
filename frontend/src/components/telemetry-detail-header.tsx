@@ -11,9 +11,11 @@ import {
 import { TelemetryDetailActions } from "@/components/telemetry-detail-actions";
 
 function formatWithUnits(
-  value: number,
+  value: number | null | undefined,
   units: string | null | undefined
 ): string {
+  if (value == null || !Number.isFinite(value)) return "No data";
+
   const formatted = value.toFixed(4);
   if (!units?.trim()) return formatted;
   const displayUnit = units === "C" ? "°C" : ` ${units}`;
@@ -38,6 +40,7 @@ function formatOperationalStatus(
   stateReason?: string | null,
   zScore?: number | null
 ): string {
+  if (state === "no_data") return "No data";
   if (state === "normal") return "In family";
   if (stateReason === "out_of_limits") return "Out of limits";
   if (stateReason === "out_of_family" && zScore != null)
@@ -48,7 +51,7 @@ function formatOperationalStatus(
 interface TelemetryDetailHeaderProps {
   name: string;
   sourceId: string;
-  value: number;
+  value: number | null;
   units?: string | null;
   channelOrigin?: string | null;
   state: string;
@@ -90,7 +93,7 @@ export function TelemetryDetailHeader({
 
   const statusLabel = formatOperationalStatus(state, stateReason, zScore);
   const stateVariant =
-    state === "warning" ? "destructive" : state === "caution" ? "secondary" : "success";
+    state === "warning" ? "destructive" : state === "normal" ? "success" : "secondary";
 
   const copyValueText = `${name}: ${formatWithUnits(value, units)}`;
   const copyTimestampText = lastTimestamp
@@ -120,7 +123,7 @@ export function TelemetryDetailHeader({
                 Live
               </Badge>
             )}
-            <span className="shrink-0 text-lg font-medium tabular-nums" data-value={value}>
+            <span className="shrink-0 text-lg font-medium tabular-nums" data-value={value ?? ""}>
               {formatWithUnits(value, units)}
             </span>
             {lastTimestamp != null && lastTimestamp !== "" && (
@@ -160,11 +163,12 @@ export function TelemetryDetailHeader({
                 onClick={() => copyToClipboard(copyValueText, "value")}
                 aria-label="Copy channel name and value"
                 aria-live="polite"
+                disabled={value == null}
               >
-                {copyFailedKey === "value" ? "Copy failed" : copied === "value" ? "Copied!" : "Copy value"}
+                {value == null ? "No value" : copyFailedKey === "value" ? "Copy failed" : copied === "value" ? "Copied!" : "Copy value"}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Copy channel name and value</TooltipContent>
+            <TooltipContent>{value == null ? "No value has been received yet" : "Copy channel name and value"}</TooltipContent>
           </Tooltip>
           {lastTimestamp && (
             <Tooltip>

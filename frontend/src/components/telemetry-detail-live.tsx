@@ -9,10 +9,10 @@ import {
 
 interface TelemetryDetailLiveProps {
   channelName: string;
-  initialValue: number;
+  initialValue: number | null;
   initialUnits?: string | null;
   initialLastTimestamp?: string | null;
-  initialP50: number;
+  initialP50: number | null;
   initialState: string;
   initialStateReason?: string | null;
   initialZScore?: number | null;

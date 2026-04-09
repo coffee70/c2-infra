@@ -2,11 +2,11 @@
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -30,6 +30,11 @@ from app.models.schemas import (
     RecentDataPoint,
     RelatedChannel,
     SourceCreate,
+    SourceObservationBatchUpsert,
+    SourceObservationBatchUpsertResponse,
+    SourceObservationSchema,
+    SourceResolveRequest,
+    SourceResolveResponse,
     SourceUpdate,
     StatisticsResponse,
     OverviewChannel,
@@ -42,6 +47,7 @@ from app.models.schemas import (
     TelemetryListResponse,
     TelemetrySchemaCreate,
     TelemetrySchemaResponse,
+    UpcomingObservationsResponse,
     WatchlistAddRequest,
     WatchlistResponse,
 )
@@ -57,9 +63,9 @@ from app.services.overview_service import (
     remove_from_watchlist,
 )
 from app.services.realtime_service import (
-    bootstrap_builtin_sources,
     create_source,
     get_telemetry_sources,
+    resolve_source,
     update_source,
 )
 from app.utils.subsystem import infer_subsystem
@@ -75,6 +81,12 @@ from app.services.source_stream_service import (
     StreamIdConflictError,
     resolve_active_stream_id,
     resolve_latest_stream_id,
+)
+from app.services.source_observation_service import (
+    SourceObservationNotFoundError,
+    get_next_observation,
+    list_upcoming_observations,
+    upsert_source_observations,
 )
 from app.config import get_settings
 from app.lib.audit import audit_log
@@ -214,7 +226,7 @@ def ingest_data(
     embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
     llm: object = Depends(get_llm_provider),
 ):
-    """Ingest batch of telemetry data. source_id in body (default: default) scopes data when telemetry_data is source-aware."""
+    """Ingest batch of telemetry data scoped by the source_id in the body."""
     service = TelemetryService(db, embedding, llm)
     try:
         data = []
@@ -249,12 +261,17 @@ def recompute_stats(
     all_sources: bool = False,
     db: Session = Depends(get_db),
 ):
-    """Recompute statistics. source_id= filters to one source; all_sources=true recomputes per source (when source-aware). Default: single source 'default'."""
+    """Recompute statistics. source_id filters to one source; all_sources recomputes per source."""
+    if not all_sources and not source_id:
+        raise HTTPException(status_code=400, detail="source_id is required unless all_sources=true")
     stats_service = StatisticsService(db)
-    count = stats_service.recompute_all(source_id=source_id, all_sources=all_sources)
+    try:
+        count = stats_service.recompute_all(source_id=source_id, all_sources=all_sources)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     audit_log(
         "stats.recompute",
-        source_id=source_id or "default",
+        source_id=source_id,
         all_sources=all_sources,
         telemetry_processed=count,
     )
@@ -263,7 +280,7 @@ def recompute_stats(
 
 @router.get("/overview", response_model=OverviewResponse)
 def overview(
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
     """Get overview data for watchlist channels, optionally filtered by source."""
@@ -273,7 +290,7 @@ def overview(
 
 @router.get("/anomalies", response_model=AnomaliesResponse)
 def anomalies(
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
     """Get anomalous channels grouped by subsystem, optionally filtered by source."""
@@ -302,10 +319,40 @@ def create_source_route(
             name=body.name,
             description=body.description,
             base_url=body.base_url,
-            telemetry_definition_path=body.telemetry_definition_path,
+            vehicle_config_path=body.vehicle_config_path,
         )
         audit_log("sources.create", source_id=result["id"], name=body.name)
         return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except IntegrityError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="source already exists for vehicle_config_path") from e
+
+
+@router.post("/sources/resolve", response_model=SourceResolveResponse)
+def resolve_source_route(
+    body: SourceResolveRequest,
+    db: Session = Depends(get_db),
+    embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
+):
+    """Resolve or create a vehicle source for adapter startup."""
+    try:
+        result, created = resolve_source(
+            db,
+            embedding_provider=embedding,
+            source_type=body.source_type,
+            name=body.name,
+            description=body.description,
+            vehicle_config_path=body.vehicle_config_path,
+        )
+        audit_log(
+            "sources.resolve",
+            source_id=result["id"],
+            vehicle_config_path=result["vehicle_config_path"],
+            created=created,
+        )
+        return {**result, "created": created}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -327,7 +374,7 @@ def update_source_route(
             name=updates.get("name"),
             description=updates.get("description"),
             base_url=updates.get("base_url"),
-            telemetry_definition_path=updates.get("telemetry_definition_path"),
+            vehicle_config_path=updates.get("vehicle_config_path"),
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -335,6 +382,100 @@ def update_source_route(
         raise HTTPException(status_code=404, detail="Source not found")
     audit_log("sources.update", source_id=source_id)
     return result
+
+
+@router.get(
+    "/sources/{source_id}/observations/upcoming",
+    response_model=UpcomingObservationsResponse,
+)
+def get_upcoming_source_observations(
+    source_id: str,
+    limit: int = Query(default=5, ge=1, le=25),
+    provider: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """List upcoming observation windows for a source."""
+    logical_source_id = normalize_source_id(source_id)
+    try:
+        observations = list_upcoming_observations(
+            db,
+            source_id=logical_source_id,
+            now=datetime.now(timezone.utc),
+            limit=limit,
+            provider=provider,
+        )
+    except SourceObservationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    audit_log(
+        "source_observations.read_upcoming",
+        source_id=logical_source_id,
+        provider=provider or "",
+        limit=limit,
+    )
+    return UpcomingObservationsResponse(
+        observations=[SourceObservationSchema.model_validate(item) for item in observations]
+    )
+
+
+@router.get(
+    "/sources/{source_id}/observations/next",
+    response_model=SourceObservationSchema | None,
+)
+def get_next_source_observation(
+    source_id: str,
+    provider: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Return the next observation window for a source, if known."""
+    logical_source_id = normalize_source_id(source_id)
+    try:
+        observation = get_next_observation(
+            db,
+            source_id=logical_source_id,
+            now=datetime.now(timezone.utc),
+            provider=provider,
+        )
+    except SourceObservationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    audit_log(
+        "source_observations.read_next",
+        source_id=logical_source_id,
+        provider=provider or "",
+    )
+    return SourceObservationSchema.model_validate(observation) if observation is not None else None
+
+
+@router.post(
+    "/sources/{source_id}/observations:batch-upsert",
+    response_model=SourceObservationBatchUpsertResponse,
+)
+def batch_upsert_source_observations(
+    source_id: str,
+    body: SourceObservationBatchUpsert,
+    db: Session = Depends(get_db),
+):
+    """Write a provider snapshot of observation windows for a source."""
+    logical_source_id = normalize_source_id(source_id)
+    try:
+        result = upsert_source_observations(
+            db,
+            source_id=logical_source_id,
+            batch=body,
+            now=datetime.now(timezone.utc),
+        )
+    except SourceObservationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    audit_log(
+        "source_observations.batch_upsert",
+        source_id=logical_source_id,
+        provider=body.provider,
+        inserted=result.inserted,
+        deleted=result.deleted,
+    )
+    return SourceObservationBatchUpsertResponse(
+        inserted=result.inserted,
+        deleted=result.deleted,
+    )
 
 
 @router.get("/sources/{source_id}/streams", response_model=ChannelSourcesResponse)
@@ -383,7 +524,7 @@ def get_source_streams(
 
 @router.get("/watchlist", response_model=WatchlistResponse)
 def list_watchlist(
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
     """List watchlist entries."""
@@ -425,7 +566,7 @@ def add_watchlist(
 @router.delete("/watchlist/{name}")
 def delete_watchlist(
     name: str,
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
     """Remove a channel from the watchlist."""
@@ -437,7 +578,7 @@ def delete_watchlist(
 
 @router.get("/list", response_model=TelemetryListResponse)
 def list_telemetry(
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
     """List all telemetry names for watchlist config."""
@@ -450,7 +591,7 @@ def list_telemetry(
 
 @router.get("/subsystems")
 def list_subsystems(
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
     """Get distinct subsystem tags for filter dropdown."""
@@ -469,7 +610,7 @@ def list_subsystems(
 
 @router.get("/units")
 def list_units(
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
     """Get distinct units for filter dropdown."""
@@ -492,7 +633,7 @@ def search(
     units: Optional[str] = None,
     recent_minutes: Optional[int] = None,
     limit: int = 10,
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
     embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
     llm: object = Depends(get_llm_provider),
@@ -520,12 +661,17 @@ def search(
     return SearchResponse(results=results)
 
 
-def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "default") -> ExplainResponse:
+def _get_explanation_summary_db_only(db: Session, name: str, source_id: str) -> ExplainResponse:
     """Build explain response using only DB—no embedding/LLM cold start."""
     data_source_id = normalize_source_id(source_id)
     meta = _get_channel_meta(db, source_id, name)
     if not meta:
         raise ValueError(f"Telemetry not found: {name}")
+    aliases = get_aliases_by_telemetry_ids(
+        db,
+        source_id=source_id,
+        telemetry_ids=[meta.id],
+    ).get(meta.id, [])
 
     stats_row = db.get(TelemetryStatistics, (data_source_id, meta.id))
     if not stats_row:
@@ -535,7 +681,38 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
         db.flush()
         stats_row = db.get(TelemetryStatistics, (data_source_id, meta.id))
     if not stats_row:
-        raise ValueError(f"Statistics not computed for: {name}")
+        red_low = float(meta.red_low) if meta.red_low is not None else None
+        red_high = float(meta.red_high) if meta.red_high is not None else None
+        return ExplainResponse(
+            name=meta.name,
+            aliases=aliases,
+            description=meta.description,
+            units=meta.units,
+            channel_origin=meta.channel_origin or "catalog",
+            discovery_namespace=meta.discovery_namespace,
+            statistics=StatisticsResponse(
+                mean=None,
+                std_dev=None,
+                min_value=None,
+                max_value=None,
+                p5=None,
+                p50=None,
+                p95=None,
+                n_samples=0,
+            ),
+            recent_value=None,
+            z_score=None,
+            is_anomalous=False,
+            state="no_data",
+            state_reason="no_samples",
+            last_timestamp=None,
+            red_low=red_low,
+            red_high=red_high,
+            what_this_means="",
+            what_to_check_next=[],
+            confidence_indicator=None,
+            llm_explanation="",
+        )
 
     rows = _get_recent_values_db_only(db, name, limit=1, source_id=data_source_id)
     recent_value: Optional[float] = float(rows[0][1]) if rows else None
@@ -559,11 +736,7 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
 
     return ExplainResponse(
         name=meta.name,
-        aliases=get_aliases_by_telemetry_ids(
-            db,
-            source_id=source_id,
-            telemetry_ids=[meta.id],
-        ).get(meta.id, []),
+        aliases=aliases,
         description=meta.description,
         units=meta.units,
         channel_origin=meta.channel_origin or "catalog",
@@ -596,7 +769,7 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str = "d
 @router.get("/{name}/summary", response_model=ExplainResponse)
 def get_summary(
     name: str,
-    source_id: str = "default",
+    source_id: str,
     db: Session = Depends(get_db),
 ):
     """Fast summary for initial page load—DB only, no embedding/LLM. source_id filters by stream source."""
@@ -627,7 +800,7 @@ def get_summary_for_source(
 def explain(
     name: str,
     skip_llm: bool = False,
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
     embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
     llm: object = Depends(get_llm_provider),
@@ -725,10 +898,10 @@ def get_channel_streams(
 def _get_recent_values_db_only(
     db: Session,
     name: str,
+    source_id: str,
     limit: int = 100,
     since=None,
     until=None,
-    source_id: str = "default",
 ) -> list[tuple[datetime, float]]:
     """Get recent values using only DB—no embedding/LLM cold start. source_id filters when telemetry_data is source-aware."""
     data_source_id = resolve_latest_stream_id(db, source_id)
@@ -758,10 +931,10 @@ def get_recent(
     limit: int = 100,
     since: Optional[str] = None,
     until: Optional[str] = None,
-    source_id: str = "default",
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    """Get most recent data points for charting. Use since/until (ISO8601) for time-range filter. source_id filters by stream source (default: default)."""
+    """Get most recent data points for charting. Use since/until for time-range filter."""
     name = unquote(name)
     since_dt: Optional[datetime] = None
     until_dt: Optional[datetime] = None

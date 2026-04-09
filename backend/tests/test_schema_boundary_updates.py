@@ -24,6 +24,8 @@ sys.modules.setdefault(
 from app.models.schemas import (
     ActiveStreamUpdate,
     MeasurementEvent,
+    SourceObservationBatchUpsert,
+    SourceObservationUpsert,
     TelemetryDataIngest,
     TelemetrySchemaCreate,
     WatchlistAddRequest,
@@ -206,6 +208,50 @@ def test_active_run_route_is_removed() -> None:
     paths = {route.path for route in telemetry_routes.router.routes}
     assert "/sources/active-run" not in paths
     assert "/sources/active-stream" in paths
+    assert "/sources/{source_id}/observations/upcoming" in paths
+    assert "/sources/{source_id}/observations/next" in paths
+    assert "/sources/{source_id}/observations:batch-upsert" in paths
+
+
+def test_source_observation_request_rejects_invalid_time_range() -> None:
+    with pytest.raises(ValueError, match="end_time must be after start_time"):
+        SourceObservationUpsert(
+            start_time=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+            end_time=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+        )
+
+
+def test_source_observation_routes_normalize_source_and_call_service(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(telemetry_routes, "normalize_source_id", lambda source_id: f"normalized-{source_id}")
+    monkeypatch.setattr(
+        telemetry_routes,
+        "upsert_source_observations",
+        lambda db, *, source_id, batch, now: calls.update(
+            {"source_id": source_id, "provider": batch.provider, "now": now}
+        )
+        or SimpleNamespace(inserted=1, deleted=2),
+    )
+
+    response = telemetry_routes.batch_upsert_source_observations(
+        source_id="source-a",
+        body=SourceObservationBatchUpsert(
+            provider="satnogs",
+            observations=[
+                SourceObservationUpsert(
+                    start_time=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
+                    end_time=datetime(2026, 4, 7, 12, 10, tzinfo=timezone.utc),
+                )
+            ],
+        ),
+        db=MagicMock(),
+    )
+
+    assert response.inserted == 1
+    assert response.deleted == 2
+    assert calls["source_id"] == "normalized-source-a"
+    assert calls["provider"] == "satnogs"
 
 
 def test_runtime_route_signature_no_longer_accepts_run_id() -> None:
@@ -373,6 +419,58 @@ def test_get_recent_values_db_only_preserves_explicit_stream_scope(monkeypatch) 
     assert any("stream-a" in params.values() for params in captured_params)
 
 
+def test_summary_for_registered_channel_without_samples_returns_no_data(monkeypatch) -> None:
+    telemetry_id = uuid4()
+    db = MagicMock()
+    db.get.return_value = None
+    meta = SimpleNamespace(
+        id=telemetry_id,
+        name="ISS_POS_LON_DEG",
+        description="Longitude",
+        units="deg",
+        channel_origin="catalog",
+        discovery_namespace=None,
+        red_low=None,
+        red_high=None,
+    )
+
+    class FakeStatisticsService:
+        def __init__(self, _db):
+            pass
+
+        def _recompute_one(self, _telemetry_id, *, source_id):
+            return None
+
+    monkeypatch.setattr(telemetry_routes, "_get_channel_meta", lambda _db, _source_id, _name: meta)
+    monkeypatch.setattr(telemetry_routes, "get_aliases_by_telemetry_ids", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(telemetry_routes, "StatisticsService", FakeStatisticsService)
+
+    result = telemetry_routes._get_explanation_summary_db_only(
+        db,
+        "ISS_POS_LON_DEG",
+        source_id="iss-source",
+    )
+
+    assert result.name == "ISS_POS_LON_DEG"
+    assert result.recent_value is None
+    assert result.statistics.n_samples == 0
+    assert result.statistics.mean is None
+    assert result.statistics.p50 is None
+    assert result.state == "no_data"
+    assert result.state_reason == "no_samples"
+
+
+def test_summary_for_unknown_channel_still_fails(monkeypatch) -> None:
+    monkeypatch.setattr(telemetry_routes, "_get_channel_meta", lambda _db, _source_id, _name: None)
+
+    with pytest.raises(ValueError, match="Telemetry not found"):
+        telemetry_routes._get_explanation_summary_db_only(
+            MagicMock(),
+            "UNKNOWN",
+            source_id="iss-source",
+        )
+
+
 def test_validate_stream_batch_identities_rejects_unknown_source() -> None:
     db = MagicMock()
     db.get.return_value = None
@@ -401,7 +499,7 @@ def test_validate_stream_batch_identities_rejects_mixed_stream_owners(monkeypatc
                 id=key,
                 name=key,
                 source_type="vehicle",
-                telemetry_definition_path=f"defs/{key}.yaml",
+                vehicle_config_path=f"defs/{key}.yaml",
             )
         return None
 

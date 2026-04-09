@@ -182,6 +182,8 @@ class RealtimeProcessor:
         self._bus = get_realtime_bus()
         self._sparkline_history: dict[tuple[str, str], deque[RecentDataPoint]] = {}
         self._sparkline_history_lock = threading.Lock()
+        self._stream_registration_locks: dict[str, threading.Lock] = {}
+        self._stream_registration_locks_lock = threading.Lock()
         # Orbit: sources with position mapping -> (lat, lon, alt) channel names
         self._orbit_mappings: dict[str, dict[str, str]] = {}
         self._orbit_mappings_at: float = 0.0
@@ -197,6 +199,14 @@ class RealtimeProcessor:
         if key not in self._state_history:
             self._state_history[key] = deque(maxlen=DEBOUNCE_CONSECUTIVE)
         return self._state_history[key]
+
+    def _get_stream_registration_lock(self, stream_id: str) -> threading.Lock:
+        with self._stream_registration_locks_lock:
+            lock = self._stream_registration_locks.get(stream_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._stream_registration_locks[stream_id] = lock
+            return lock
 
     def _append_sparkline_point(
         self,
@@ -276,15 +286,16 @@ class RealtimeProcessor:
 
         # Refresh liveness before the historical insert so replayed packets still
         # keep the active stream and feed-health state warm.
-        register_stream(
-            db,
-            source_id=source_id,
-            stream_id=stream_id,
-            packet_source=event.packet_source,
-            receiver_id=event.receiver_id,
-            seen_at=recv_time,
-            activate=False,
-        )
+        with self._get_stream_registration_lock(stream_id):
+            register_stream(
+                db,
+                source_id=source_id,
+                stream_id=stream_id,
+                packet_source=event.packet_source,
+                receiver_id=event.receiver_id,
+                seen_at=recv_time,
+                activate=False,
+            )
         get_feed_health_tracker().record_reception(source_id)
 
         # Persist to Timescale. Use a savepoint so duplicate sample retries do not

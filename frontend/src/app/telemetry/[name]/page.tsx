@@ -9,6 +9,8 @@ export default async function TelemetryDetailPage({
 }) {
   const { name } = await params;
   const { source } = await searchParams;
-  const sourceId = source ?? "default";
-  redirect(`/sources/${encodeURIComponent(sourceId)}/telemetry/${encodeURIComponent(name)}`);
+  if (!source) {
+    redirect("/overview");
+  }
+  redirect(`/sources/${encodeURIComponent(source)}/telemetry/${encodeURIComponent(name)}`);
 }

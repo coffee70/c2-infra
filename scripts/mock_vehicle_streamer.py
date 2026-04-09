@@ -39,9 +39,9 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from telemetry_catalog.builtins import MOCK_VEHICLE_SOURCE_ID
-from telemetry_catalog.definitions import channel_rate_hz, load_definition_file
+from telemetry_catalog.definitions import channel_rate_hz, load_vehicle_config_file
 
-DEFINITION = load_definition_file("vehicles/balerion-surveyor.json")
+DEFINITION = load_vehicle_config_file("vehicles/balerion-surveyor.json")
 TELEMETRY_DEFINITIONS = [
     (
         channel.name,

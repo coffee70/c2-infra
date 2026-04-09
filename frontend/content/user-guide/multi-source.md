@@ -8,7 +8,7 @@ The platform supports multiple telemetry sources and simulators. A **source** is
 
 In the **Context Banner** on the Overview and Telemetry Detail pages, you switch between logical sources only. The dropdown lists registered sources, not individual streams. Telemetry Detail URLs stay source-first: `/sources/{source_id}/telemetry/{channel_name}`. The app resolves the source's current stream for Overview data, Summary, Live & Trends, and the default stream in the History tab.
 
-Because channel catalogs are now source-scoped, a channel detail page is only valid for sources that actually expose that channel. If you switch to a source that does not provide the current channel, the app redirects you back to that source’s Overview with a notice instead of leaving you on a 404 page.
+Because channel catalogs are now source-scoped, a channel detail page is only valid for sources that actually expose that channel. Registered channels still open even before any samples arrive; the page shows **No data** and empty chart/history states until telemetry is ingested. If you switch to a source that does not provide the current channel, the app redirects you back to that source’s Overview with a notice instead of leaving you on a 404 page.
 
 ## Per-Source Feed Health
 
@@ -35,17 +35,17 @@ The **Overview** page shows ops events for the selected source directly under th
 1. Go to the **Sources** page.
 2. Click **Add source**.
 3. Choose **Simulator**.
-4. Enter a name, a **Telemetry definition path** (JSON or YAML under the server’s definitions catalog), and a **Base URL** — the URL the server uses to reach the simulator (e.g. `http://simulator:8001`).
+4. Enter a name, a **Vehicle configuration path** (JSON or YAML under the server’s definitions catalog), and a **Base URL** — the URL the server uses to reach the simulator (e.g. `http://simulator:8001`).
 5. Click **Create**.
 
-The simulator appears in the Simulators list. The backend seeds its expected channel catalog immediately from the definition file. Click **Manage** to open its control panel and start, pause, or stop it.
+The simulator appears in the Simulators list. The backend seeds its expected channel catalog immediately from the vehicle configuration file. Click **Manage** to open its control panel and start, pause, or stop it.
 
 ## Adding a Vehicle
 
 1. Go to the **Sources** page.
 2. Click **Add source**.
 3. Choose **Vehicle**.
-4. Enter a name and a **Telemetry definition path**.
+4. Enter a name and a **Vehicle configuration path**.
 5. Click **Create**.
 
 The backend seeds the source catalog from that definition so searches, watchlists, summaries, and alerts know which channels belong to that source before live ingest starts.
@@ -54,12 +54,12 @@ The backend seeds the source catalog from that definition so searches, watchlist
 
 Each time you **start** a simulator from the Sources page, the platform creates a new stream for that source. You are taken to the **Overview** with that source selected; the Overview and Telemetry Detail then show data for the source's current stream. History, trends, and exports remain stream-scoped, while the page URL stays at the source level.
 
-## Built-in Local Sources
+## Local Config-Backed Sources
 
-The default local stack includes four built-ins:
+The local stack can include ordinary vehicle and simulator configuration files:
 
-- `Aegon Relay` and `Balerion Surveyor` as vehicle sources
-- `DrogonSat` as a lighter simulator that emits GPS/LLA position channels
-- `RhaegalSat` as a heavier simulator that emits ECEF position channels
+- `Aegon Relay` and `Balerion Surveyor` as vehicle source examples
+- `DrogonSat` as a lighter simulator example that emits GPS/LLA position channels
+- `RhaegalSat` as a heavier simulator example that emits ECEF position channels
 
-`DrogonSat` and `RhaegalSat` intentionally share only a small common core. `RhaegalSat` has more onboard computer temperature/load channels, a split propulsion system, and a larger payload/comms catalog, so source switching exercises real source-specific workflows instead of identical feeds with different names.
+These are not privileged backend identities. If the configuration files are removed, the sources do not auto-register. `DrogonSat` and `RhaegalSat` intentionally share only a small common core. `RhaegalSat` has more onboard computer temperature/load channels, a split propulsion system, and a larger payload/comms catalog, so source switching exercises real source-specific workflows instead of identical feeds with different names.

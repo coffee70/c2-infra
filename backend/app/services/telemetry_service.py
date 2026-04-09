@@ -177,12 +177,12 @@ class TelemetryService:
     def semantic_search(
         self,
         query: str,
+        source_id: str,
         limit: int = 10,
         subsystem: Optional[str] = None,
         anomalous_only: bool = False,
         units: Optional[str] = None,
         recent_minutes: Optional[int] = None,
-        source_id: str = "default",
     ) -> list[SearchResult]:
         """Vector similarity search with enriched metadata and optional filters."""
         if not query or not query.strip():
@@ -406,10 +406,10 @@ class TelemetryService:
     def get_recent_values(
         self,
         name: str,
+        source_id: str,
         limit: int = 100,
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
-        source_id: str = "default",
     ) -> list[tuple[datetime, float]]:
         """Get most recent values for a telemetry point, optionally filtered by time range and source."""
         data_source_id = resolve_latest_stream_id(self._db, source_id)
@@ -434,21 +434,21 @@ class TelemetryService:
         return [(r[0], float(r[1])) for r in rows]
 
     def get_recent_value(
-        self, name: str, source_id: str = "default"
+        self, name: str, source_id: str
     ) -> Optional[float]:
         """Get the most recent single value."""
         rows = self.get_recent_values(name, limit=1, source_id=source_id)
         return rows[0][1] if rows else None
 
     def get_recent_value_with_timestamp(
-        self, name: str, source_id: str = "default"
+        self, name: str, source_id: str
     ) -> Optional[Tuple[float, datetime]]:
         """Get the most recent value and its timestamp."""
         rows = self.get_recent_values(name, limit=1, source_id=source_id)
         return (rows[0][1], rows[0][0]) if rows else None
 
     def get_related_channels(
-        self, name: str, limit: int = 5, source_id: str = "default"
+        self, name: str, source_id: str, limit: int = 5
     ) -> list[RelatedChannel]:
         """Get channels linked by subsystem/physics for 'What to check next'."""
         data_source_id = resolve_latest_stream_id(self._db, source_id)
@@ -487,7 +487,7 @@ class TelemetryService:
 
         # If fewer than limit, add semantic search within same subsystem
         if len(ordered) < limit:
-            semantic_results = self.semantic_search(canonical_name, limit=limit, subsystem=subsys, source_id=source_id)
+            semantic_results = self.semantic_search(canonical_name, source_id=source_id, limit=limit, subsystem=subsys)
             seen = {m.name for m, _ in ordered}
             for r in semantic_results:
                 if r.name not in seen:
@@ -549,7 +549,7 @@ class TelemetryService:
         return None
 
     def get_explanation(
-        self, name: str, skip_llm: bool = False, source_id: str = "default"
+        self, name: str, source_id: str, skip_llm: bool = False
     ) -> ExplainResponse:
         """Build full explanation with stats, z-score, and LLM response."""
         data_source_id = resolve_latest_stream_id(self._db, source_id)
@@ -632,7 +632,7 @@ class TelemetryService:
                     s = sentences[0]
                     what_this_means = s if s.endswith(".") else s + "."
 
-            related = self.get_related_channels(canonical_name, limit=5, source_id=source_id)
+            related = self.get_related_channels(canonical_name, source_id=source_id, limit=5)
         n_samples = getattr(stats_row, "n_samples", 0)
         confidence = self._compute_confidence_indicator(n_samples, last_timestamp)
 

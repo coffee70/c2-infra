@@ -1,7 +1,7 @@
 """Pydantic request/response schemas."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
@@ -20,7 +20,7 @@ class ChannelListItem(BaseModel):
 class TelemetrySchemaCreate(BaseModel):
     """Request body for POST /telemetry/schema."""
 
-    source_id: str = "default"
+    source_id: str
     name: str
     units: str
     description: Optional[str] = None
@@ -88,13 +88,13 @@ class SearchResponse(BaseModel):
 class StatisticsResponse(BaseModel):
     """Statistics for explain response."""
 
-    mean: float
-    std_dev: float
-    min_value: float
-    max_value: float
-    p5: float
-    p50: float
-    p95: float
+    mean: Optional[float] = None
+    std_dev: Optional[float] = None
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    p5: Optional[float] = None
+    p50: Optional[float] = None
+    p95: Optional[float] = None
     n_samples: int
 
 
@@ -120,7 +120,7 @@ class ExplainResponse(BaseModel):
     channel_origin: str = "catalog"
     discovery_namespace: Optional[str] = None
     statistics: StatisticsResponse
-    recent_value: float
+    recent_value: Optional[float] = None
     z_score: Optional[float] = None
     is_anomalous: bool
     state: str  # normal, caution, warning
@@ -499,7 +499,28 @@ class SourceCreate(BaseModel):
     name: str
     description: Optional[str] = None
     base_url: Optional[str] = None  # required for simulator
-    telemetry_definition_path: str
+    vehicle_config_path: str
+
+
+class SourceResolveRequest(BaseModel):
+    """Request body for POST /telemetry/sources/resolve."""
+
+    source_type: Literal["vehicle"]
+    name: str
+    description: Optional[str] = None
+    vehicle_config_path: str
+
+
+class SourceResolveResponse(BaseModel):
+    """Response body for vehicle source resolution."""
+
+    id: str
+    name: str
+    description: Optional[str] = None
+    source_type: str
+    base_url: Optional[str] = None
+    vehicle_config_path: str
+    created: bool
 
 
 class SourceUpdate(BaseModel):
@@ -508,7 +529,144 @@ class SourceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     base_url: Optional[str] = None  # for simulators
-    telemetry_definition_path: Optional[str] = None
+    vehicle_config_path: Optional[str] = None
+
+
+SourceObservationStatus = Literal["scheduled", "in_progress", "completed", "cancelled", "missed"]
+
+
+class SourceObservationUpsert(BaseModel):
+    """Observation/contact window published for a source."""
+
+    external_id: Optional[str] = None
+    status: SourceObservationStatus = "scheduled"
+    start_time: datetime
+    end_time: datetime
+    station_name: Optional[str] = None
+    station_id: Optional[str] = None
+    receiver_id: Optional[str] = None
+    max_elevation_deg: Optional[float] = None
+    details: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def validate_time_range(self) -> "SourceObservationUpsert":
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be after start_time")
+        return self
+
+
+class SourceObservationBatchUpsert(BaseModel):
+    """Batch write request for provider observation snapshots."""
+
+    provider: str = Field(..., min_length=1)
+    replace_future_scheduled: bool = True
+    observations: list[SourceObservationUpsert]
+
+
+class SourceObservationBatchUpsertResponse(BaseModel):
+    """Response for provider observation snapshot writes."""
+
+    inserted: int
+    deleted: int
+
+
+class SourceObservationSchema(BaseModel):
+    """Stored source observation/contact window."""
+
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    source_id: str
+    external_id: Optional[str] = None
+    provider: Optional[str] = None
+    status: SourceObservationStatus
+    start_time: datetime
+    end_time: datetime
+    station_name: Optional[str] = None
+    station_id: Optional[str] = None
+    receiver_id: Optional[str] = None
+    max_elevation_deg: Optional[float] = None
+    details: Optional[dict[str, Any]] = Field(default=None, validation_alias="details_json")
+    created_at: datetime
+    updated_at: datetime
+
+
+class UpcomingObservationsResponse(BaseModel):
+    """Upcoming observation windows for a source."""
+
+    observations: list[SourceObservationSchema]
+
+
+class VehicleConfigValidationError(BaseModel):
+    """Structured validation error for vehicle configuration APIs."""
+
+    loc: list[str]
+    message: str
+    type: str
+
+
+class VehicleConfigListItem(BaseModel):
+    """Single item for the vehicle configuration list endpoint."""
+
+    path: str
+    filename: str
+    name: Optional[str] = None
+    category: str
+    format: str
+    modified_at: Optional[str] = None
+
+
+class VehicleConfigParsedSummary(BaseModel):
+    """Lightweight parsed summary for editor and list UIs."""
+
+    version: int = 1
+    name: Optional[str] = None
+    channel_count: int = 0
+    scenario_names: list[str] = []
+    has_position_mapping: bool = False
+    has_ingestion: bool = False
+
+
+class VehicleConfigFetchResponse(BaseModel):
+    """Response for loading a single vehicle configuration file."""
+
+    path: str
+    content: str
+    format: str
+    parsed: Optional[VehicleConfigParsedSummary] = None
+    validation_errors: list[VehicleConfigValidationError] = Field(default_factory=list)
+
+
+class VehicleConfigValidationRequest(BaseModel):
+    """Request body for POST /vehicle-configs/validate."""
+
+    content: str
+    path: Optional[str] = None
+    filename: Optional[str] = None
+    format: Optional[str] = None
+
+
+class VehicleConfigValidationResponse(BaseModel):
+    """Validation response for vehicle configuration content."""
+
+    valid: bool
+    parsed: Optional[VehicleConfigParsedSummary] = None
+    errors: list[VehicleConfigValidationError] = Field(default_factory=list)
+
+
+class VehicleConfigCreateRequest(BaseModel):
+    """Create a new vehicle configuration file on disk."""
+
+    path: str
+    content: str
+
+
+class VehicleConfigSaveResponse(BaseModel):
+    """Response for create/update vehicle configuration writes."""
+
+    path: str
+    parsed: VehicleConfigParsedSummary
+    saved: bool = True
 
 
 # --- Position mapping and samples ---

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,7 +36,6 @@ class TelemetryMetadata(Base):
         ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
-        default="default",
     )
     name: Mapped[str] = mapped_column(Text, index=True, nullable=False)
     units: Mapped[str] = mapped_column(Text, nullable=False)
@@ -158,7 +157,6 @@ class WatchlistEntry(Base):
         ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
-        default="default",
     )
     telemetry_name: Mapped[str] = mapped_column(Text, index=True, nullable=False)
     display_order: Mapped[int] = mapped_column(nullable=False)
@@ -170,13 +168,20 @@ class TelemetrySource(Base):
     """Registry of telemetry stream sources (vehicles, simulators)."""
 
     __tablename__ = "telemetry_sources"
+    __table_args__ = (
+        Index(
+            "ix_telemetry_sources_vehicle_config_path",
+            "vehicle_config_path",
+            unique=True,
+        ),
+    )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     source_type: Mapped[str] = mapped_column(Text, nullable=False)  # vehicle | simulator
     base_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # for simulators
-    telemetry_definition_path: Mapped[str] = mapped_column(Text, nullable=False)
+    vehicle_config_path: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -389,3 +394,53 @@ class TelemetryStream(Base):
         nullable=False,
     )
     metadata_json: Mapped[Optional[dict]] = mapped_column("metadata", JSONB(), nullable=True)
+
+
+class SourceObservation(Base):
+    """Expected observation/contact window for a telemetry source."""
+
+    __tablename__ = "source_observations"
+    __table_args__ = (
+        Index("ix_source_observations_source_start", "source_id", "start_time"),
+        Index("ix_source_observations_source_status_start", "source_id", "status", "start_time"),
+        Index(
+            "uq_source_observations_source_provider_external",
+            "source_id",
+            "provider",
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    source_id: Mapped[str] = mapped_column(
+        Text,
+        ForeignKey("telemetry_sources.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    external_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    provider: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="scheduled")
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    station_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    station_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    receiver_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    max_elevation_deg: Mapped[Optional[float]] = mapped_column(Numeric(20, 10), nullable=True)
+    details_json: Mapped[Optional[dict]] = mapped_column(JSONB(), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )

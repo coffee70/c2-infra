@@ -29,7 +29,7 @@ function isTypingInInput(): boolean {
 
 export function useTelemetryKeyboardShortcuts(
   currentChannelName?: string | null,
-  currentSourceId: string = "default"
+  currentSourceId?: string | null
 ) {
   const router = useRouter();
   const pathname = usePathname();
@@ -59,6 +59,7 @@ export function useTelemetryKeyboardShortcuts(
       // j / ArrowDown: Next channel (second in recent)
       if (e.key === "j" || e.key === "ArrowDown") {
         const recent = getRecentChannels();
+        if (!currentSourceId) return;
         if (recent.length < 2) return;
         const scopedRecent = recent.filter((entry) => entry.sourceId === currentSourceId);
         if (scopedRecent.length < 2) return;
@@ -74,6 +75,7 @@ export function useTelemetryKeyboardShortcuts(
       // k / ArrowUp: Previous channel (wrap to last in recent)
       if (e.key === "k" || e.key === "ArrowUp") {
         const recent = getRecentChannels();
+        if (!currentSourceId) return;
         const scopedRecent = recent.filter((entry) => entry.sourceId === currentSourceId);
         if (scopedRecent.length < 2) return;
         const current = currentChannelName ?? scopedRecent[0]?.name;

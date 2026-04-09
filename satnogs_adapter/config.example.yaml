@@ -1,0 +1,51 @@
+platform:
+  ingest_url: "http://backend:8000/telemetry/realtime/ingest"
+  source_resolve_url: "http://backend:8000/telemetry/sources/resolve"
+  observations_batch_upsert_url: "http://backend:8000/telemetry/sources/{source_id}/observations:batch-upsert"
+  # source_id: "00000000-0000-0000-0000-000000000000"  # optional override; normally omitted
+
+vehicle:
+  slug: "lasarsat"
+  name: "LASARSAT"
+  norad_id: 62391
+  allowed_source_callsigns:
+    - "OK0LSR"
+  vehicle_config_path: "vehicles/lasarsat.yaml"
+
+satnogs:
+  base_url: "https://network.satnogs.org"
+  api_token: ""
+  transmitter_uuid: "C3RnLSSuaKzWhHrtJCqUgu"
+  status: "good"
+  upcoming_status: "future"
+  upcoming_lookahead_hours: 24
+  observation_sync_interval_seconds: 600
+  poll_interval_seconds: 60
+  download:
+    max_concurrent_observation_fetches: 2
+    max_concurrent_artifact_downloads: 2
+
+backfill:
+  enabled: false
+  mode: bounded_range
+  start_time: null
+  end_time: null
+  max_observations_per_run: 250
+  requests_per_minute: 20
+  checkpoint_store_path: "tmp/satnogs-adapter/checkpoints.json"
+
+publisher:
+  batch_size_events: 50
+  timeout_seconds: 10
+  retry:
+    max_attempts: 3
+    backoff_seconds: 1
+    backoff_multiplier: 2
+    retryable_status_codes: [408, 425, 429, 500, 502, 503, 504]
+
+checkpoints:
+  path: "tmp/satnogs-adapter/checkpoints.json"
+
+dlq:
+  root_dir: "tmp/satnogs-adapter/dlq"
+  write_observation_dlq: true
