@@ -6,6 +6,8 @@ The Overview is your main dashboard. When you have a telemetry stream connected 
 
 For a full-screen 3D Earth view with position markers and source selection, use the **Planning** tab (or [Planning](/planning)): the globe fills the viewport below the app bar. Each selected source shows its current position (point and label) and a recent position trail (polyline) that builds as telemetry is received. For simulators, Planning follows the source's active stream automatically, so you keep selecting the logical source while the globe reads live position and orbit status from the current stream behind it. A single left-side card (“Earth view”) has two independent sections: **Show on globe** (a dropdown to select one or multiple sources to display) and **Position mapping** (per-source configuration of frame and channels). You can configure position for any source whether or not it’s currently shown on the globe.
 
+For broad telemetry browsing, use the **Telemetry** tab instead of Overview. Overview stays intentionally watchlist-focused: use it for the channels you already care about, not for full source inventory browsing.
+
 ## Watchlist Cards
 
 Each card shows:
@@ -42,6 +44,15 @@ Directly under the Context Banner, use the search bar to open the semantic searc
 - Expand **Advanced filters** to narrow by subsystem, units, anomalous status, or recent activity
 - Add channels to the watchlist from the result list
 - Click a result to open the channel detail page
+
+## Telemetry Inventory
+
+Use the **Telemetry** tab when you need the full source-scoped channel inventory.
+
+- The page loads all registered channels for the selected source, including channels that have never received data.
+- Filters are client-side and cover text search, subsystem, anomaly-only, and has-data/no-data.
+- You can add or remove watchlist membership directly from each row, then return to Overview for compact monitoring.
+- Opening a row keeps you inside the Telemetry section, so breadcrumbs, back navigation, and the active nav tab stay aligned with channel investigation.
 
 ## Overview Tabs
 

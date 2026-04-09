@@ -13,6 +13,7 @@ import {
 
 const NAV_LINKS = [
   { href: "/overview", label: "Overview" },
+  { href: "/telemetry", label: "Telemetry" },
   { href: "/planning", label: "Planning" },
   { href: "/sources", label: "Sources" },
 ] as const;
@@ -29,6 +30,7 @@ export function Nav() {
             <Link
               key={href}
               href={href}
+              aria-current={isActive ? "page" : undefined}
               className={`focus-visible:ring-ring rounded-md text-sm font-medium underline-offset-4 transition-colors hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none ${
                 isActive
                   ? "text-foreground"

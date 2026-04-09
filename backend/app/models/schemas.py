@@ -254,6 +254,34 @@ class TelemetryListResponse(BaseModel):
     channels: list[ChannelListItem] = []
 
 
+class TelemetryInventoryItem(BaseModel):
+    """Single telemetry channel row for the inventory page."""
+
+    name: str
+    aliases: list[str] = []
+    description: Optional[str] = None
+    units: Optional[str] = None
+    subsystem_tag: str
+    channel_origin: str = "catalog"
+    discovery_namespace: Optional[str] = None
+    current_value: Optional[float] = None
+    last_timestamp: Optional[str] = None
+    state: str
+    state_reason: Optional[str] = None
+    z_score: Optional[float] = None
+    is_anomalous: bool
+    has_data: bool
+    red_low: Optional[float] = None
+    red_high: Optional[float] = None
+    n_samples: Optional[int] = None
+
+
+class TelemetryInventoryResponse(BaseModel):
+    """Response for GET /telemetry/inventory."""
+
+    channels: list[TelemetryInventoryItem]
+
+
 # --- Realtime: canonical measurement event (ingest) ---
 class MeasurementEvent(BaseModel):
     """Canonical internal measurement event from realtime ingest."""

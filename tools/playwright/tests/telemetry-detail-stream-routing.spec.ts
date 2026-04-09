@@ -92,13 +92,13 @@ test("telemetry detail preserves source scope while honoring stream query", asyn
 
   const expectedStreamLabel = formatStreamLabel(selected.streamId);
   await page.goto(
-    `/sources/${encodeURIComponent(selected.sourceId)}/telemetry/${encodeURIComponent(selected.channelName)}?stream_id=${encodeURIComponent(selected.streamId)}`,
+    `/telemetry/${encodeURIComponent(selected.sourceId)}/${encodeURIComponent(selected.channelName)}?stream_id=${encodeURIComponent(selected.streamId)}`,
   );
 
   await expect(page).toHaveURL(
     new RegExp(
       `${escapeRegExp(
-        `/sources/${selected.sourceId}/telemetry/${selected.channelName}`,
+        `/telemetry/${selected.sourceId}/${selected.channelName}`,
       )}\\?stream_id=${escapeRegExp(selected.streamId)}$`,
     ),
   );
@@ -155,12 +155,12 @@ test("telemetry history stream dropdown preserves backend ordering for opaque id
     .toBeTruthy();
 
   await page.goto(
-    `/sources/${encodeURIComponent(sourceId)}/telemetry/${encodeURIComponent(channelName)}?stream_id=${encodeURIComponent(newerRunId)}`,
+    `/telemetry/${encodeURIComponent(sourceId)}/${encodeURIComponent(channelName)}?stream_id=${encodeURIComponent(newerRunId)}`,
   );
 
   await expect(page).toHaveURL(
     new RegExp(
-      `${escapeRegExp(`/sources/${sourceId}/telemetry/${channelName}`)}\\?stream_id=${escapeRegExp(newerRunId)}$`,
+      `${escapeRegExp(`/telemetry/${sourceId}/${channelName}`)}\\?stream_id=${escapeRegExp(newerRunId)}$`,
     ),
   );
 
@@ -228,16 +228,20 @@ test("telemetry detail defaults to the latest stream that contains the channel",
     .toEqual({ hasSelected: true, hasFallback: false });
 
   await page.goto(
-    `/sources/${encodeURIComponent(selected.sourceId)}/telemetry/${encodeURIComponent(selected.channelName)}`,
+    `/telemetry/${encodeURIComponent(selected.sourceId)}/${encodeURIComponent(selected.channelName)}`,
   );
 
   await expect(page).toHaveURL(
     new RegExp(
-      `${escapeRegExp(`/sources/${selected.sourceId}/telemetry/${selected.channelName}`)}$`,
+      `${escapeRegExp(`/telemetry/${selected.sourceId}/${selected.channelName}`)}$`,
     ),
   );
 
   await page.getByRole("tab", { name: "History" }).click();
-  await expect(page.locator("#history-stream")).toContainText(formatStreamLabel(selected.streamId));
-  await expect(page.locator("#history-stream")).not.toContainText(formatStreamLabel(newerStreamId));
+  await expect(page.locator("#history-stream")).toContainText("Active / latest");
+  await page.locator("#history-stream").click();
+  const options = page.getByRole("option");
+  const optionTexts = await options.allTextContents();
+  expect(optionTexts.join(" ")).toContain(formatStreamLabel(selected.streamId));
+  expect(optionTexts.join(" ")).not.toContain(formatStreamLabel(newerStreamId));
 });

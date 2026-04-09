@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Telemetry inventory section and detail reparenting** — Added a dedicated top-level Telemetry section for source-scoped channel browsing and watchlist discovery, moved canonical channel detail routes to `/telemetry/{source_id}/{channel_name}`, and removed the old Sources-scoped telemetry detail path.
 - **SatNOGS adapter satellite/transmitter identity** — The adapter now requires `vehicle.norad_id`, `satnogs.transmitter_uuid`, and `satnogs.status`, queries observations with `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, deduplicates by SatNOGS observation ID, and keeps transmitter UUID out of backend ingest payloads and tags.
 - **SatNOGS adapter source identity** — The adapter now resolves its backend vehicle source automatically at startup through `platform.source_resolve_url`. `platform.source_id` remains available as an override, but normal operation no longer requires copying backend UUIDs into YAML.
 - **Vehicle configuration workspace layout** — The Vehicle Configurations page now uses a full-screen split workspace instead of a centered card layout. A VS Code-style explorer on the left derives folders from `VEHICLE_CONFIGURATION_PATH`, the editor fills the right pane, the divider is resizable, the toolbar separates title/actions from file-summary badges, and validate/save notices appear centered over the editor.

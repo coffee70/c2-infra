@@ -171,10 +171,10 @@ function TelemetryDetailTabsContent({
             <BreadcrumbItem>
               <BreadcrumbLink asChild>
                 <Link
-                  href="/sources"
+                  href={`/telemetry?source=${encodeURIComponent(sourceId)}`}
                   className="text-primary underline-offset-4 hover:underline"
                 >
-                  Sources
+                  Telemetry
                 </Link>
               </BreadcrumbLink>
             </BreadcrumbItem>

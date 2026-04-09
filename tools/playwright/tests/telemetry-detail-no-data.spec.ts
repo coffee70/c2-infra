@@ -32,12 +32,12 @@ test("registered channel detail renders when no samples or statistics exist", as
   expect(schemaResponse.ok()).toBeTruthy();
 
   await page.goto(
-    `/sources/${encodeURIComponent(source.id)}/telemetry/${encodeURIComponent(channelName)}`,
+    `/telemetry/${encodeURIComponent(source.id)}/${encodeURIComponent(channelName)}`,
   );
 
   await expect(page).toHaveURL(
     new RegExp(
-      `${escapeRegExp(`/sources/${source.id}/telemetry/${channelName}`)}$`,
+      `${escapeRegExp(`/telemetry/${source.id}/${channelName}`)}$`,
     ),
   );
   await expect(page.getByRole("heading", { name: new RegExp(channelName) })).toBeVisible();

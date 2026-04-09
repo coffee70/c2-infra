@@ -88,7 +88,7 @@ export function useTelemetryKeyboardShortcuts(
       }
 
       // f: Toggle favorite (detail page only)
-      if (e.key === "f" && pathname?.match(/^\/sources\/[^/]+\/telemetry\/[^/]+$/)) {
+      if (e.key === "f" && pathname?.match(/^\/telemetry\/[^/]+\/[^/]+$/)) {
         e.preventDefault();
         window.dispatchEvent(new CustomEvent("telemetry-toggle-favorite"));
         return;
