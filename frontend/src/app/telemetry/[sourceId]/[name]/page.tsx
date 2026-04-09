@@ -130,7 +130,7 @@ export default async function TelemetryDetailPage({
   const explain = summary.explain;
 
   if (summary.channelUnavailable) {
-    redirect(`/overview?source=${encodeURIComponent(sourceId)}&channel_unavailable=${encodeURIComponent(decodedName)}`);
+    redirect(`/telemetry?source=${encodeURIComponent(sourceId)}&channel_unavailable=${encodeURIComponent(decodedName)}`);
   }
   if (!explain) notFound();
   if (explain.name !== decodedName) {
@@ -141,7 +141,7 @@ export default async function TelemetryDetailPage({
     }
     const suffix = redirectParams.toString();
     redirect(
-      `/sources/${encodeURIComponent(requestedSourceId)}/telemetry/${encodeURIComponent(explain.name)}${suffix ? `?${suffix}` : ""}`
+      `/telemetry/${encodeURIComponent(requestedSourceId)}/${encodeURIComponent(explain.name)}${suffix ? `?${suffix}` : ""}`
     );
   }
 

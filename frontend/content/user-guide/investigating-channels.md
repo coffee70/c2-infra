@@ -17,9 +17,9 @@ Go to **Overview** and use the search bar under the Context Banner. Enter a sema
 
 ## 2. Channel Detail Page
 
-Click a channel (from Overview search, a watchlist card, or the anomaly queue) to open its detail page.
+Click a channel from **Telemetry**, Overview search, a watchlist card, or the anomaly queue to open its detail page.
 
-The canonical detail URL is source-first: `/sources/{source_id}/telemetry/{channel_name}`. This means the page always represents one channel in one source’s catalog, not a global channel name with a source filter layered on later.
+The canonical detail URL is source-first under the Telemetry section: `/telemetry/{source_id}/{channel_name}`. This keeps the page anchored to one source/channel pair while preserving Telemetry as the active parent section.
 
 If you open the page using an alias instead of the canonical channel name, the app resolves the alias and redirects to the canonical URL. This keeps history, watchlists, and copied links anchored to one channel identity.
 
@@ -38,7 +38,7 @@ The page is organized into **vertical tabs** so you can quickly switch between d
   - Copy an individual row to the clipboard or **flag** samples you want to keep an eye on; flagged samples are highlighted for the current session.
 - **Explanation & Events** – AI explanation plus recent ops events (alerts opened, acked, resolved) for that channel.
 
-**Source and stream:** The **Context Banner** is the only place to change the source. The whole page is for that source. Summary, Live & Trends, and the default stream in History use the source’s current stream. In the History tab, the **Stream** dropdown lists only streams for that source so you can narrow the table to a chosen ingest session. If the target source does not provide the current channel, the app sends you back to that source’s Overview with a clear unavailable message.
+**Source and stream:** The **Context Banner** is the only place to change the source. The whole page is for that source. Summary, Live & Trends, and the default stream in History use the source’s current stream. In the History tab, the **Stream** dropdown lists only streams for that source so you can narrow the table to a chosen ingest session. If the target source does not provide the current channel, the app sends you back to the source’s **Telemetry** inventory with a clear unavailable message.
 
 When you open a channel from an event or alert, the selected stream is carried separately in the URL so the page stays scoped to the source while still loading the chosen ingest session.
 

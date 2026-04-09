@@ -7,8 +7,10 @@ Quick reference for pages and features.
 | Page | Purpose |
 |------|---------|
 | **Overview** | Main dashboard: vertical tabs for watchlist, active alert handling, ops-event history, integrated semantic search, and feed health |
-| **Simulator** | Start/stop mock vehicle streamer with scenario selection |
-| **Channel detail** | Stats, trend chart, z-score, LLM explanation, recent events |
+| **Telemetry** | Full source-scoped telemetry inventory with filtering, browsing, and watchlist actions |
+| **Planning** | Earth view, observation windows, position mapping, and orbit status |
+| **Sources** | Administrative source and simulator management |
+| **Channel detail** | Stats, trend chart, z-score, LLM explanation, and recent events under the Telemetry section |
 
 ## Keyboard Shortcuts
 

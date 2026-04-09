@@ -44,6 +44,8 @@ from app.models.schemas import (
     SearchResponse,
     TelemetryDataIngest,
     TelemetryDataResponse,
+    TelemetryInventoryItem,
+    TelemetryInventoryResponse,
     TelemetryListResponse,
     TelemetrySchemaCreate,
     TelemetrySchemaResponse,
@@ -62,6 +64,7 @@ from app.services.overview_service import (
     get_watchlist,
     remove_from_watchlist,
 )
+from app.services.telemetry_inventory_service import get_telemetry_inventory_for_source
 from app.services.realtime_service import (
     create_source,
     get_telemetry_sources,
@@ -586,6 +589,23 @@ def list_telemetry(
     return TelemetryListResponse(
         names=[channel["name"] for channel in channels],
         channels=channels,
+    )
+
+
+@router.get("/inventory", response_model=TelemetryInventoryResponse)
+def list_telemetry_inventory(
+    source_id: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    """List source-scoped telemetry inventory with operational state."""
+    channels = get_telemetry_inventory_for_source(db, source_id)
+    audit_log(
+        "telemetry.inventory.read",
+        source_id=source_id,
+        channel_count=len(channels),
+    )
+    return TelemetryInventoryResponse(
+        channels=[TelemetryInventoryItem(**channel) for channel in channels]
     )
 
 

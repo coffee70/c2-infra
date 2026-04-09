@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -104,6 +105,11 @@ export function TelemetryDetailHeader({
     <header className="bg-background/95 supports-backdrop-filter:bg-background/80 sticky top-14 z-10 mb-2 border-b py-4 backdrop-blur">
       <div className="flex flex-wrap items-center justify-between gap-4 px-4 sm:px-6">
         <div className="min-w-0 space-y-1">
+          <Button asChild variant="ghost" size="sm" className="h-7 px-0 text-xs">
+            <Link href={`/telemetry?source=${encodeURIComponent(sourceId)}`}>
+              Back to Telemetry
+            </Link>
+          </Button>
           <div className="flex min-w-0 flex-wrap items-center gap-3">
             <h1 className="truncate text-lg font-semibold" title={name}>
               {name}

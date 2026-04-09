@@ -28,6 +28,26 @@ export interface TelemetryListEntry {
   discovery_namespace?: string | null;
 }
 
+export interface TelemetryInventoryEntry {
+  name: string;
+  aliases: string[];
+  description?: string | null;
+  units?: string | null;
+  subsystem_tag: string;
+  channel_origin: string;
+  discovery_namespace?: string | null;
+  current_value?: number | null;
+  last_timestamp?: string | null;
+  state: string;
+  state_reason?: string | null;
+  z_score?: number | null;
+  is_anomalous: boolean;
+  has_data: boolean;
+  red_low?: number | null;
+  red_high?: number | null;
+  n_samples?: number | null;
+}
+
 export interface TelemetrySource {
   id: string;
   name: string;
@@ -334,6 +354,21 @@ export function useTelemetryListQuery(sourceId: string, enabled = true) {
         return data.names.map((name) => ({ name, channel_origin: "catalog", discovery_namespace: null }));
       }
       return [];
+    },
+  });
+}
+
+export function useTelemetryInventoryQuery(sourceId: string, enabled = true) {
+  return useQuery<TelemetryInventoryEntry[]>({
+    queryKey: queryKeys.telemetryInventory(sourceId),
+    enabled,
+    staleTime: 15 * 1000,
+    queryFn: async ({ signal }) => {
+      const data = await fetchJson<{ channels?: TelemetryInventoryEntry[] }>(
+        `/telemetry/inventory?source_id=${encodeURIComponent(sourceId)}`,
+        { signal, cache: "no-store" }
+      );
+      return Array.isArray(data.channels) ? data.channels : [];
     },
   });
 }
