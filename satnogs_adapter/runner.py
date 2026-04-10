@@ -7,11 +7,12 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import AdapterConfig
 from satnogs_adapter.connectors import SatnogsNetworkConnector, SatnogsRateLimitError
-from satnogs_adapter.decoders import parse_aprs_payload, parse_ax25_frame
+from satnogs_adapter.decoders import DecoderRegistry, PayloadDecodeError, PayloadDecodeService, parse_ax25_frame
 from satnogs_adapter.dlq import FilesystemDlq
 from satnogs_adapter.mapper import TelemetryMapper
 from satnogs_adapter.models import FrameRecord, ObservationRecord, TelemetryEvent
@@ -30,6 +31,7 @@ class AdapterRunner:
         observations_publisher: ObservationsPublisher,
         checkpoint_store: FileCheckpointStore,
         dlq: FilesystemDlq,
+        payload_decode_service: PayloadDecodeService,
         source_id: str | None = None,
     ) -> None:
         self.config = config
@@ -38,6 +40,7 @@ class AdapterRunner:
         self.observations_publisher = observations_publisher
         self.checkpoint_store = checkpoint_store
         self.dlq = dlq
+        self.payload_decode_service = payload_decode_service
         self._last_observation_sync_monotonic: float | None = None
         resolved_source_id = source_id or config.platform.source_id
         if not resolved_source_id:
@@ -283,7 +286,8 @@ class AdapterRunner:
         sequence_seed = int(self.checkpoint_store.get(f"observation:{observation.observation_id}:sequence", 0))
         skipped_non_originated = 0
         failed_ax25_decode = 0
-        failed_aprs_decode = 0
+        unknown_payload_format_count = 0
+        failed_payload_decode = 0
         mapped_frame_count = 0
         mapped_event_count = 0
         skipped_published_frame_count = 0
@@ -304,7 +308,7 @@ class AdapterRunner:
                         "ground_station_id": observation.ground_station_id,
                         "frame_index": frame.frame_index,
                         "raw_line": frame.raw_line,
-                        "error": repr(exc),
+                        "error_message": str(exc),
                     },
                 )
                 continue
@@ -314,26 +318,29 @@ class AdapterRunner:
                 continue
 
             try:
-                aprs = parse_aprs_payload(ax25.info_bytes)
-            except ValueError as exc:
-                failed_aprs_decode += 1
-                self.dlq.write(
-                    "frame",
-                    {
-                        "reason": "aprs_decode_failed",
-                        "observation_id": observation.observation_id,
-                        "ground_station_id": observation.ground_station_id,
-                        "frame_index": frame.frame_index,
-                        "raw_line": frame.raw_line,
-                        "error": repr(exc),
-                    },
+                decoded_packet = self.payload_decode_service.decode(
+                    observation=observation,
+                    frame=frame,
+                    ax25_packet=ax25,
+                )
+            except PayloadDecodeError as exc:
+                failed_payload_decode += 1
+                self._write_payload_dlq(
+                    observation=observation,
+                    frame=frame,
+                    ax25=ax25,
+                    error=exc,
                 )
                 continue
 
-            frame_events = self.mapper.map_packet(
+            if decoded_packet is None:
+                unknown_payload_format_count += 1
+                continue
+
+            frame_events = self.mapper.map_decoded_packet(
                 observation=observation,
                 frame=ax25,
-                aprs_packet=aprs,
+                decoded_packet=decoded_packet,
                 reception_time=frame.reception_time,
                 sequence_seed=sequence_seed,
             )
@@ -355,7 +362,7 @@ class AdapterRunner:
             return
 
         logger.info(
-            "Processed SatNOGS frames: observation_id=%s total_frames=%s mapped_frames=%s mapped_events=%s skipped_already_published=%s skipped_non_originated=%s failed_ax25_decode=%s failed_aprs_decode=%s",
+            "Processed SatNOGS frames: observation_id=%s total_frames=%s mapped_frames=%s mapped_events=%s skipped_already_published=%s skipped_non_originated=%s failed_ax25_decode=%s unknown_payload_format_count=%s failed_payload_decode=%s",
             observation.observation_id,
             len(frames),
             mapped_frame_count,
@@ -363,7 +370,8 @@ class AdapterRunner:
             skipped_published_frame_count,
             skipped_non_originated,
             failed_ax25_decode,
-            failed_aprs_decode,
+            unknown_payload_format_count,
+            failed_payload_decode,
         )
 
         self.checkpoint_store.mark_processed_observation(observation.observation_id)
@@ -420,6 +428,33 @@ class AdapterRunner:
             payload.update(extra)
         self.dlq.write("observation", payload)
 
+    def _write_payload_dlq(
+        self,
+        *,
+        observation: ObservationRecord,
+        frame: FrameRecord,
+        ax25,
+        error: PayloadDecodeError,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "reason": error.reason,
+            "observation_id": observation.observation_id,
+            "frame_index": frame.frame_index,
+            "ground_station_id": observation.ground_station_id,
+            "source_callsign": ax25.src_callsign,
+            "destination_callsign": ax25.dest_callsign,
+            "raw_line": frame.raw_line,
+            "frame_hex": frame.frame_bytes.hex(),
+            "payload_hex": ax25.info_bytes.hex(),
+            "decoder_id": error.decoder_id,
+            "decoder_strategy": error.decoder_strategy,
+            "packet_name": error.packet_name,
+            "error_message": error.error_message,
+        }
+        if error.metadata:
+            payload["metadata"] = error.metadata
+        self.dlq.write("frame", payload)
+
 
 def replay_dlq(config: AdapterConfig, *, max_age_seconds: int | None = None) -> int:
     dlq = FilesystemDlq(config.dlq.root_dir)
@@ -438,5 +473,9 @@ def replay_dlq(config: AdapterConfig, *, max_age_seconds: int | None = None) -> 
         observations_publisher=observations_publisher,
         checkpoint_store=checkpoint_store,
         dlq=dlq,
+        payload_decode_service=PayloadDecodeService(
+            decoder_config=config.vehicle.decoder,
+            registry=DecoderRegistry(),
+        ),
     )
     return runner.replay_batch_dlq(max_age_seconds=max_age_seconds)

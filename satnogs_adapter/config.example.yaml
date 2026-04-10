@@ -11,6 +11,21 @@ vehicle:
   allowed_source_callsigns:
     - "OK0LSR"
   vehicle_config_path: "vehicles/lasarsat.yaml"
+  decoder:
+    strategy: "kaitai"
+    decoder_id: "lasarsat"
+
+# APRS example:
+# vehicle:
+#   slug: "iss"
+#   name: "International Space Station"
+#   norad_id: 25544
+#   allowed_source_callsigns:
+#     - "NA1SS"
+#     - "RS0ISS"
+#   vehicle_config_path: "vehicles/iss.yaml"
+#   decoder:
+#     strategy: "aprs"
 
 satnogs:
   base_url: "https://network.satnogs.org"

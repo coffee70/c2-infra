@@ -8,6 +8,7 @@ import logging
 from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import AdapterConfig, load_config
 from satnogs_adapter.connectors import SatnogsNetworkConnector
+from satnogs_adapter.decoders import DecoderRegistry, PayloadDecodeService
 from satnogs_adapter.dlq import FilesystemDlq
 from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher
 from satnogs_adapter.runner import AdapterRunner
@@ -60,6 +61,11 @@ def build_runner(config_path: str) -> AdapterRunner:
         config=config.publisher,
         dlq=dlq,
     )
+    payload_decode_service = PayloadDecodeService(
+        decoder_config=config.vehicle.decoder,
+        registry=DecoderRegistry(),
+    )
+    payload_decode_service.validate_configuration()
     return AdapterRunner(
         config,
         network_connector=network_connector,
@@ -67,6 +73,7 @@ def build_runner(config_path: str) -> AdapterRunner:
         observations_publisher=observations_publisher,
         checkpoint_store=checkpoint_store,
         dlq=dlq,
+        payload_decode_service=payload_decode_service,
         source_id=source_id,
     )
 

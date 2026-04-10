@@ -9,6 +9,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from satnogs_adapter.decoders.models import DecoderConfig
 from telemetry_catalog.definitions import VehicleConfigurationFile, load_vehicle_config_file
 
 
@@ -93,6 +94,7 @@ class VehicleConfig(BaseModel):
     allowed_source_callsigns: list[str] = Field(default_factory=lambda: ["OK0LSR"])
     vehicle_config_path: str = "vehicles/lasarsat.yaml"
     stable_field_mappings: dict[str, str] = Field(default_factory=dict)
+    decoder: DecoderConfig = Field(default_factory=DecoderConfig)
 
 
 class AdapterConfig(BaseModel):

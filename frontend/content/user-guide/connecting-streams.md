@@ -46,13 +46,13 @@ The streamer posts to `POST /telemetry/realtime/ingest` with a registered source
 Use the SatNOGS adapter when you want a real external packet-radio feed instead of simulator traffic.
 
 1. Start the backend so it can auto-register vehicle configuration files.
-2. Keep the adapter config pointed at `platform.source_resolve_url` and `platform.observations_batch_upsert_url`, then set `vehicle.vehicle_config_path: "vehicles/lasarsat.yaml"`, `vehicle.norad_id: 62391`, `satnogs.transmitter_uuid: "C3RnLSSuaKzWhHrtJCqUgu"`, and `satnogs.status: "good"`.
+2. Keep the adapter config pointed at `platform.source_resolve_url` and `platform.observations_batch_upsert_url`, then set `vehicle.vehicle_config_path: "vehicles/lasarsat.yaml"`, `vehicle.norad_id: 62391`, `vehicle.decoder.strategy: "kaitai"`, `vehicle.decoder.decoder_id: "lasarsat"`, `satnogs.transmitter_uuid: "C3RnLSSuaKzWhHrtJCqUgu"`, and `satnogs.status: "good"`. For APRS payloads such as ISS, use `vehicle.decoder.strategy: "aprs"` instead.
 3. Start the compose-managed `satnogs-adapter` service.
-4. The adapter resolves the canonical backend vehicle source, publishes upcoming observation windows for Planning, polls SatNOGS observations for the configured satellite/transmitter/status using `Link` header pagination, maps one completed observation to one stream, and posts numeric telemetry events to realtime ingest without exposing transmitter UUID in backend payloads.
+4. The adapter resolves the canonical backend vehicle source, publishes upcoming observation windows for Planning, polls SatNOGS observations for the configured satellite/transmitter/status using `Link` header pagination, decodes the AX.25 payload with the configured strategy, maps one completed observation to one stream, and posts numeric telemetry events to realtime ingest without exposing transmitter UUID in backend payloads.
 
 The detailed workflow lives in [SatNOGS Adapter](/docs/satnogs-adapter).
 
-If an external decoder or payload stream emits a field that is not in the seeded catalog, the backend now creates a source-scoped **discovered** channel instead of dropping the sample. When the producer sends structured decoder tags such as `decoder=APRS` and `field_name=Payload Temp`, the stored channel name is derived into a stable namespace like `decoder.aprs.payload_temp`.
+If an external decoder or payload stream emits a field that is not in the seeded catalog, the backend now creates a source-scoped **discovered** channel instead of dropping the sample. When the producer sends structured decoder tags such as `decoder=lasarsat`, `decoder_strategy=kaitai`, and `field_name=psu_battery`, the stored channel name is derived from that decoder context instead of requiring an adapter-owned alias layer.
 
 Some external decoders only know when a packet was heard, not when it was generated onboard. Those streams may send `reception_time` without `generation_time`; the backend will synthesize `generation_time = reception_time` so the packet still flows through realtime ingest. For those packets, ordering and freshness are reception-based.
 

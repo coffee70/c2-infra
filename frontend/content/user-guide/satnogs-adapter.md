@@ -12,6 +12,7 @@ Edit `satnogs_adapter/config.example.yaml` or provide your own config file.
 - Keep `platform.observations_batch_upsert_url` pointed at `/telemetry/sources/{source_id}/observations:batch-upsert`.
 - Keep `vehicle.vehicle_config_path` pointed at `vehicles/lasarsat.yaml` for the example pair.
 - Set `vehicle.norad_id` to the satellite NORAD ID.
+- Set `vehicle.decoder.strategy` to the payload decoder strategy. Use `aprs` for APRS payloads such as ISS, or `kaitai` plus `vehicle.decoder.decoder_id: "lasarsat"` for LASARSAT.
 - Set `satnogs.transmitter_uuid` to the SatNOGS transmitter UUID.
 - Set `satnogs.status` to the observation status to ingest, normally `good`.
 - Set `satnogs.upcoming_status` to the provider status used for future scheduled observations, normally `future`.
@@ -25,7 +26,7 @@ The adapter resolves the canonical backend `source_id` from `vehicle.vehicle_con
 docker compose up -d satnogs-adapter
 ```
 
-The backend auto-registers known vehicle configs during startup. If the LASARSAT source already exists, the adapter receives that existing source ID. If it is missing, the backend creates it through the generic vehicle source resolution path. The adapter publishes future expected contact windows to the source observation API, then polls recent SatNOGS observations using `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, and follows SatNOGS `Link` headers for pagination. Only observations matching the configured satellite, transmitter, and status are eligible for ingestion.
+The backend auto-registers known vehicle configs during startup. If the LASARSAT source already exists, the adapter receives that existing source ID. If it is missing, the backend creates it through the generic vehicle source resolution path. The adapter publishes future expected contact windows to the source observation API, then polls recent SatNOGS observations using `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, and decodes the AX.25 payload with the configured strategy. Only observations matching the configured satellite, transmitter, and status are eligible for ingestion.
 
 ## 3. Runtime behavior
 
@@ -35,7 +36,8 @@ The backend auto-registers known vehicle configs during startup. If the LASARSAT
 - Observations without demoddata are skipped. Observations with `payload_demod` files are downloaded, decoded, and published.
 - Only packets from the configured source callsign are accepted. Relay or digipeated traffic is dropped immediately after AX.25 decode.
 - Stable fields defined in the configured vehicle file emit catalog-backed `channel_name` values.
-- Other numeric APRS fields emit as discovered channels using `tags.decoder=aprs` and `tags.field_name`.
+- Other numeric decoded fields emit as discovered channels with `tags.decoder`, `tags.decoder_strategy`, `tags.field_name`, and `tags.packet_name`.
+- LASARSAT remains discovered-only in this rollout. Upstream field names such as `psu_battery`, `uhf_trx_temp`, and `dos_mode` pass through unchanged and become backend-derived discovered channel names under the decoder namespace.
 - The adapter uses `receiver_id = satnogs-station-{ground_station_id}`. Observations without a ground station id are skipped.
 - Backend ingest payloads and tags do not include the transmitter UUID.
 

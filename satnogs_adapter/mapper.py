@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Iterable
 
 from satnogs_adapter.decoders import is_originated_packet
+from satnogs_adapter.decoders.models import DecodedPacketResult
 from satnogs_adapter.models import APRSPacket, AX25Frame, ObservationRecord, TelemetryEvent
 
 
@@ -42,6 +43,35 @@ class TelemetryMapper:
         reception_time: str | None,
         sequence_seed: int,
     ) -> list[TelemetryEvent]:
+        decoded_packet = DecodedPacketResult(
+            decode_mode="aprs",
+            decoder_strategy="aprs",
+            decoder_name="aprs",
+            packet_name=aprs_packet.packet_type,
+            fields=dict(aprs_packet.fields),
+            raw_payload_hex=frame.info_bytes.hex(),
+            metadata={
+                "raw_payload": aprs_packet.raw_payload,
+                "kv_fields": dict(aprs_packet.kv_fields),
+            },
+        )
+        return self.map_decoded_packet(
+            observation=observation,
+            frame=frame,
+            decoded_packet=decoded_packet,
+            reception_time=reception_time,
+            sequence_seed=sequence_seed,
+        )
+
+    def map_decoded_packet(
+        self,
+        *,
+        observation: ObservationRecord,
+        frame: AX25Frame,
+        decoded_packet: DecodedPacketResult,
+        reception_time: str | None,
+        sequence_seed: int,
+    ) -> list[TelemetryEvent]:
         tags = {
             "satnogs.observation_id": observation.observation_id,
             "satnogs.ground_station_id": observation.ground_station_id or "",
@@ -58,8 +88,8 @@ class TelemetryMapper:
         events: list[TelemetryEvent] = []
         sequence = sequence_seed
 
-        for field_name, value in aprs_packet.fields.items():
-            if not isinstance(value, (int, float)):
+        for field_name, value in decoded_packet.fields.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
                 continue
             sequence += 1
             stable_channel_name = self.stable_field_mappings.get(field_name)
@@ -82,12 +112,12 @@ class TelemetryMapper:
                 continue
 
             event_tags = dict(tags)
-            decoder_name = "lasarsat_csv" if aprs_packet.packet_type.startswith("csv:") else "aprs"
             event_tags.update(
                 {
-                    "decoder": decoder_name,
+                    "decoder": decoded_packet.decoder_name,
+                    "decoder_strategy": decoded_packet.decoder_strategy,
                     "field_name": field_name,
-                    "aprs.type": aprs_packet.packet_type,
+                    "packet_name": decoded_packet.packet_name,
                     "ax25.src": frame.src_callsign,
                     "ax25.dst": frame.dest_callsign,
                 }
@@ -105,6 +135,6 @@ class TelemetryMapper:
                     receiver_id=receiver_id,
                     sequence=sequence,
                     tags=event_tags,
-                )
+                    )
             )
         return events

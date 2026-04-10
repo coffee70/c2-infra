@@ -10,11 +10,14 @@ import pytest
 from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import RetryConfig, load_config
 from satnogs_adapter.connectors import ObservationPage, SatnogsNetworkConnector, SatnogsRateLimitError
-from satnogs_adapter.decoders import parse_aprs_payload, parse_ax25_frame
+from satnogs_adapter.decoders import DecoderRegistry, PayloadDecodeError, PayloadDecodeService, parse_aprs_payload, parse_ax25_frame
+from satnogs_adapter.decoders.aprs import AprsDecoder
+from satnogs_adapter.decoders.models import DecodedPacketResult, DecoderConfig
+from satnogs_adapter.decoders.vehicles.lasarsat_decoder import LasarsatDecoder, _LeafValue
 from satnogs_adapter.dlq import FilesystemDlq
 from satnogs_adapter.main import build_runner
 from satnogs_adapter.mapper import TelemetryMapper
-from satnogs_adapter.models import ObservationRecord
+from satnogs_adapter.models import AX25Frame, FrameRecord, ObservationRecord
 from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher
 from satnogs_adapter.runner import AdapterRunner
 from satnogs_adapter.source_resolver import BackendSourceResolver, SourceResolutionError
@@ -43,7 +46,13 @@ def _build_ax25_frame(*, dest: str, src: str, info: bytes) -> bytes:
     return b"".join([_encode_callsign(dest, last=False), _encode_callsign(src, last=True), bytes([0x03, 0xF0]), info])
 
 
-def _config_yaml(*, source_id: str | None = None, source_resolve_url: str | None = None) -> str:
+def _config_yaml(
+    *,
+    source_id: str | None = None,
+    source_resolve_url: str | None = None,
+    decoder_strategy: str | None = None,
+    decoder_id: str | None = None,
+) -> str:
     platform_lines = [
         "platform:",
         '  ingest_url: "http://backend:8000/telemetry/realtime/ingest"',
@@ -65,6 +74,15 @@ def _config_yaml(*, source_id: str | None = None, source_resolve_url: str | None
             '    - "NA1SS"',
             '    - "RS0ISS"',
             '  vehicle_config_path: "vehicles/iss.yaml"',
+            *(
+                [
+                    "  decoder:",
+                    f'    strategy: "{decoder_strategy}"',
+                    *( [f'    decoder_id: "{decoder_id}"'] if decoder_id is not None else [] ),
+                ]
+                if decoder_strategy is not None
+                else []
+            ),
             "",
             "satnogs:",
             '  base_url: "https://network.satnogs.org"',
@@ -73,6 +91,20 @@ def _config_yaml(*, source_id: str | None = None, source_resolve_url: str | None
             '  status: "good"',
             "",
         ]
+    )
+
+
+def _payload_decode_service(config) -> PayloadDecodeService:
+    service = PayloadDecodeService(decoder_config=config.vehicle.decoder, registry=DecoderRegistry())
+    service.validate_configuration()
+    return service
+
+
+def _build_lasarsat_psu_payload() -> bytes:
+    return _build_ax25_frame(
+        dest="CQ",
+        src="OK0LSR",
+        info=b"PSU,1,2,3,4500,5,6,7,8,7e,9,10\x00",
     )
 
 
@@ -152,14 +184,61 @@ def test_config_rejects_old_satellite_only_shape(tmp_path: Path) -> None:
         load_config(str(path))
 
 
-def test_parse_lasarsat_csv_payload() -> None:
-    packet = parse_aprs_payload(b"\x00PSU,4,22104888,40839616,8106,2389,2030,1,133,7e,1,84\x00")
+def test_config_defaults_decoder_to_aprs(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(_config_yaml(source_id="source-uuid"), encoding="utf-8")
 
-    assert packet.packet_type == "csv:psu"
-    assert packet.fields["psu_01"] == 4.0
-    assert packet.fields["psu_02"] == 22104888.0
-    assert packet.fields["psu_08"] == 133.0
-    assert "psu_09" not in packet.fields
+    config = load_config(str(path))
+
+    assert config.vehicle.decoder.strategy == "aprs"
+    assert config.vehicle.decoder.decoder_id is None
+
+
+def test_config_rejects_missing_decoder_id_for_kaitai(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(_config_yaml(source_id="source-uuid", decoder_strategy="kaitai"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="decoder_id"):
+        load_config(str(path))
+
+
+def test_config_rejects_unsupported_decoder_strategy(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(_config_yaml(source_id="source-uuid", decoder_strategy="bogus"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="strategy"):
+        load_config(str(path))
+
+
+def test_aprs_decoder_returns_decoded_packet_result() -> None:
+    decoder = AprsDecoder()
+    observation = ObservationRecord(
+        observation_id="obs-1",
+        satellite_norad_cat_id=25544,
+        start_time=None,
+        end_time=None,
+        ground_station_id="42",
+    )
+    frame = FrameRecord(
+        frame_bytes=b"",
+        reception_time="2026-04-01T00:01:00Z",
+        observation_id="obs-1",
+        ground_station_id="42",
+        source="satnogs_network",
+        frame_index=0,
+    )
+    ax25 = parse_ax25_frame(_build_ax25_frame(dest="APRS", src="RS0ISS", info=b"!4903.50N/07201.75W> temp=40"))
+
+    result = decoder.decode(observation=observation, frame=frame, ax25_packet=ax25)
+
+    assert result.decode_mode == "aprs"
+    assert result.decoder_strategy == "aprs"
+    assert result.decoder_name == "aprs"
+    assert result.packet_name == "position"
+    assert result.fields["temp"] == 40.0
+    assert result.raw_payload_hex == ax25.info_bytes.hex()
+    assert result.metadata["raw_payload"] == "!4903.50N/07201.75W> temp=40"
+    assert result.metadata["kv_fields"] == {"temp": 40.0}
 
 
 def test_extract_frames_collects_invalid_hex_without_aborting() -> None:
@@ -308,6 +387,197 @@ def test_ax25_and_aprs_decode_position_payload() -> None:
     assert aprs.fields["temp"] == 40.0
 
 
+def test_lasarsat_decoder_parses_known_good_payload_fixture() -> None:
+    decoder = LasarsatDecoder()
+    observation = ObservationRecord(
+        observation_id="obs-1",
+        satellite_norad_cat_id=62391,
+        start_time=None,
+        end_time=None,
+        ground_station_id="42",
+    )
+    frame = FrameRecord(
+        frame_bytes=b"",
+        reception_time=None,
+        observation_id="obs-1",
+        ground_station_id="42",
+        source="satnogs_network",
+        frame_index=0,
+    )
+    ax25 = AX25Frame(
+        dest_callsign="CQ",
+        src_callsign="OK0LSR",
+        digipeater_path=[],
+        control=0x03,
+        pid=0xF0,
+        info_bytes=_build_lasarsat_psu_payload(),
+    )
+
+    result = decoder.decode(observation=observation, frame=frame, ax25_packet=ax25)
+
+    assert result.decode_mode == "vehicle"
+    assert result.decoder_strategy == "kaitai"
+    assert result.decoder_name == "lasarsat"
+    assert result.packet_name == "psu"
+    assert result.fields["psu_battery"] == 4500
+    assert result.fields["psu_ch_state_num"] == 0x7E
+    assert result.fields["psu_ch0_state"] == 0
+    assert result.fields["psu_ch6_state"] == 1
+    assert "psu_battery" in result.fields
+    assert "psu_bat_str" not in result.fields
+    assert "ctl" not in result.fields
+    assert "pid" not in result.fields
+    assert result.metadata["non_numeric_fields"]["psu_pass_packet_type"] == "PSU"
+
+
+def test_lasarsat_decoder_preserves_integers_and_sends_non_numeric_to_metadata() -> None:
+    decoder = LasarsatDecoder()
+    observation = ObservationRecord(
+        observation_id="obs-1",
+        satellite_norad_cat_id=62391,
+        start_time=None,
+        end_time=None,
+        ground_station_id="42",
+    )
+    frame = FrameRecord(
+        frame_bytes=b"",
+        reception_time=None,
+        observation_id="obs-1",
+        ground_station_id="42",
+        source="satnogs_network",
+        frame_index=0,
+    )
+    ax25 = AX25Frame(
+        dest_callsign="CQ",
+        src_callsign="OK0LSR",
+        digipeater_path=[],
+        control=0x03,
+        pid=0xF0,
+        info_bytes=b"de ok0lsr = u185833r2t24p22 ar",
+    )
+
+    result = decoder.decode(observation=observation, frame=frame, ax25_packet=ax25)
+
+    assert isinstance(result.fields["uptime_total"], int)
+    assert isinstance(result.fields["reset_number"], int)
+    assert "cw_beacon" not in result.fields
+    assert result.metadata["non_numeric_fields"]["cw_beacon"] == "u185833r2t24p22"
+
+
+def test_lasarsat_decoder_ignores_containers_and_none_values() -> None:
+    decoder = LasarsatDecoder()
+    leaves = decoder._collect_leaf_values(object())
+
+    assert leaves == []
+
+
+def test_lasarsat_decoder_uses_deterministic_collision_disambiguation() -> None:
+    decoder = LasarsatDecoder()
+    assignments = decoder._assign_field_names(
+        [
+            _LeafValue(path=("id2", "dest_callsign"), value="CQ"),
+            _LeafValue(path=("id4", "dest_callsign"), value="OK0LSR"),
+            _LeafValue(path=("psu_battery",), value=4500),
+        ]
+    )
+
+    assert assignments[("psu_battery",)] == "psu_battery"
+    assert assignments[("id2", "dest_callsign")] == "id2__dest_callsign"
+    assert assignments[("id4", "dest_callsign")] == "id4__dest_callsign"
+
+
+def test_decode_service_returns_none_only_for_cheap_gate_non_match() -> None:
+    service = PayloadDecodeService(decoder_config=DecoderConfig(strategy="kaitai", decoder_id="lasarsat"), registry=DecoderRegistry())
+    observation = ObservationRecord(
+        observation_id="obs-1",
+        satellite_norad_cat_id=62391,
+        start_time=None,
+        end_time=None,
+        ground_station_id="42",
+    )
+    frame = FrameRecord(
+        frame_bytes=b"",
+        reception_time=None,
+        observation_id="obs-1",
+        ground_station_id="42",
+        source="satnogs_network",
+        frame_index=0,
+    )
+    ax25 = AX25Frame(
+        dest_callsign="CQ",
+        src_callsign="OK0LSR",
+        digipeater_path=[],
+        control=0x13,
+        pid=0xF0,
+        info_bytes=b"ignored",
+    )
+
+    assert service.decode(observation=observation, frame=frame, ax25_packet=ax25) is None
+
+
+def test_decode_service_raises_structured_errors_for_parse_and_normalization_failures() -> None:
+    kaitai_service = PayloadDecodeService(
+        decoder_config=DecoderConfig(strategy="kaitai", decoder_id="lasarsat"),
+        registry=DecoderRegistry(),
+    )
+    aprs_service = PayloadDecodeService(decoder_config=DecoderConfig(strategy="aprs"), registry=DecoderRegistry())
+    observation = ObservationRecord(
+        observation_id="obs-1",
+        satellite_norad_cat_id=62391,
+        start_time=None,
+        end_time=None,
+        ground_station_id="42",
+    )
+    frame = FrameRecord(
+        frame_bytes=b"",
+        reception_time=None,
+        observation_id="obs-1",
+        ground_station_id="42",
+        source="satnogs_network",
+        frame_index=0,
+    )
+
+    with pytest.raises(PayloadDecodeError) as kaitai_error:
+        kaitai_service.decode(
+            observation=observation,
+            frame=frame,
+            ax25_packet=AX25Frame(
+                dest_callsign="CQ",
+                src_callsign="OK0LSR",
+                digipeater_path=[],
+                control=0x03,
+                pid=0xF0,
+                info_bytes=b"broken",
+            ),
+        )
+    assert kaitai_error.value.reason == "vehicle_decoder_parse_failed"
+    assert "requested 8 bytes" in kaitai_error.value.error_message
+
+    with pytest.raises(PayloadDecodeError, match="APRS payload did not contain numeric telemetry"):
+        aprs_service.decode(
+            observation=observation,
+            frame=frame,
+            ax25_packet=AX25Frame(
+                dest_callsign="APRS",
+                src_callsign="RS0ISS",
+                digipeater_path=[],
+                control=0x03,
+                pid=0xF0,
+                info_bytes=b">>>>>",
+            ),
+        )
+
+
+def test_unsupported_decoder_pair_raises_structured_service_error() -> None:
+    service = PayloadDecodeService(
+        decoder_config=DecoderConfig(strategy="kaitai", decoder_id="unknown"),
+        registry=DecoderRegistry(),
+    )
+
+    with pytest.raises(PayloadDecodeError, match="Unsupported payload decoder"):
+        service.validate_configuration()
+
+
 def test_mapper_emits_stable_and_dynamic_events() -> None:
     mapper = TelemetryMapper(
         source_id="source-uuid",
@@ -324,12 +594,20 @@ def test_mapper_emits_stable_and_dynamic_events() -> None:
         ground_station_id="42",
     )
     ax25 = parse_ax25_frame(_build_ax25_frame(dest="APRS", src="RS0ISS", info=b"!4903.50N/07201.75W> temp=40"))
-    aprs = parse_aprs_payload(ax25.info_bytes)
+    decoded_packet = DecodedPacketResult(
+        decode_mode="aprs",
+        decoder_strategy="aprs",
+        decoder_name="aprs",
+        packet_name="position",
+        fields={"latitude": 49.0583, "temp": 40.0},
+        raw_payload_hex=ax25.info_bytes.hex(),
+        metadata={},
+    )
 
-    events = mapper.map_packet(
+    events = mapper.map_decoded_packet(
         observation=observation,
         frame=ax25,
-        aprs_packet=aprs,
+        decoded_packet=decoded_packet,
         reception_time="2026-04-01T00:01:00Z",
         sequence_seed=0,
     )
@@ -341,8 +619,259 @@ def test_mapper_emits_stable_and_dynamic_events() -> None:
     assert "satnogs.transmitter_uuid" not in stable.tags
     assert dynamic.tags is not None
     assert dynamic.tags["decoder"] == "aprs"
+    assert dynamic.tags["decoder_strategy"] == "aprs"
+    assert dynamic.tags["packet_name"] == "position"
     assert "satnogs.transmitter_uuid" not in dynamic.tags
 
+
+def test_runner_full_path_aprs_regression_still_publishes(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(_config_yaml(source_id="source-uuid"), encoding="utf-8")
+    config = load_config(str(config_path))
+    config.checkpoints.path = str(tmp_path / "checkpoints.json")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    published: list[dict[str, object]] = []
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            return ObservationPage(
+                results=[
+                    {
+                        "id": "obs-1",
+                        "status": "good",
+                        "satellite__norad_cat_id": 25544,
+                        "transmitter_uuid": "tx-uuid",
+                        "demoddata": "ignored",
+                        "ground_station_id": "42",
+                    }
+                ]
+            )
+
+        def list_upcoming_observations(self):
+            return ObservationPage(results=[])
+
+        def is_eligible_observation(self, payload, *, status=None, require_status=True):
+            return True
+
+        def normalize_observation(self, payload):
+            return ObservationRecord(
+                observation_id=str(payload["id"]),
+                satellite_norad_cat_id=25544,
+                start_time="2026-04-01T00:00:00Z",
+                end_time="2026-04-01T00:01:00Z",
+                ground_station_id="42",
+                demoddata=payload["demoddata"],
+                raw_json=payload,
+            )
+
+        def extract_frames(self, observation, *, source="satnogs_network"):
+            return (
+                [
+                    FrameRecord(
+                        frame_bytes=_build_ax25_frame(dest="APRS", src="RS0ISS", info=b"!4903.50N/07201.75W> temp=40"),
+                        reception_time="2026-04-01T00:01:00Z",
+                        observation_id=observation.observation_id,
+                        ground_station_id=observation.ground_station_id,
+                        source=source,
+                        frame_index=0,
+                        raw_line="ignored",
+                    )
+                ],
+                [],
+            )
+
+    class CapturingPublisher:
+        def publish(self, events, *, context):
+            published.extend([event.to_payload() for event in events])
+
+            class Result:
+                success = True
+                status_code = 200
+                response_body = ""
+                attempts = 1
+
+            return Result()
+
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=CapturingPublisher(),
+        observations_publisher=FakeObservationsPublisher(),
+        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        dlq=FilesystemDlq(config.dlq.root_dir),
+        payload_decode_service=_payload_decode_service(config),
+        source_id="source-uuid",
+    )
+
+    runner.run_live_once()
+
+    assert any(event.get("channel_name") == "ISS_POS_LAT_DEG" for event in published)
+    temp_event = next(event for event in published if event.get("tags", {}).get("field_name") == "temp")
+    assert temp_event["tags"]["decoder"] == "aprs"
+    assert temp_event["tags"]["decoder_strategy"] == "aprs"
+
+
+def test_runner_full_path_lasarsat_flow_reaches_publish(tmp_path: Path) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.checkpoints.path = str(tmp_path / "checkpoints.json")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    published: list[dict[str, object]] = []
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            return ObservationPage(
+                results=[
+                    {
+                        "id": "obs-1",
+                        "status": "good",
+                        "satellite__norad_cat_id": 62391,
+                        "transmitter_uuid": "C3RnLSSuaKzWhHrtJCqUgu",
+                        "demoddata": "ignored",
+                        "ground_station_id": "42",
+                    }
+                ]
+            )
+
+        def list_upcoming_observations(self):
+            return ObservationPage(results=[])
+
+        def is_eligible_observation(self, payload, *, status=None, require_status=True):
+            return True
+
+        def normalize_observation(self, payload):
+            return ObservationRecord(
+                observation_id=str(payload["id"]),
+                satellite_norad_cat_id=62391,
+                start_time="2026-04-01T00:00:00Z",
+                end_time="2026-04-01T00:01:00Z",
+                ground_station_id="42",
+                demoddata=payload["demoddata"],
+                raw_json=payload,
+            )
+
+        def extract_frames(self, observation, *, source="satnogs_network"):
+            return (
+                [
+                    FrameRecord(
+                        frame_bytes=_build_ax25_frame(dest="CQ", src="OK0LSR", info=_build_lasarsat_psu_payload()),
+                        reception_time="2026-04-01T00:01:00Z",
+                        observation_id=observation.observation_id,
+                        ground_station_id=observation.ground_station_id,
+                        source=source,
+                        frame_index=0,
+                        raw_line="ignored",
+                    )
+                ],
+                [],
+            )
+
+    class CapturingPublisher:
+        def publish(self, events, *, context):
+            published.extend([event.to_payload() for event in events])
+
+            class Result:
+                success = True
+                status_code = 200
+                response_body = ""
+                attempts = 1
+
+            return Result()
+
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=CapturingPublisher(),
+        observations_publisher=FakeObservationsPublisher(),
+        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        dlq=FilesystemDlq(config.dlq.root_dir),
+        payload_decode_service=_payload_decode_service(config),
+        source_id="source-uuid",
+    )
+
+    runner.run_live_once()
+
+    psu_event = next(event for event in published if event.get("tags", {}).get("field_name") == "psu_battery")
+    assert psu_event["tags"]["decoder"] == "lasarsat"
+    assert psu_event["tags"]["decoder_strategy"] == "kaitai"
+    assert psu_event["tags"]["packet_name"] == "psu"
+    assert psu_event["tags"]["field_name"] == "psu_battery"
+
+
+def test_runner_non_matching_frames_do_not_create_payload_dlq_noise(tmp_path: Path) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.checkpoints.path = str(tmp_path / "checkpoints.json")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            return ObservationPage(
+                results=[
+                    {
+                        "id": "obs-1",
+                        "status": "good",
+                        "satellite__norad_cat_id": 62391,
+                        "transmitter_uuid": "C3RnLSSuaKzWhHrtJCqUgu",
+                        "demoddata": "ignored",
+                        "ground_station_id": "42",
+                    }
+                ]
+            )
+
+        def list_upcoming_observations(self):
+            return ObservationPage(results=[])
+
+        def is_eligible_observation(self, payload, *, status=None, require_status=True):
+            return True
+
+        def normalize_observation(self, payload):
+            return ObservationRecord(
+                observation_id=str(payload["id"]),
+                satellite_norad_cat_id=62391,
+                start_time="2026-04-01T00:00:00Z",
+                end_time="2026-04-01T00:01:00Z",
+                ground_station_id="42",
+                demoddata=payload["demoddata"],
+                raw_json=payload,
+            )
+
+        def extract_frames(self, observation, *, source="satnogs_network"):
+            frame_bytes = _build_ax25_frame(dest="CQ", src="OK0LSR", info=b"ignored")
+            broken = bytearray(frame_bytes)
+            broken[-len(b"ignored") - 2] = 0x13
+            return (
+                [
+                    FrameRecord(
+                        frame_bytes=bytes(broken),
+                        reception_time="2026-04-01T00:01:00Z",
+                        observation_id=observation.observation_id,
+                        ground_station_id=observation.ground_station_id,
+                        source=source,
+                        frame_index=0,
+                        raw_line="ignored",
+                    )
+                ],
+                [],
+            )
+
+    class CapturingPublisher:
+        def publish(self, events, *, context):
+            raise AssertionError("publisher should not be called for unknown payloads")
+
+    dlq = FilesystemDlq(config.dlq.root_dir)
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=CapturingPublisher(),
+        observations_publisher=FakeObservationsPublisher(),
+        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        dlq=dlq,
+        payload_decode_service=_payload_decode_service(config),
+        source_id="source-uuid",
+    )
+
+    runner.run_live_once()
+
+    assert dlq.iter_kind("frame") == []
 
 def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path: Path) -> None:
     config = load_config("satnogs_adapter/config.example.yaml")
@@ -399,6 +928,7 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
         observations_publisher=FakeObservationsPublisher(),
         checkpoint_store=checkpoint_store,
         dlq=dlq,
+        payload_decode_service=_payload_decode_service(config),
         source_id="source-uuid",
     )
 
@@ -465,6 +995,7 @@ def test_runner_uses_link_pagination_and_observation_id_dedupe(tmp_path: Path) -
         observations_publisher=FakeObservationsPublisher(),
         checkpoint_store=checkpoint_store,
         dlq=dlq,
+        payload_decode_service=_payload_decode_service(config),
         source_id="source-uuid",
     )
 
@@ -541,6 +1072,7 @@ def test_runner_syncs_upcoming_observations_with_replacement_payload(tmp_path: P
         observations_publisher=CapturingObservationsPublisher(),
         checkpoint_store=FileCheckpointStore(config.checkpoints.path),
         dlq=FilesystemDlq(config.dlq.root_dir),
+        payload_decode_service=_payload_decode_service(config),
         source_id="source-uuid",
     )
 
@@ -594,6 +1126,7 @@ def test_backfill_uses_linked_observations_with_configured_bounds(tmp_path: Path
         observations_publisher=FakeObservationsPublisher(),
         checkpoint_store=FileCheckpointStore(config.checkpoints.path),
         dlq=FilesystemDlq(config.dlq.root_dir),
+        payload_decode_service=_payload_decode_service(config),
         source_id="source-uuid",
     )
 
@@ -802,3 +1335,14 @@ def test_build_runner_resolves_source_id_when_override_absent(tmp_path: Path, mo
 
     assert runner.mapper.source_id == "resolved-source"
     assert calls["count"] == 1
+
+
+def test_build_runner_fails_fast_on_unsupported_decoder_pair(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        _config_yaml(source_id="source-uuid", decoder_strategy="kaitai", decoder_id="unknown"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PayloadDecodeError, match="Unsupported payload decoder"):
+        build_runner(str(path))
