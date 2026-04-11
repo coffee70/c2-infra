@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SatNOGS backfill and LASARSAT decode safety** — SatNOGS 429 throttling no longer advances the backfill cursor, and the LASARSAT Kaitai decoder now parses full AX.25 frames for packet telemetry while preserving CW beacon fallback decoding.
 - **Registered channel no-data detail pages** — Source-scoped channel detail pages now render for registered channels that have no samples or computed statistics yet, showing explicit no-data empty states instead of redirecting to Overview as if the channel were unavailable.
 - **Planning per-source feed health** — The Planning Earth view no longer shows one global `Live` banner for all selected sources. Each selected source now renders its own `Live` / `Degraded` / `No data` badge, and stopped simulators switch to `No data` immediately instead of inheriting another source’s live state.
 - **Simulator realtime runtime contract** — The simulator now sends `source_id` in realtime ingest payloads instead of the legacy runtime `vehicle_id`, restoring compatibility with `POST /telemetry/realtime/ingest`.

@@ -48,7 +48,7 @@ class LasarsatDecoder(PayloadDecoder):
         frame: FrameRecord,
         ax25_packet: AX25Frame,
     ) -> PacketMatchResult:
-        del observation, frame
+        del observation
         notes: list[str] = []
         if ax25_packet.control != 0x03:
             return PacketMatchResult(matched=False, reason="unexpected_ax25_control", metadata={"control": ax25_packet.control})
@@ -66,67 +66,82 @@ class LasarsatDecoder(PayloadDecoder):
         frame: FrameRecord,
         ax25_packet: AX25Frame,
     ) -> DecodedPacketResult:
-        del observation, frame
-        try:
-            parsed = Lasarsat.from_bytes(ax25_packet.info_bytes)
-        except Exception as exc:
-            raise PayloadDecodeError(
-                reason="vehicle_decoder_parse_failed",
-                decoder_strategy=self.strategy,
-                decoder_id=self.decoder_id,
-                decoder_name=self.name,
-                error_message=str(exc),
-            ) from exc
+        del observation
+        payload_candidates: list[tuple[str, bytes]] = [("full_frame", frame.frame_bytes)]
+        if ax25_packet.info_bytes.lower().startswith(b"de "):
+            payload_candidates.append(("info_payload", ax25_packet.info_bytes))
 
-        try:
-            leaves = list(self._collect_leaf_values(parsed))
-            assignments = self._assign_field_names(leaves)
-        except Exception as exc:
-            raise PayloadDecodeError(
-                reason="normalization_failed",
-                decoder_strategy=self.strategy,
-                decoder_id=self.decoder_id,
-                decoder_name=self.name,
-                error_message=str(exc),
-            ) from exc
-
-        fields: dict[str, int | float] = {}
-        metadata_fields: dict[str, object] = {}
-        for leaf in leaves:
-            key = assignments[leaf.path]
-            value = leaf.value
-            if value is None:
+        parse_error: Exception | None = None
+        for payload_source, payload in payload_candidates:
+            try:
+                parsed = Lasarsat.from_bytes(payload)
+            except Exception as exc:
+                parse_error = exc
                 continue
-            if isinstance(value, bool):
+
+            try:
+                leaves = list(self._collect_leaf_values(parsed))
+                assignments = self._assign_field_names(leaves)
+            except Exception as exc:
+                raise PayloadDecodeError(
+                    reason="normalization_failed",
+                    decoder_strategy=self.strategy,
+                    decoder_id=self.decoder_id,
+                    decoder_name=self.name,
+                    error_message=str(exc),
+                ) from exc
+
+            fields: dict[str, int | float] = {}
+            metadata_fields: dict[str, object] = {}
+            for leaf in leaves:
+                key = assignments[leaf.path]
+                value = leaf.value
+                if value is None:
+                    continue
+                if isinstance(value, bool):
+                    metadata_fields[key] = value
+                    continue
+                if isinstance(value, enum.Enum):
+                    metadata_fields[key] = value.name
+                    continue
+                if isinstance(value, int):
+                    fields[key] = value
+                    continue
+                if isinstance(value, float):
+                    fields[key] = value
+                    continue
+                if isinstance(value, bytes):
+                    metadata_fields[key] = value.hex()
+                    continue
                 metadata_fields[key] = value
-                continue
-            if isinstance(value, enum.Enum):
-                metadata_fields[key] = value.name
-                continue
-            if isinstance(value, int):
-                fields[key] = value
-                continue
-            if isinstance(value, float):
-                fields[key] = value
-                continue
-            if isinstance(value, bytes):
-                metadata_fields[key] = value.hex()
-                continue
-            metadata_fields[key] = value
 
-        packet_name = self._packet_name(parsed)
-        return DecodedPacketResult(
-            decode_mode="vehicle",
+            if not fields and payload_source != payload_candidates[-1][0]:
+                continue
+
+            packet_name = self._packet_name(parsed)
+            return DecodedPacketResult(
+                decode_mode="vehicle",
+                decoder_strategy=self.strategy,
+                decoder_name=self.name,
+                packet_name=packet_name,
+                fields=fields,
+                raw_payload_hex=ax25_packet.info_bytes.hex(),
+                metadata={
+                    "variant": packet_name,
+                    "match_notes": ["control_pid_and_payload_length_matched"],
+                    "full_frame_hex": frame.frame_bytes.hex(),
+                    "payload_source": payload_source,
+                    "non_numeric_fields": metadata_fields,
+                },
+            )
+
+        error_message = str(parse_error) if parse_error is not None else "No LASARSAT payload bytes available"
+        raise PayloadDecodeError(
+            reason="vehicle_decoder_parse_failed",
             decoder_strategy=self.strategy,
+            decoder_id=self.decoder_id,
             decoder_name=self.name,
-            packet_name=packet_name,
-            fields=fields,
-            raw_payload_hex=ax25_packet.info_bytes.hex(),
-            metadata={
-                "variant": packet_name,
-                "match_notes": ["control_pid_and_payload_length_matched"],
-                "non_numeric_fields": metadata_fields,
-            },
+            error_message=error_message,
         )
 
     def _collect_leaf_values(self, value: object, path: tuple[str, ...] = (), seen: set[int] | None = None) -> list[_LeafValue]:

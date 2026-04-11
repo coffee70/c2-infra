@@ -223,7 +223,17 @@ class AdapterRunner:
                     start_time=cursor.isoformat(),
                     end_time=chunk_end.isoformat(),
                     connector=self.backfill_network_connector,
+                    suppress_rate_limit=False,
                 )
+            except SatnogsRateLimitError as exc:
+                logger.warning(
+                    "SatNOGS backfill chunk throttled; retrying same chunk after %ss: chunk_start=%s chunk_end=%s",
+                    exc.retry_after_seconds,
+                    cursor.isoformat(),
+                    chunk_end.isoformat(),
+                )
+                time.sleep(exc.retry_after_seconds)
+                continue
             except Exception as exc:
                 self.state_publisher.publish_backfill_progress(
                     {
@@ -261,6 +271,7 @@ class AdapterRunner:
         end_time: str | None = None,
         max_observations: int | None = None,
         connector: SatnogsNetworkConnector | None = None,
+        suppress_rate_limit: bool = True,
     ) -> None:
         active_connector = connector or self.network_connector
         next_url: str | None = None
@@ -274,6 +285,8 @@ class AdapterRunner:
                 )
             except SatnogsRateLimitError as exc:
                 logger.warning("SatNOGS observation poll throttled; retry after %ss", exc.retry_after_seconds)
+                if not suppress_rate_limit:
+                    raise
                 return
             results = observation_page.results
             if not results:
@@ -541,6 +554,7 @@ class AdapterRunner:
             "decoder_id": error.decoder_id,
             "decoder_strategy": error.decoder_strategy,
             "packet_name": error.packet_name,
+            "exception_type": type(error).__name__,
             "error_message": error.error_message,
         }
         if error.metadata:

@@ -99,11 +99,7 @@ def _payload_decode_service(config) -> PayloadDecodeService:
 
 
 def _build_lasarsat_psu_payload() -> bytes:
-    return _build_ax25_frame(
-        dest="CQ",
-        src="OK0LSR",
-        info=b"PSU,1,2,3,4500,5,6,7,8,7e,9,10\x00",
-    )
+    return b"PSU,1,2,3,4500,5,6,7,8,7e,9,10\x00"
 
 
 def test_load_config_prefers_definition_stable_field_mappings(tmp_path: Path) -> None:
@@ -399,8 +395,9 @@ def test_lasarsat_decoder_parses_known_good_payload_fixture() -> None:
         end_time=None,
         ground_station_id="42",
     )
+    full_frame = _build_ax25_frame(dest="CQ", src="OK0LSR", info=_build_lasarsat_psu_payload())
     frame = FrameRecord(
-        frame_bytes=b"",
+        frame_bytes=full_frame,
         reception_time=None,
         observation_id="obs-1",
         ground_station_id="42",
@@ -431,10 +428,13 @@ def test_lasarsat_decoder_parses_known_good_payload_fixture() -> None:
     assert "ctl" not in result.fields
     assert "pid" not in result.fields
     assert result.metadata["non_numeric_fields"]["psu_pass_packet_type"] == "PSU"
+    assert result.metadata["full_frame_hex"] == full_frame.hex()
 
 
 def test_lasarsat_decoder_preserves_integers_and_sends_non_numeric_to_metadata() -> None:
     decoder = LasarsatDecoder()
+    info = b"de ok0lsr = u185833r2t24p22 ar"
+    full_frame = _build_ax25_frame(dest="CQ", src="OK0LSR", info=info)
     observation = ObservationRecord(
         observation_id="obs-1",
         satellite_norad_cat_id=62391,
@@ -443,7 +443,7 @@ def test_lasarsat_decoder_preserves_integers_and_sends_non_numeric_to_metadata()
         ground_station_id="42",
     )
     frame = FrameRecord(
-        frame_bytes=b"",
+        frame_bytes=full_frame,
         reception_time=None,
         observation_id="obs-1",
         ground_station_id="42",
@@ -456,7 +456,7 @@ def test_lasarsat_decoder_preserves_integers_and_sends_non_numeric_to_metadata()
         digipeater_path=[],
         control=0x03,
         pid=0xF0,
-        info_bytes=b"de ok0lsr = u185833r2t24p22 ar",
+        info_bytes=info,
     )
 
     result = decoder.decode(observation=observation, frame=frame, ax25_packet=ax25)
@@ -1152,6 +1152,125 @@ def test_backfill_snapshot_uses_platform_chunk_bounds(tmp_path: Path) -> None:
     assert progress[0]["status"] == "started"
     assert progress[-1]["status"] == "completed"
     assert progress[-1]["backlog_drained"] is True
+
+
+def test_backfill_snapshot_retries_same_chunk_after_satnogs_rate_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    seen: list[tuple[str | None, str | None]] = []
+    progress: list[dict[str, object]] = []
+    sleeps: list[int] = []
+    start = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            del next_url, now
+            seen.append((start_time, end_time))
+            if len(seen) == 1:
+                raise SatnogsRateLimitError(7)
+            return ObservationPage(results=[], next_url=None)
+
+    class FakeStatePublisher:
+        def publish_backfill_progress(self, payload):
+            progress.append(payload)
+
+            class Result:
+                success = True
+                status_code = 200
+                response_body = ""
+
+            return Result()
+
+    class FakePublisher:
+        def publish(self, events, *, context):
+            raise AssertionError("publisher should not be called")
+
+    monkeypatch.setattr("satnogs_adapter.runner.time.sleep", lambda seconds: sleeps.append(seconds))
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=FakePublisher(),
+        observations_publisher=FakeObservationsPublisher(),
+        state_publisher=FakeStatePublisher(),
+        dlq=FilesystemDlq(config.dlq.root_dir),
+        payload_decode_service=_payload_decode_service(config),
+        source_contract=ResolvedSource(
+            id="source-uuid",
+            name="source",
+            source_type="vehicle",
+            vehicle_config_path="vehicles/lasarsat.yaml",
+            created=False,
+            monitoring_start_time=start,
+            last_reconciled_at=start,
+            history_mode="time_window_replay",
+            live_state="idle",
+            backfill_state="idle",
+            chunk_size_hours=6,
+        ),
+    )
+
+    runner.run_backfill_snapshot()
+
+    assert sleeps == [7]
+    assert len(seen) == 2
+    assert seen[0] == seen[1]
+    assert [item["status"] for item in progress] == ["started", "completed"]
+
+
+def test_backfill_snapshot_reports_failed_without_completion_on_non_rate_limit_error(tmp_path: Path) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    progress: list[dict[str, object]] = []
+    start = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            del next_url, start_time, end_time, now
+            raise RuntimeError("satnogs exploded")
+
+    class FakeStatePublisher:
+        def publish_backfill_progress(self, payload):
+            progress.append(payload)
+
+            class Result:
+                success = True
+                status_code = 200
+                response_body = ""
+
+            return Result()
+
+    class FakePublisher:
+        def publish(self, events, *, context):
+            raise AssertionError("publisher should not be called")
+
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=FakePublisher(),
+        observations_publisher=FakeObservationsPublisher(),
+        state_publisher=FakeStatePublisher(),
+        dlq=FilesystemDlq(config.dlq.root_dir),
+        payload_decode_service=_payload_decode_service(config),
+        source_contract=ResolvedSource(
+            id="source-uuid",
+            name="source",
+            source_type="vehicle",
+            vehicle_config_path="vehicles/lasarsat.yaml",
+            created=False,
+            monitoring_start_time=start,
+            last_reconciled_at=start,
+            history_mode="time_window_replay",
+            live_state="idle",
+            backfill_state="idle",
+            chunk_size_hours=6,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="satnogs exploded"):
+        runner.run_backfill_snapshot()
+
+    assert [item["status"] for item in progress] == ["started", "failed"]
+    assert "completed" not in {item["status"] for item in progress}
 
 
 def test_satnogs_connector_rejects_mismatched_status() -> None:
