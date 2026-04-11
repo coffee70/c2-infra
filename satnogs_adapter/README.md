@@ -2,6 +2,8 @@
 
 The SatNOGS adapter ingests AX.25 telemetry from SatNOGS observations for one configured satellite/transmitter pair. It resolves the canonical backend vehicle source at startup, publishes expected observation windows, polls live observations, and drains historical backfill through a shared SatNOGS request coordinator.
 
+Each emitted telemetry sample carries an increasing sequence within its observation stream. Backend history uses that sequence with the stream, channel, and timestamp so repeated LASARSAT packets in one observation are preserved.
+
 The example configuration targets LASARSAT:
 
 - NORAD: `62391`
@@ -21,6 +23,16 @@ status=<adapter status>
 ```
 
 It does not include `start` or `end` on the initial live poll. Bounded historical requests may add `start` and `end`.
+
+## Live And Backfill Boundary
+
+Each adapter process captures one `startup_cutoff_time` at startup. Live polling and backfill continue to run in parallel: backfill reconciles observations from the platform `monitoring_start_time` or `last_reconciled_at` up to the cutoff, while live handles observations whose `end` is after the cutoff.
+
+Live polling keeps the unbounded request shape above and follows SatNOGS pagination backward until it reaches an observation whose `start` is before the startup cutoff. Observations with `end` at or before the cutoff are skipped by live; observations that span the cutoff are live responsibility.
+
+Backfill requests use platform-sized bounded chunks and locally validate every returned observation on both first and next pages. Observations with missing, unparsable, or out-of-chunk timestamps are logged and skipped. A chunk checkpoint is reported only after the whole chunk page walk succeeds.
+
+If the adapter restarts while a previous backfill target is still marked running, the new process supersedes that stale target, keeps the platform checkpoint, and starts a new run up to its new startup cutoff.
 
 ## Observations API Ordering
 

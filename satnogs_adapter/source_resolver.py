@@ -55,6 +55,8 @@ class BackendSourceResolver:
             "description": f"Auto-resolved from vehicle configuration: {vehicle.vehicle_config_path}",
             "vehicle_config_path": vehicle.vehicle_config_path,
         }
+        if vehicle.monitoring_start_time is not None:
+            payload["monitoring_start_time"] = vehicle.monitoring_start_time.isoformat()
         attempts = 0
         backoff = self.retry.backoff_seconds
         retryable = set(self.retry.retryable_status_codes)

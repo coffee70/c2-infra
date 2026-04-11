@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 import time
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
 
@@ -52,6 +52,26 @@ def _parse_retry_after(value: str | None) -> int:
     if retry_at.tzinfo is None:
         retry_at = retry_at.replace(tzinfo=timezone.utc)
     return max(1, ceil((retry_at - datetime.now(timezone.utc)).total_seconds()))
+
+
+def _timestamp_from_artifact_ref(ref: str) -> str | None:
+    path = unquote(urlparse(ref).path or ref)
+    for match in re.finditer(
+        r"(?P<date>\d{4}[-_]\d{2}[-_]\d{2})[T_\- ](?P<time>\d{2}[:_\-]\d{2}[:_\-]\d{2}(?:[.,]\d+)?)(?P<zone>Z|[+-]\d{2}:?\d{2})?",
+        path,
+    ):
+        date = match.group("date").replace("_", "-")
+        time_part = match.group("time").replace("_", ":").replace("-", ":").replace(",", ".")
+        zone = match.group("zone") or "Z"
+        if zone != "Z" and ":" not in zone:
+            zone = f"{zone[:3]}:{zone[3:]}"
+        candidate = f"{date}T{time_part}{zone}"
+        try:
+            parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return None
 
 
 class SatnogsNetworkConnector:
@@ -268,12 +288,17 @@ class SatnogsNetworkConnector:
                         continue
                     payload_demod = item.get("payload_demod")
                     if isinstance(payload_demod, str) and payload_demod.strip():
+                        item_time = (
+                            _stringify(item.get("timestamp") or item.get("time"))
+                            or _timestamp_from_artifact_ref(payload_demod)
+                        )
                         for downloaded_line in self._download_artifact_lines(payload_demod):
-                            lines.append((downloaded_line, _stringify(item.get("timestamp") or item.get("time"))))
+                            lines.append((downloaded_line, item_time))
         elif demoddata is None and observation.artifact_refs:
             for ref in observation.artifact_refs:
+                ref_time = _timestamp_from_artifact_ref(ref)
                 for raw_line in self._download_artifact_lines(ref):
-                    lines.append((raw_line, None))
+                    lines.append((raw_line, ref_time))
 
         frames: list[FrameRecord] = []
         invalid_lines: list[dict[str, Any]] = []

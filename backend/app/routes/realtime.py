@@ -119,6 +119,11 @@ def _validate_stream_batch_identities(db: Session, events: list[MeasurementEvent
             raise HTTPException(status_code=400, detail="stream_id does not belong to source")
 
 
+def _validate_required_sequences(events: list[MeasurementEvent]) -> None:
+    if any(event.sequence is None for event in events):
+        raise HTTPException(status_code=400, detail="measurement event sequence is required")
+
+
 @router.post("/ingest")
 async def ingest_realtime(
     body: MeasurementEventBatch,
@@ -132,6 +137,7 @@ async def ingest_realtime(
     raw_events = body.events
 
     try:
+        _validate_required_sequences(raw_events)
         _validate_stream_batch_identities(session, raw_events)
         source_ids = sorted({e.source_id for e in raw_events})
         filled_reception = sum(1 for e in raw_events if not e.reception_time)

@@ -165,11 +165,12 @@ class TelemetryService:
                 stream_id=stream_id,
                 telemetry_id=meta.id,
                 timestamp=ts,
+                sequence=index,
                 value=Decimal(str(v)),
                 packet_source=packet_source,
                 receiver_id=receiver_id,
             )
-            for ts, v in data
+            for index, (ts, v) in enumerate(data, start=1)
         ]
         self._db.add_all(rows)
         return len(rows)
@@ -423,7 +424,7 @@ class TelemetryService:
                 TelemetryData.telemetry_id == meta.id,
                 TelemetryData.stream_id == data_source_id,
             )
-            .order_by(desc(TelemetryData.timestamp))
+            .order_by(desc(TelemetryData.timestamp), desc(TelemetryData.sequence))
             .limit(limit)
         )
         if since is not None:

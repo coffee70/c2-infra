@@ -161,7 +161,7 @@ def _resolve_latest_stream_id_for_channel(db: Session, source_id: str, name: str
         db.execute(
             select(TelemetryData.stream_id)
             .where(TelemetryData.telemetry_id == meta.id)
-            .order_by(TelemetryData.timestamp.desc())
+            .order_by(TelemetryData.timestamp.desc(), TelemetryData.sequence.desc())
         )
         .scalars()
         .first()
@@ -354,6 +354,7 @@ def resolve_source_route(
             name=body.name,
             description=body.description,
             vehicle_config_path=body.vehicle_config_path,
+            monitoring_start_time=body.monitoring_start_time,
         )
         audit_log(
             "sources.resolve",
@@ -418,8 +419,7 @@ def update_source_backfill_progress(
             error=body.error,
         )
     except ValueError as e:
-        status_code = 409 if "already running" in str(e) else 400
-        raise HTTPException(status_code=status_code, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     if result is None:
         raise HTTPException(status_code=404, detail="Source not found")
     audit_log("sources.backfill_progress", source_id=logical_source_id, status=body.status)
@@ -998,7 +998,7 @@ def _get_recent_values_db_only(
             TelemetryData.telemetry_id == meta.id,
             TelemetryData.stream_id == data_source_id,
         )
-        .order_by(desc(TelemetryData.timestamp))
+        .order_by(desc(TelemetryData.timestamp), desc(TelemetryData.sequence))
         .limit(limit)
     )
     if since is not None:

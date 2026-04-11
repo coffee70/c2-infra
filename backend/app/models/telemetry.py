@@ -106,6 +106,7 @@ class TelemetryData(Base):
         DateTime(timezone=True),
         primary_key=True,
     )
+    sequence: Mapped[int] = mapped_column(primary_key=True, nullable=False)
     value: Mapped[float] = mapped_column(Numeric(20, 10), nullable=False)
     packet_source: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     receiver_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -116,6 +117,7 @@ class TelemetryData(Base):
             "source_id",
             "telemetry_id",
             "timestamp",
+            "sequence",
         ),
     )
 class TelemetryStatistics(Base):

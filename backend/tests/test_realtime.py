@@ -15,14 +15,19 @@ from sqlalchemy.exc import IntegrityError
 from starlette.websockets import WebSocketDisconnect
 
 from app.models.schemas import MeasurementEvent, MeasurementEventBatch, RealtimeChannelUpdate
-from app.models.telemetry import TelemetryAlert, TelemetryMetadata, TelemetrySource
+from app.models.telemetry import TelemetryAlert, TelemetryData, TelemetryMetadata, TelemetrySource
 from app.realtime.bus import InProcessEventBus
 from app.realtime.processor import (
     RealtimeProcessor,
     _build_channel_name_from_tags,
     _resolve_measurement_channel,
 )
-from app.routes.realtime import _normalize_event_times, _validate_stream_batch_identities, websocket_realtime
+from app.routes.realtime import (
+    _normalize_event_times,
+    _validate_required_sequences,
+    _validate_stream_batch_identities,
+    websocket_realtime,
+)
 from app.services.source_stream_service import SourceNotFoundError, StreamIdConflictError
 from app.services.telemetry_service import _compute_state
 
@@ -226,6 +231,24 @@ def test_normalize_event_times_preserves_server_arrival_when_reception_missing()
     assert normalized[0].generation_time == "2026-03-26T12:00:01+00:00"
     assert normalized[0].reception_time is not None
     assert normalized[0].reception_time != normalized[0].generation_time
+
+
+def test_realtime_ingest_requires_sequence() -> None:
+    with pytest.raises(HTTPException) as exc:
+        _validate_required_sequences(
+            [
+                MeasurementEvent(
+                    source_id="source-a",
+                    stream_id="source-a",
+                    channel_name="PWR_MAIN_BUS_VOLT",
+                    generation_time="2026-03-26T12:00:01+00:00",
+                    value=1.0,
+                )
+            ]
+        )
+
+    assert exc.value.status_code == 400
+    assert "sequence" in exc.value.detail
 
 
 def test_validate_stream_batch_identities_allows_reserved_source_id(
@@ -491,6 +514,7 @@ async def test_ingest_realtime_validates_stream_batch_before_ack(monkeypatch: py
                 channel_name="VBAT",
                 generation_time="2026-03-30T12:00:00+00:00",
                 value=1.0,
+                sequence=1,
             )
         ]
     )
@@ -552,6 +576,7 @@ async def test_ingest_realtime_does_not_ack_failed_stream_batch_validation(
                 channel_name="VBAT",
                 generation_time="2026-03-30T12:00:00+00:00",
                 value=1.0,
+                sequence=1,
             )
         ]
     )
@@ -749,6 +774,7 @@ def test_process_measurement_creates_discovered_channel_for_unknown_input(monkey
                 channel_name=None,
                 reception_time="2026-03-26T12:00:01+00:00",
                 value=42.5,
+                sequence=1,
                 tags={"decoder": "APRS", "field_name": "Payload Temp"},
             )
         ]
@@ -802,6 +828,7 @@ def test_process_measurement_skips_unknown_explicit_channel_without_dynamic_cont
             generation_time="2026-03-26T12:00:00+00:00",
             reception_time="2026-03-26T12:00:01+00:00",
             value=42.5,
+            sequence=1,
         ),
     )
 
@@ -843,7 +870,12 @@ def test_process_measurement_does_not_record_feed_health_for_rejected_stream(mon
         last_seen_at=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
     )
 
-    db.execute.return_value = _ScalarResult(meta)
+    def fake_execute(statement, *args, **kwargs):
+        if "telemetry_metadata" in str(statement):
+            return _ScalarResult(meta)
+        return _ScalarResult(None)
+
+    db.execute.side_effect = fake_execute
     db.get.return_value = None
 
     monkeypatch.setattr(
@@ -925,7 +957,12 @@ def test_process_measurement_duplicate_insert_refreshes_stream_and_feed_health(m
     )
     savepoint = MagicMock()
 
-    db.execute.return_value = _ScalarResult(meta)
+    def fake_execute(statement, *args, **kwargs):
+        if "telemetry_metadata" in str(statement):
+            return _ScalarResult(meta)
+        return _ScalarResult(None)
+
+    db.execute.side_effect = fake_execute
     db.get.side_effect = lambda model, key: (
         current
         if model.__name__ == "TelemetryCurrent"
@@ -976,6 +1013,151 @@ def test_process_measurement_duplicate_insert_refreshes_stream_and_feed_health(m
     assert current.generation_time == datetime(2026, 3, 26, 12, 0, 1, tzinfo=timezone.utc)
 
 
+def test_process_measurement_persists_sequence_as_history_identity(monkeypatch) -> None:
+    monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
+    monkeypatch.setattr("app.realtime.processor.register_stream", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.realtime.processor.resolve_channel_name", lambda *args, **kwargs: "VBAT")
+    processor = RealtimeProcessor()
+    db = MagicMock()
+    added: list[object] = []
+
+    class _ScalarResult:
+        def __init__(self, row):
+            self._row = row
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._row
+
+    meta = TelemetryMetadata(
+        id=uuid4(),
+        source_id="source-a",
+        name="VBAT",
+        units="V",
+        description="Main bus voltage",
+        subsystem_tag="power",
+        channel_origin="catalog",
+    )
+    def fake_execute(statement, *args, **kwargs):
+        if "telemetry_metadata" in str(statement):
+            return _ScalarResult(meta)
+        return _ScalarResult(None)
+
+    db.execute.side_effect = fake_execute
+    db.get.return_value = None
+    db.add.side_effect = added.append
+    monkeypatch.setattr(processor, "_broadcast_telemetry_update", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(processor, "_maybe_submit_orbit_sample", lambda *args, **kwargs: None)
+
+    for sequence, value in [(7, 28.1), (19, 28.4)]:
+        processor._process_measurement(
+            db,
+            MeasurementEvent(
+                source_id="source-a",
+                stream_id="satnogs-obs-13787109",
+                channel_name="VBAT",
+                generation_time="2026-04-11T18:14:53+00:00",
+                reception_time="2026-04-11T18:14:53+00:00",
+                value=value,
+                quality="valid",
+                sequence=sequence,
+            ),
+        )
+
+    history_rows = [item for item in added if isinstance(item, TelemetryData)]
+    assert [(row.sequence, float(row.value)) for row in history_rows] == [(7, 28.1), (19, 28.4)]
+
+
+def test_process_measurement_same_time_current_tie_breaks_by_sequence(monkeypatch) -> None:
+    monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
+    monkeypatch.setattr("app.realtime.processor.register_stream", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.realtime.processor.resolve_channel_name", lambda *args, **kwargs: "VBAT")
+    processor = RealtimeProcessor()
+    db = MagicMock()
+    updates = []
+
+    class _ScalarResult:
+        def __init__(self, row):
+            self._row = row
+
+        def scalars(self):
+            return self
+
+        def first(self):
+            return self._row
+
+    meta = TelemetryMetadata(
+        id=uuid4(),
+        source_id="source-a",
+        name="VBAT",
+        units="V",
+        description="Main bus voltage",
+        subsystem_tag="power",
+        channel_origin="catalog",
+    )
+    current = SimpleNamespace(
+        generation_time=datetime(2026, 4, 11, 18, 14, 53, tzinfo=timezone.utc),
+        reception_time=datetime(2026, 4, 11, 18, 14, 53, tzinfo=timezone.utc),
+        value=Decimal("28.1"),
+        state="normal",
+        state_reason=None,
+        z_score=None,
+        quality="valid",
+        sequence=7,
+        packet_source="OK0LSR",
+        receiver_id="satnogs-station-42",
+    )
+
+    db.execute.return_value = _ScalarResult(meta)
+    db.get.side_effect = lambda model, key: (
+        current
+        if model.__name__ == "TelemetryCurrent"
+        else None
+        if model.__name__ == "TelemetryStatistics"
+        else None
+    )
+    monkeypatch.setattr(processor, "_broadcast_telemetry_update", updates.append)
+    monkeypatch.setattr(processor, "_maybe_submit_orbit_sample", lambda *args, **kwargs: None)
+
+    processor._process_measurement(
+        db,
+        MeasurementEvent(
+            source_id="source-a",
+            stream_id="satnogs-obs-13787109",
+            channel_name="VBAT",
+            generation_time="2026-04-11T18:14:53+00:00",
+            reception_time="2026-04-11T18:14:53+00:00",
+            value=28.4,
+            quality="valid",
+            sequence=19,
+        ),
+    )
+
+    assert current.sequence == 19
+    assert current.value == Decimal("28.4")
+    assert len(updates) == 1
+
+    processor._process_measurement(
+        db,
+        MeasurementEvent(
+            source_id="source-a",
+            stream_id="satnogs-obs-13787109",
+            channel_name="VBAT",
+            generation_time="2026-04-11T18:14:53+00:00",
+            reception_time="2026-04-11T18:14:53+00:00",
+            value=27.9,
+            quality="valid",
+            sequence=18,
+        ),
+    )
+
+    assert current.sequence == 19
+    assert current.value == Decimal("28.4")
+    assert len(updates) == 1
+
+
 def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkeypatch) -> None:
     monkeypatch.setattr("app.realtime.processor.get_realtime_bus", lambda: MagicMock())
     monkeypatch.setattr(
@@ -1021,6 +1203,7 @@ def test_process_measurement_resolves_explicit_channel_alias_to_canonical(monkey
             generation_time="2026-03-26T12:00:00+00:00",
             reception_time="2026-03-26T12:00:01+00:00",
             value=28.1,
+            sequence=1,
         ),
     )
 
@@ -1080,6 +1263,7 @@ def test_process_measurement_uses_dynamic_tags_even_when_raw_channel_name_is_pre
             generation_time="2026-03-26T12:00:00+00:00",
             reception_time="2026-03-26T12:00:01+00:00",
             value=42.5,
+            sequence=1,
             tags={"decoder": "APRS", "field_name": "Payload Temp"},
         ),
     )
@@ -1151,6 +1335,7 @@ def test_process_measurement_duplicate_first_dynamic_sample_keeps_discovered_met
             generation_time="2026-03-26T12:00:00+00:00",
             reception_time="2026-03-26T12:00:01+00:00",
             value=42.5,
+            sequence=1,
             tags={"decoder": "APRS", "field_name": "Payload Temp"},
         ),
     )

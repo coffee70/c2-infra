@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
+
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -76,6 +78,7 @@ class VehicleConfig(BaseModel):
     norad_id: int
     allowed_source_callsigns: list[str] = Field(default_factory=lambda: ["OK0LSR"])
     vehicle_config_path: str = "vehicles/lasarsat.yaml"
+    monitoring_start_time: datetime | None = None
     stable_field_mappings: dict[str, str] = Field(default_factory=dict)
     decoder: DecoderConfig = Field(default_factory=DecoderConfig)
 

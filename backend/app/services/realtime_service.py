@@ -288,6 +288,7 @@ def _merge_same_source_metadata(
               source_id,
               telemetry_id,
               timestamp,
+              sequence,
               value,
               packet_source,
               receiver_id
@@ -296,6 +297,7 @@ def _merge_same_source_metadata(
               td.source_id,
               :new_id,
               td.timestamp,
+              td.sequence,
               td.value,
               td.packet_source,
               td.receiver_id
@@ -305,7 +307,7 @@ def _merge_same_source_metadata(
               OR td.source_id IN (SELECT stream_id FROM tmp_same_source_stream_scope)
             )
               AND td.telemetry_id = :old_id
-            ON CONFLICT (source_id, telemetry_id, timestamp) DO NOTHING
+            ON CONFLICT (source_id, telemetry_id, timestamp, sequence) DO NOTHING
             """
         ),
         params,
@@ -755,7 +757,7 @@ def get_realtime_snapshot_for_channels(
                 TelemetryData.telemetry_id == meta.id,
                 TelemetryData.stream_id == data_source_id,
             )
-            .order_by(desc(TelemetryData.timestamp))
+            .order_by(desc(TelemetryData.timestamp), desc(TelemetryData.sequence))
             .limit(SPARKLINE_POINTS)
         )
         spark_rows = db.execute(spark_stmt).fetchall()
@@ -1052,6 +1054,12 @@ def register_source_if_missing(
     resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
     existing = get_source_by_vehicle_config_path(db, resolved_vehicle_config_path)
     if existing is not None:
+        if monitoring_start_time is not None and existing.last_reconciled_at is None:
+            existing.monitoring_start_time = _coerce_aware_utc(monitoring_start_time) or monitoring_start_time
+            if existing.backfill_state != "running":
+                existing.backfill_state = _default_backfill_state(existing.history_mode)
+            db.commit()
+            db.refresh(existing)
         return _source_to_dict(existing), False
     try:
         create_kwargs = {
@@ -1123,7 +1131,13 @@ def update_backfill_progress(
     now = _now_utc()
     if status == "started":
         if src.backfill_state == "running":
-            raise ValueError("Backfill is already running for source")
+            audit_log(
+                "sources.backfill_superseded",
+                level="warning",
+                source_id=source_id,
+                old_target_time=src.active_backfill_target_time,
+                new_target_time=target,
+            )
         src.active_backfill_target_time = target
         src.backfill_state = "running"
         src.last_backfill_started_at = now

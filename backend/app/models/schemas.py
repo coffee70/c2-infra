@@ -293,7 +293,7 @@ class MeasurementEvent(BaseModel):
     reception_time: Optional[str] = None  # RFC3339; server assigns if omitted
     value: float
     quality: str = "valid"  # valid | suspect | invalid
-    sequence: Optional[int] = None
+    sequence: Optional[int] = None  # Required by realtime ingest; persisted as historical sample identity.
     packet_source: Optional[str] = None
     receiver_id: Optional[str] = None
     tags: Optional[dict[str, Any]] = None
@@ -539,6 +539,7 @@ class SourceResolveRequest(BaseModel):
     name: str
     description: Optional[str] = None
     vehicle_config_path: str
+    monitoring_start_time: Optional[datetime] = None
 
 
 class SourceResolveResponse(BaseModel):

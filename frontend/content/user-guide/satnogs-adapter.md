@@ -13,13 +13,14 @@ Edit `satnogs_adapter/config.example.yaml` or provide your own config file.
 - Keep `platform.backfill_progress_url` and `platform.live_state_url` pointed at the matching source state endpoints.
 - Keep `vehicle.vehicle_config_path` pointed at `vehicles/lasarsat.yaml` for the example pair.
 - Set `vehicle.norad_id` to the satellite NORAD ID.
+- Set `vehicle.monitoring_start_time` to the earliest observation time that should be eligible for first-run backfill.
 - Set `vehicle.decoder.strategy` to the payload decoder strategy. Use `aprs` for APRS payloads such as ISS, or `kaitai` plus `vehicle.decoder.decoder_id: "lasarsat"` for LASARSAT.
 - Set `satnogs.transmitter_uuid` to the SatNOGS transmitter UUID.
 - Set `satnogs.status` to the observation status to ingest, normally `good`.
 - Set `satnogs.upcoming_status` to the provider status used for future scheduled observations, normally `future`.
 - Set `SATNOGS_API_TOKEN` if your SatNOGS deployment requires authenticated observation access.
 
-The adapter resolves the canonical backend `source_id` from `vehicle.vehicle_config_path` during startup. Adapter configs do not carry a durable source ID, checkpoint path, or backfill window; those decisions live in the platform source record.
+The adapter resolves the canonical backend `source_id` from `vehicle.vehicle_config_path` during startup. Adapter configs do not carry a durable source ID or checkpoint path; after first resolution, ongoing backfill progress lives in the platform source record.
 
 ## 2. Start the service
 
@@ -38,6 +39,7 @@ The backend auto-registers known vehicle configs during startup. If the LASARSAT
 - Only packets from the configured source callsign are accepted. Relay or digipeated traffic is dropped immediately after AX.25 decode.
 - Stable fields defined in the configured vehicle file emit catalog-backed `channel_name` values.
 - Other numeric decoded fields emit as discovered channels with `tags.decoder`, `tags.decoder_strategy`, `tags.field_name`, and `tags.packet_name`.
+- Each emitted telemetry sample carries an increasing observation-stream sequence, so repeated same-channel packets in one observation remain distinct in history even when SatNOGS only provides one observation-level timestamp.
 - LASARSAT remains discovered-only in this rollout. Upstream field names such as `psu_battery`, `uhf_trx_temp`, and `dos_mode` pass through unchanged and become backend-derived discovered channel names under the decoder namespace.
 - The adapter uses `receiver_id = satnogs-station-{ground_station_id}`. Observations without a ground station id are skipped.
 - Backend ingest payloads and tags do not include the transmitter UUID.
@@ -45,8 +47,10 @@ The backend auto-registers known vehicle configs during startup. If the LASARSAT
 ## 4. Backfill and replay
 
 - The platform stores `monitoring_start_time`, `last_reconciled_at`, `history_mode`, `live_state`, and `backfill_state` for each source.
-- When background backfill starts, the adapter captures one target time, computes the backlog from `last_reconciled_at` or `monitoring_start_time`, splits that backlog by `chunk_size_hours`, and reports progress after each chunk.
-- Live polling and backfill can run at the same time. SatNOGS HTTP requests go through one shared coordinator so rate-limit and retry-after handling apply globally.
+- When the adapter starts, it captures one startup cutoff. Backfill reconciles from `last_reconciled_at` or `monitoring_start_time` up to that cutoff, while live polling handles observations whose end time is after the cutoff.
+- Live polling and backfill run at the same time. SatNOGS HTTP requests go through one shared coordinator so rate-limit and retry-after handling apply globally.
+- Backfill splits work by `chunk_size_hours`, validates each returned observation against the active chunk, skips observations with malformed timestamps, and reports progress only after the whole chunk succeeds.
+- If the adapter restarts during backfill, the new process supersedes the stale running target and continues from the platform checkpoint with a new startup cutoff.
 - Use adapter `--mode replay-dlq` to retry batch DLQ entries after fixing an ingest or mapping issue.
 
 DLQ files are written under `tmp/satnogs-adapter/` by default. The adapter does not write local checkpoint state.

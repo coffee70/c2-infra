@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from datetime import datetime, timezone
 
 from satnogs_adapter.config import AdapterConfig, load_config
 from satnogs_adapter.connectors import SatnogsNetworkConnector
@@ -41,7 +42,8 @@ def resolve_runtime_source(config: AdapterConfig) -> ResolvedSource:
     return source
 
 
-def build_runner(config_path: str) -> AdapterRunner:
+def build_runner(config_path: str, *, startup_cutoff_time: datetime | None = None) -> AdapterRunner:
+    startup_cutoff_time = startup_cutoff_time or datetime.now(timezone.utc)
     config = load_config(config_path)
     payload_decode_service = PayloadDecodeService(
         decoder_config=config.vehicle.decoder,
@@ -49,6 +51,12 @@ def build_runner(config_path: str) -> AdapterRunner:
     )
     payload_decode_service.validate_configuration()
     source = resolve_runtime_source(config)
+    logger.info(
+        "SatNOGS adapter startup cutoff established: monitoring_start_time=%s last_reconciled_at=%s startup_cutoff_time=%s",
+        source.monitoring_start_time.isoformat(),
+        source.last_reconciled_at.isoformat() if source.last_reconciled_at else None,
+        startup_cutoff_time.isoformat(),
+    )
     dlq = FilesystemDlq(config.dlq.root_dir)
     coordinator = SatnogsRequestCoordinator()
     network_connector = SatnogsNetworkConnector(
@@ -86,6 +94,7 @@ def build_runner(config_path: str) -> AdapterRunner:
         dlq=dlq,
         payload_decode_service=payload_decode_service,
         source_contract=source,
+        startup_cutoff_time=startup_cutoff_time,
     )
 
 
@@ -97,7 +106,8 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    runner = build_runner(args.config)
+    startup_cutoff_time = datetime.now(timezone.utc)
+    runner = build_runner(args.config, startup_cutoff_time=startup_cutoff_time)
 
     if args.mode == "live":
         runner.run_forever()

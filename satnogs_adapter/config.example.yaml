@@ -9,6 +9,7 @@ vehicle:
   slug: "lasarsat"
   name: "LASARSAT"
   norad_id: 62391
+  monitoring_start_time: "2026-04-10T00:00:00Z"
   allowed_source_callsigns:
     - "OK0LSR"
   vehicle_config_path: "vehicles/lasarsat.yaml"

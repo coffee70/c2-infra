@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -96,6 +96,30 @@ def _payload_decode_service(config) -> PayloadDecodeService:
     service = PayloadDecodeService(decoder_config=config.vehicle.decoder, registry=DecoderRegistry())
     service.validate_configuration()
     return service
+
+
+def _resolved_source(
+    *,
+    source_id: str = "source-uuid",
+    monitoring_start_time: datetime | None = None,
+    last_reconciled_at: datetime | None = None,
+    history_mode: str = "live_only",
+    chunk_size_hours: int = 6,
+) -> ResolvedSource:
+    start = monitoring_start_time or datetime(2026, 3, 31, tzinfo=timezone.utc)
+    return ResolvedSource(
+        id=source_id,
+        name="source",
+        source_type="vehicle",
+        vehicle_config_path="vehicles/lasarsat.yaml",
+        created=False,
+        monitoring_start_time=start,
+        last_reconciled_at=last_reconciled_at,
+        history_mode=history_mode,
+        live_state="idle",
+        backfill_state="idle",
+        chunk_size_hours=chunk_size_hours,
+    )
 
 
 def _build_lasarsat_psu_payload() -> bytes:
@@ -271,6 +295,88 @@ def test_extract_frames_collects_invalid_hex_without_aborting() -> None:
     assert len(frames) == 1
     assert frames[0].frame_bytes == b"ABC"
     assert invalid_lines[0]["frame_index"] == 1
+
+
+def test_extract_frames_prefers_explicit_timestamp_over_artifact_name() -> None:
+    class FakeClient:
+        def get(self, url, params=None, headers=None):
+            class Response:
+                content = b"414243\n"
+
+                def raise_for_status(self):
+                    return None
+
+            return Response()
+
+    config = load_config("satnogs_adapter/config.example.yaml")
+    connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id, client=FakeClient())
+    observation = ObservationRecord(
+        observation_id="123",
+        satellite_norad_cat_id=62391,
+        start_time="2026-04-01T00:00:00Z",
+        end_time="2026-04-01T00:01:00Z",
+        ground_station_id="42",
+        demoddata=[
+            {
+                "payload_demod": "/media/data/2026-04-01T00-00-30Z-demod.txt",
+                "timestamp": "2026-04-01T00:00:45Z",
+            }
+        ],
+    )
+
+    frames, invalid_lines = connector.extract_frames(observation)
+
+    assert invalid_lines == []
+    assert len(frames) == 1
+    assert frames[0].reception_time == "2026-04-01T00:00:45Z"
+
+
+def test_extract_frames_uses_payload_demod_filename_timestamp() -> None:
+    class FakeClient:
+        def get(self, url, params=None, headers=None):
+            class Response:
+                content = b"414243\n"
+
+                def raise_for_status(self):
+                    return None
+
+            return Response()
+
+    config = load_config("satnogs_adapter/config.example.yaml")
+    connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id, client=FakeClient())
+    observation = ObservationRecord(
+        observation_id="123",
+        satellite_norad_cat_id=62391,
+        start_time="2026-04-01T00:00:00Z",
+        end_time="2026-04-01T00:01:00Z",
+        ground_station_id="42",
+        demoddata=[{"payload_demod": "/media/data/2026-04-01T00-00-30Z-demod.txt"}],
+    )
+
+    frames, invalid_lines = connector.extract_frames(observation)
+
+    assert invalid_lines == []
+    assert len(frames) == 1
+    assert frames[0].reception_time == "2026-04-01T00:00:30Z"
+
+
+def test_extract_frames_falls_back_to_observation_end_time() -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id)
+    observation = ObservationRecord(
+        observation_id="123",
+        satellite_norad_cat_id=62391,
+        start_time="2026-04-01T00:00:00Z",
+        end_time="2026-04-01T00:01:00Z",
+        ground_station_id="42",
+        demoddata="414243",
+    )
+
+    frames, invalid_lines = connector.extract_frames(observation)
+
+    assert invalid_lines == []
+    assert len(frames) == 1
+    assert frames[0].reception_time == "2026-04-01T00:01:00Z"
 
 
 def test_list_recent_observations_uses_status_filter_and_link_header() -> None:
@@ -702,7 +808,8 @@ def test_runner_full_path_aprs_regression_still_publishes(tmp_path: Path) -> Non
         checkpoint_store=None,
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
-        source_id="source-uuid",
+        source_contract=_resolved_source(),
+        startup_cutoff_time=datetime(2026, 3, 31, tzinfo=timezone.utc),
     )
 
     runner.run_live_once()
@@ -786,7 +893,8 @@ def test_runner_full_path_lasarsat_flow_reaches_publish(tmp_path: Path) -> None:
         checkpoint_store=None,
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
-        source_id="source-uuid",
+        source_contract=_resolved_source(),
+        startup_cutoff_time=datetime(2026, 3, 31, tzinfo=timezone.utc),
     )
 
     runner.run_live_once()
@@ -796,6 +904,8 @@ def test_runner_full_path_lasarsat_flow_reaches_publish(tmp_path: Path) -> None:
     assert psu_event["tags"]["decoder_strategy"] == "kaitai"
     assert psu_event["tags"]["packet_name"] == "psu"
     assert psu_event["tags"]["field_name"] == "psu_battery"
+    sequences = [event["sequence"] for event in published]
+    assert sequences == list(range(1, len(published) + 1))
 
 
 def test_runner_non_matching_frames_do_not_create_payload_dlq_noise(tmp_path: Path) -> None:
@@ -866,7 +976,8 @@ def test_runner_non_matching_frames_do_not_create_payload_dlq_noise(tmp_path: Pa
         checkpoint_store=None,
         dlq=dlq,
         payload_decode_service=_payload_decode_service(config),
-        source_id="source-uuid",
+        source_contract=_resolved_source(),
+        startup_cutoff_time=datetime(2026, 3, 31, tzinfo=timezone.utc),
     )
 
     runner.run_live_once()
@@ -928,7 +1039,8 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
         checkpoint_store=checkpoint_store,
         dlq=dlq,
         payload_decode_service=_payload_decode_service(config),
-        source_id="source-uuid",
+        source_contract=_resolved_source(),
+        startup_cutoff_time=datetime(2026, 3, 31, tzinfo=timezone.utc),
     )
 
     runner.run_live_once()
@@ -980,6 +1092,17 @@ def test_runner_uses_link_pagination_without_local_observation_dedupe(tmp_path: 
         def is_eligible_observation(self, payload):
             return False
 
+        def normalize_observation(self, payload):
+            return ObservationRecord(
+                observation_id=str(payload["id"]),
+                satellite_norad_cat_id=62391,
+                start_time="2026-04-01T00:00:00Z",
+                end_time="2026-04-01T00:01:00Z",
+                ground_station_id="42",
+                transmitter_uuid="C3RnLSSuaKzWhHrtJCqUgu",
+                raw_json=payload,
+            )
+
     class FakePublisher:
         def publish(self, events, *, context):
             raise AssertionError("publisher should not be called for ineligible observations")
@@ -991,7 +1114,8 @@ def test_runner_uses_link_pagination_without_local_observation_dedupe(tmp_path: 
         observations_publisher=FakeObservationsPublisher(),
         dlq=dlq,
         payload_decode_service=_payload_decode_service(config),
-        source_id="source-uuid",
+        source_contract=_resolved_source(),
+        startup_cutoff_time=datetime(2026, 3, 31, tzinfo=timezone.utc),
     )
 
     runner.run_live_once()
@@ -1066,7 +1190,8 @@ def test_runner_syncs_upcoming_observations_with_replacement_payload(tmp_path: P
         checkpoint_store=None,
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
-        source_id="source-uuid",
+        source_contract=_resolved_source(),
+        startup_cutoff_time=datetime(2026, 3, 31, tzinfo=timezone.utc),
     )
 
     runner.run_live_once()
@@ -1092,12 +1217,153 @@ def test_runner_syncs_upcoming_observations_with_replacement_payload(tmp_path: P
     ]
 
 
+def test_live_poll_filters_by_startup_cutoff_and_stops_pagination(tmp_path: Path) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    cutoff = datetime(2026, 4, 10, 12, tzinfo=timezone.utc)
+    calls: list[tuple[str | None, str | None, str | None]] = []
+    processed: list[str] = []
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            del now
+            calls.append((next_url, start_time, end_time))
+            if next_url is not None:
+                raise AssertionError("live pagination should stop at the cutoff")
+            return ObservationPage(
+                results=[
+                    {"id": "new", "start": "2026-04-10T12:05:00Z", "end": "2026-04-10T12:10:00Z"},
+                    {"id": "span", "start": "2026-04-10T11:55:00Z", "end": "2026-04-10T12:02:00Z"},
+                    {"id": "old", "start": "2026-04-10T11:50:00Z", "end": "2026-04-10T11:59:00Z"},
+                ],
+                next_url="https://network.satnogs.org/api/observations/?cursor=old",
+            )
+
+        def normalize_observation(self, payload):
+            return ObservationRecord(
+                observation_id=str(payload["id"]),
+                satellite_norad_cat_id=62391,
+                start_time=payload.get("start"),
+                end_time=payload.get("end"),
+                ground_station_id="42",
+                transmitter_uuid="C3RnLSSuaKzWhHrtJCqUgu",
+                raw_json=payload,
+            )
+
+        def list_upcoming_observations(self):
+            return ObservationPage(results=[])
+
+    class FakePublisher:
+        def publish(self, events, *, context):
+            raise AssertionError("publisher should not be called")
+
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=FakePublisher(),
+        observations_publisher=FakeObservationsPublisher(),
+        dlq=FilesystemDlq(config.dlq.root_dir),
+        payload_decode_service=_payload_decode_service(config),
+        source_contract=_resolved_source(),
+        startup_cutoff_time=cutoff,
+    )
+    runner._process_observation_payload = lambda raw, *, connector=None: processed.append(str(raw["id"]))
+
+    runner.run_live_once()
+
+    assert calls == [(None, None, None)]
+    assert processed == ["new", "span"]
+
+
+def test_backfill_filters_chunk_window_and_skips_bad_timestamps(tmp_path: Path) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    start = datetime(2026, 4, 10, 10, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 4, 10, 11, tzinfo=timezone.utc)
+    progress: list[dict[str, object]] = []
+    processed: list[str] = []
+    calls: list[tuple[str | None, str | None, str | None]] = []
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            del now
+            calls.append((next_url, start_time, end_time))
+            if next_url is None:
+                return ObservationPage(
+                    results=[
+                        {"id": "inside", "start": "2026-04-10T10:10:00Z", "end": "2026-04-10T10:20:00Z"},
+                        {"id": "bad", "start": "not-a-date", "end": "2026-04-10T10:25:00Z"},
+                    ],
+                    next_url="https://network.satnogs.org/api/observations/?cursor=next",
+                )
+            return ObservationPage(
+                results=[
+                    {"id": "outside", "start": "2026-04-10T10:50:00Z", "end": "2026-04-10T11:01:00Z"},
+                    {"id": "inside-next", "start": "2026-04-10T10:30:00Z", "end": "2026-04-10T10:40:00Z"},
+                ]
+            )
+
+        def normalize_observation(self, payload):
+            return ObservationRecord(
+                observation_id=str(payload["id"]),
+                satellite_norad_cat_id=62391,
+                start_time=payload.get("start"),
+                end_time=payload.get("end"),
+                ground_station_id="42",
+                transmitter_uuid="C3RnLSSuaKzWhHrtJCqUgu",
+                raw_json=payload,
+            )
+
+    class FakeStatePublisher:
+        def publish_backfill_progress(self, payload):
+            progress.append(payload)
+
+            class Result:
+                success = True
+                status_code = 200
+                response_body = ""
+
+            return Result()
+
+    class FakePublisher:
+        def publish(self, events, *, context):
+            raise AssertionError("publisher should not be called")
+
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=FakePublisher(),
+        observations_publisher=FakeObservationsPublisher(),
+        state_publisher=FakeStatePublisher(),
+        dlq=FilesystemDlq(config.dlq.root_dir),
+        payload_decode_service=_payload_decode_service(config),
+        source_contract=_resolved_source(
+            monitoring_start_time=start,
+            last_reconciled_at=start,
+            history_mode="time_window_replay",
+        ),
+        startup_cutoff_time=cutoff,
+    )
+    runner._process_observation_payload = lambda raw, *, connector=None: processed.append(str(raw["id"]))
+
+    runner.run_backfill_snapshot()
+
+    assert calls == [
+        (None, start.isoformat(), cutoff.isoformat()),
+        ("https://network.satnogs.org/api/observations/?cursor=next", None, None),
+    ]
+    assert processed == ["inside", "inside-next"]
+    assert [item["status"] for item in progress] == ["started", "completed"]
+    assert progress[-1]["chunk_end"] == cutoff.isoformat()
+
+
 def test_backfill_snapshot_uses_platform_chunk_bounds(tmp_path: Path) -> None:
     config = load_config("satnogs_adapter/config.example.yaml")
     config.dlq.root_dir = str(tmp_path / "dlq")
     seen: list[tuple[str | None, str | None, str | None]] = []
     progress: list[dict[str, object]] = []
-    start = datetime.now(timezone.utc) - timedelta(hours=1)
+    start = datetime(2026, 4, 10, 10, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 4, 10, 11, tzinfo=timezone.utc)
 
     class FakeNetworkConnector:
         def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
@@ -1129,19 +1395,12 @@ def test_backfill_snapshot_uses_platform_chunk_bounds(tmp_path: Path) -> None:
         state_publisher=FakeStatePublisher(),
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
-        source_contract=ResolvedSource(
-            id="source-uuid",
-            name="source",
-            source_type="vehicle",
-            vehicle_config_path="vehicles/lasarsat.yaml",
-            created=False,
+        source_contract=_resolved_source(
             monitoring_start_time=start,
             last_reconciled_at=start,
             history_mode="time_window_replay",
-            live_state="idle",
-            backfill_state="idle",
-            chunk_size_hours=6,
         ),
+        startup_cutoff_time=cutoff,
     )
 
     runner.run_backfill_snapshot()
@@ -1149,9 +1408,58 @@ def test_backfill_snapshot_uses_platform_chunk_bounds(tmp_path: Path) -> None:
     assert len(seen) == 1
     assert seen[0][0] is None
     assert seen[0][1] == start.isoformat()
+    assert seen[0][2] == cutoff.isoformat()
     assert progress[0]["status"] == "started"
     assert progress[-1]["status"] == "completed"
     assert progress[-1]["backlog_drained"] is True
+
+
+def test_backfill_snapshot_never_starts_before_monitoring_start(tmp_path: Path) -> None:
+    config = load_config("satnogs_adapter/config.example.yaml")
+    config.dlq.root_dir = str(tmp_path / "dlq")
+    seen: list[tuple[str | None, str | None]] = []
+    monitoring_start = datetime(2026, 4, 10, 10, tzinfo=timezone.utc)
+    stale_checkpoint = datetime(2026, 4, 9, 10, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 4, 10, 11, tzinfo=timezone.utc)
+
+    class FakeNetworkConnector:
+        def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
+            del next_url, now
+            seen.append((start_time, end_time))
+            return ObservationPage(results=[], next_url=None)
+
+    class FakeStatePublisher:
+        def publish_backfill_progress(self, payload):
+            class Result:
+                success = True
+                status_code = 200
+                response_body = ""
+
+            return Result()
+
+    class FakePublisher:
+        def publish(self, events, *, context):
+            raise AssertionError("publisher should not be called")
+
+    runner = AdapterRunner(
+        config,
+        network_connector=FakeNetworkConnector(),
+        publisher=FakePublisher(),
+        observations_publisher=FakeObservationsPublisher(),
+        state_publisher=FakeStatePublisher(),
+        dlq=FilesystemDlq(config.dlq.root_dir),
+        payload_decode_service=_payload_decode_service(config),
+        source_contract=_resolved_source(
+            monitoring_start_time=monitoring_start,
+            last_reconciled_at=stale_checkpoint,
+            history_mode="time_window_replay",
+        ),
+        startup_cutoff_time=cutoff,
+    )
+
+    runner.run_backfill_snapshot()
+
+    assert seen == [(monitoring_start.isoformat(), cutoff.isoformat())]
 
 
 def test_backfill_snapshot_retries_same_chunk_after_satnogs_rate_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1160,7 +1468,8 @@ def test_backfill_snapshot_retries_same_chunk_after_satnogs_rate_limit(tmp_path:
     seen: list[tuple[str | None, str | None]] = []
     progress: list[dict[str, object]] = []
     sleeps: list[int] = []
-    start = datetime.now(timezone.utc) - timedelta(hours=1)
+    start = datetime(2026, 4, 10, 10, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 4, 10, 11, tzinfo=timezone.utc)
 
     class FakeNetworkConnector:
         def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
@@ -1194,19 +1503,12 @@ def test_backfill_snapshot_retries_same_chunk_after_satnogs_rate_limit(tmp_path:
         state_publisher=FakeStatePublisher(),
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
-        source_contract=ResolvedSource(
-            id="source-uuid",
-            name="source",
-            source_type="vehicle",
-            vehicle_config_path="vehicles/lasarsat.yaml",
-            created=False,
+        source_contract=_resolved_source(
             monitoring_start_time=start,
             last_reconciled_at=start,
             history_mode="time_window_replay",
-            live_state="idle",
-            backfill_state="idle",
-            chunk_size_hours=6,
         ),
+        startup_cutoff_time=cutoff,
     )
 
     runner.run_backfill_snapshot()
@@ -1221,7 +1523,8 @@ def test_backfill_snapshot_reports_failed_without_completion_on_non_rate_limit_e
     config = load_config("satnogs_adapter/config.example.yaml")
     config.dlq.root_dir = str(tmp_path / "dlq")
     progress: list[dict[str, object]] = []
-    start = datetime.now(timezone.utc) - timedelta(hours=1)
+    start = datetime(2026, 4, 10, 10, tzinfo=timezone.utc)
+    cutoff = datetime(2026, 4, 10, 11, tzinfo=timezone.utc)
 
     class FakeNetworkConnector:
         def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
@@ -1251,19 +1554,12 @@ def test_backfill_snapshot_reports_failed_without_completion_on_non_rate_limit_e
         state_publisher=FakeStatePublisher(),
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
-        source_contract=ResolvedSource(
-            id="source-uuid",
-            name="source",
-            source_type="vehicle",
-            vehicle_config_path="vehicles/lasarsat.yaml",
-            created=False,
+        source_contract=_resolved_source(
             monitoring_start_time=start,
             last_reconciled_at=start,
             history_mode="time_window_replay",
-            live_state="idle",
-            backfill_state="idle",
-            chunk_size_hours=6,
         ),
+        startup_cutoff_time=cutoff,
     )
 
     with pytest.raises(RuntimeError, match="satnogs exploded"):
@@ -1413,6 +1709,7 @@ def test_source_resolver_posts_vehicle_request_and_parses_response() -> None:
         "name": "LASARSAT",
         "description": "Auto-resolved from vehicle configuration: vehicles/lasarsat.yaml",
         "vehicle_config_path": "vehicles/lasarsat.yaml",
+        "monitoring_start_time": "2026-04-11T18:00:00+00:00",
     }
 
 

@@ -47,6 +47,15 @@ def _compat_source_contract(source_id: str) -> ResolvedSource:
     )
 
 
+def _parse_observation_datetime(value: str | None) -> datetime:
+    if not value:
+        raise ValueError("observation timestamp is missing")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 class AdapterRunner:
     def __init__(
         self,
@@ -62,6 +71,7 @@ class AdapterRunner:
         source_contract: ResolvedSource | None = None,
         source_id: str | None = None,
         checkpoint_store: object | None = None,
+        startup_cutoff_time: datetime | None = None,
     ) -> None:
         self.config = config
         self.network_connector = network_connector
@@ -79,6 +89,7 @@ class AdapterRunner:
                 raise ValueError("AdapterRunner requires a resolved source contract")
             source_contract = _compat_source_contract(source_id)
         self.source_contract = source_contract
+        self.startup_cutoff_time = startup_cutoff_time or datetime.now(timezone.utc)
         resolved_source_id = source_contract.id
         self.mapper = TelemetryMapper(
             source_id=resolved_source_id,
@@ -187,8 +198,11 @@ class AdapterRunner:
     def run_backfill_snapshot(self) -> None:
         if self.source_contract.history_mode == "live_only":
             return
-        start = self.source_contract.last_reconciled_at or self.source_contract.monitoring_start_time
-        target_time = datetime.now(timezone.utc)
+        start = max(
+            self.source_contract.last_reconciled_at or self.source_contract.monitoring_start_time,
+            self.source_contract.monitoring_start_time,
+        )
+        target_time = self.startup_cutoff_time
         if start >= target_time:
             self.state_publisher.publish_backfill_progress(
                 {
@@ -222,6 +236,9 @@ class AdapterRunner:
                 self._run_observation_pages(
                     start_time=cursor.isoformat(),
                     end_time=chunk_end.isoformat(),
+                    mode="backfill",
+                    chunk_start=cursor,
+                    chunk_end=chunk_end,
                     connector=self.backfill_network_connector,
                     suppress_rate_limit=False,
                 )
@@ -269,6 +286,9 @@ class AdapterRunner:
         *,
         start_time: str | None = None,
         end_time: str | None = None,
+        mode: str = "live",
+        chunk_start: datetime | None = None,
+        chunk_end: datetime | None = None,
         max_observations: int | None = None,
         connector: SatnogsNetworkConnector | None = None,
         suppress_rate_limit: bool = True,
@@ -277,6 +297,7 @@ class AdapterRunner:
         next_url: str | None = None
         observations_seen = 0
         while True:
+            page_type = "next" if next_url else "first"
             try:
                 observation_page = active_connector.list_recent_observations(
                     next_url=next_url,
@@ -290,21 +311,86 @@ class AdapterRunner:
                 return
             results = observation_page.results
             if not results:
-                logger.info("SatNOGS observation poll returned no results")
+                logger.info("SatNOGS observation poll returned no results: mode=%s page_type=%s", mode, page_type)
                 return
             logger.info(
-                "SatNOGS observation poll returned page: count=%s has_next=%s",
+                "SatNOGS observation poll returned page: mode=%s page_type=%s count=%s has_next=%s chunk_start=%s chunk_end=%s startup_cutoff_time=%s",
+                mode,
+                page_type,
                 len(results),
                 bool(observation_page.next_url),
+                chunk_start.isoformat() if chunk_start else None,
+                chunk_end.isoformat() if chunk_end else None,
+                self.startup_cutoff_time.isoformat(),
             )
+            stop_after_page = False
             for raw_observation in results:
                 if max_observations is not None and observations_seen >= max_observations:
                     return
                 observations_seen += 1
+                eligibility = self._observation_time_eligibility(
+                    raw_observation,
+                    mode=mode,
+                    connector=active_connector,
+                    chunk_start=chunk_start,
+                    chunk_end=chunk_end,
+                )
+                if not eligibility["eligible"]:
+                    logger.info(
+                        "Skipping SatNOGS observation outside temporal responsibility: mode=%s observation_id=%s reason=%s",
+                        mode,
+                        raw_observation.get("id"),
+                        eligibility["reason"],
+                    )
+                    if eligibility["stop_pagination"]:
+                        stop_after_page = True
+                        break
+                    continue
                 self._process_observation_payload(raw_observation, connector=active_connector)
+                if eligibility["stop_pagination"]:
+                    stop_after_page = True
+                    break
+            if stop_after_page:
+                logger.info("Stopping SatNOGS pagination at startup cutoff: mode=%s", mode)
+                return
             if not observation_page.next_url:
                 return
             next_url = observation_page.next_url
+
+    def _observation_time_eligibility(
+        self,
+        raw_observation: dict[str, object],
+        *,
+        mode: str,
+        connector: SatnogsNetworkConnector,
+        chunk_start: datetime | None,
+        chunk_end: datetime | None,
+    ) -> dict[str, object]:
+        observation_id = raw_observation.get("id")
+        try:
+            observation = connector.normalize_observation(raw_observation)
+            start = _parse_observation_datetime(observation.start_time)
+            end = _parse_observation_datetime(observation.end_time)
+        except (KeyError, TypeError, ValueError) as exc:
+            logger.warning(
+                "Skipping SatNOGS observation with invalid timestamps: mode=%s observation_id=%s error=%s",
+                mode,
+                observation_id,
+                exc,
+            )
+            return {"eligible": False, "stop_pagination": False, "reason": "invalid_timestamps"}
+
+        if mode == "backfill":
+            if chunk_start is None or chunk_end is None:
+                raise ValueError("backfill observation filtering requires chunk_start and chunk_end")
+            if start < chunk_start or end > chunk_end:
+                return {"eligible": False, "stop_pagination": False, "reason": "outside_backfill_chunk"}
+            return {"eligible": True, "stop_pagination": False, "reason": None}
+
+        stop_pagination = start < self.startup_cutoff_time
+        if end <= self.startup_cutoff_time:
+            return {"eligible": False, "stop_pagination": stop_pagination, "reason": "before_live_cutoff"}
+        return {"eligible": True, "stop_pagination": stop_pagination, "reason": None}
 
     def replay_batch_dlq(self, *, max_age_seconds: int | None = None) -> int:
         replayed = 0

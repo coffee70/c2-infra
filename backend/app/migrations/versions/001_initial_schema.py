@@ -130,6 +130,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("timestamp", sa.DateTime(timezone=True), primary_key=True, nullable=False),
+        sa.Column("sequence", sa.Integer(), primary_key=True, nullable=False),
         sa.Column("value", sa.Numeric(20, 10), nullable=False),
         sa.Column("packet_source", sa.Text(), nullable=True),
         sa.Column("receiver_id", sa.Text(), nullable=True),
@@ -137,7 +138,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_telemetry_data_source_telemetry_timestamp",
         "telemetry_data",
-        ["source_id", "telemetry_id", "timestamp"],
+        ["source_id", "telemetry_id", "timestamp", "sequence"],
     )
     op.execute(
         sa.text(
