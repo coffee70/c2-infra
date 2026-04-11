@@ -5,20 +5,46 @@ from __future__ import annotations
 import binascii
 import json
 import logging
+import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import AdapterConfig
 from satnogs_adapter.connectors import SatnogsNetworkConnector, SatnogsRateLimitError
-from satnogs_adapter.decoders import DecoderRegistry, PayloadDecodeError, PayloadDecodeService, parse_ax25_frame
+from satnogs_adapter.decoders import PayloadDecodeError, PayloadDecodeService, parse_ax25_frame
 from satnogs_adapter.dlq import FilesystemDlq
 from satnogs_adapter.mapper import TelemetryMapper
 from satnogs_adapter.models import FrameRecord, ObservationRecord, TelemetryEvent
-from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher
+from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher, SourceStatePublisher
+from satnogs_adapter.source_resolver import ResolvedSource
 
 logger = logging.getLogger(__name__)
+
+
+class _NoopSourceStatePublisher:
+    def publish_live_state(self, _state: str, *, error: str | None = None):
+        return type("Result", (), {"success": True, "status_code": 200, "response_body": ""})()
+
+    def publish_backfill_progress(self, _payload: dict[str, Any]):
+        return type("Result", (), {"success": True, "status_code": 200, "response_body": ""})()
+
+
+def _compat_source_contract(source_id: str) -> ResolvedSource:
+    now = datetime.now(timezone.utc)
+    return ResolvedSource(
+        id=source_id,
+        name=source_id,
+        source_type="vehicle",
+        vehicle_config_path="vehicles/iss.yaml",
+        created=False,
+        monitoring_start_time=now,
+        last_reconciled_at=now,
+        history_mode="live_only",
+        live_state="idle",
+        backfill_state="complete",
+        chunk_size_hours=6,
+    )
 
 
 class AdapterRunner:
@@ -27,24 +53,33 @@ class AdapterRunner:
         config: AdapterConfig,
         *,
         network_connector: SatnogsNetworkConnector,
+        backfill_network_connector: SatnogsNetworkConnector | None = None,
         publisher: IngestPublisher,
         observations_publisher: ObservationsPublisher,
-        checkpoint_store: FileCheckpointStore,
-        dlq: FilesystemDlq,
-        payload_decode_service: PayloadDecodeService,
+        state_publisher: SourceStatePublisher | None = None,
+        dlq: FilesystemDlq | None = None,
+        payload_decode_service: PayloadDecodeService | None = None,
+        source_contract: ResolvedSource | None = None,
         source_id: str | None = None,
+        checkpoint_store: object | None = None,
     ) -> None:
         self.config = config
         self.network_connector = network_connector
+        self.backfill_network_connector = backfill_network_connector or network_connector
         self.publisher = publisher
         self.observations_publisher = observations_publisher
-        self.checkpoint_store = checkpoint_store
+        self.state_publisher = state_publisher or _NoopSourceStatePublisher()
+        if dlq is None or payload_decode_service is None:
+            raise ValueError("AdapterRunner requires dlq and payload_decode_service")
         self.dlq = dlq
         self.payload_decode_service = payload_decode_service
         self._last_observation_sync_monotonic: float | None = None
-        resolved_source_id = source_id or config.platform.source_id
-        if not resolved_source_id:
-            raise ValueError("AdapterRunner requires a resolved source_id")
+        if source_contract is None:
+            if not source_id:
+                raise ValueError("AdapterRunner requires a resolved source contract")
+            source_contract = _compat_source_contract(source_id)
+        self.source_contract = source_contract
+        resolved_source_id = source_contract.id
         self.mapper = TelemetryMapper(
             source_id=resolved_source_id,
             stable_field_mappings=config.resolve_stable_field_mappings(),
@@ -53,6 +88,8 @@ class AdapterRunner:
         )
 
     def run_forever(self) -> None:
+        self.start_background_backfill()
+        self.state_publisher.publish_live_state("active")
         while True:
             try:
                 self.run_live_once()
@@ -63,6 +100,13 @@ class AdapterRunner:
     def run_live_once(self) -> None:
         self._sync_upcoming_observations_if_due()
         self._run_observation_pages()
+
+    def start_background_backfill(self) -> threading.Thread | None:
+        if self.source_contract.history_mode == "live_only":
+            return None
+        thread = threading.Thread(target=self.run_backfill_snapshot, name="satnogs-backfill", daemon=True)
+        thread.start()
+        return thread
 
     def _sync_upcoming_observations_if_due(self) -> None:
         now_monotonic = time.monotonic()
@@ -140,14 +184,75 @@ class AdapterRunner:
                 pass
         return payload
 
-    def run_backfill_once(self) -> None:
-        if not self.config.backfill.enabled:
+    def run_backfill_snapshot(self) -> None:
+        if self.source_contract.history_mode == "live_only":
             return
-        self._run_observation_pages(
-            start_time=self.config.backfill.start_time,
-            end_time=self.config.backfill.end_time,
-            max_observations=self.config.backfill.max_observations_per_run,
+        start = self.source_contract.last_reconciled_at or self.source_contract.monitoring_start_time
+        target_time = datetime.now(timezone.utc)
+        if start >= target_time:
+            self.state_publisher.publish_backfill_progress(
+                {
+                    "status": "started",
+                    "target_time": target_time.isoformat(),
+                }
+            )
+            self.state_publisher.publish_backfill_progress(
+                {
+                    "status": "completed",
+                    "target_time": target_time.isoformat(),
+                    "chunk_start": start.isoformat(),
+                    "chunk_end": start.isoformat(),
+                    "backlog_drained": True,
+                }
+            )
+            return
+
+        started = self.state_publisher.publish_backfill_progress(
+            {"status": "started", "target_time": target_time.isoformat()}
         )
+        if not started.success:
+            logger.warning("Failed to start SatNOGS backfill: status=%s body=%s", started.status_code, started.response_body)
+            return
+
+        cursor = start
+        chunk_size = timedelta(hours=self.source_contract.chunk_size_hours)
+        while cursor < target_time:
+            chunk_end = min(target_time, cursor + chunk_size)
+            try:
+                self._run_observation_pages(
+                    start_time=cursor.isoformat(),
+                    end_time=chunk_end.isoformat(),
+                    connector=self.backfill_network_connector,
+                )
+            except Exception as exc:
+                self.state_publisher.publish_backfill_progress(
+                    {
+                        "status": "failed",
+                        "target_time": target_time.isoformat(),
+                        "chunk_start": cursor.isoformat(),
+                        "chunk_end": chunk_end.isoformat(),
+                        "error": repr(exc),
+                    }
+                )
+                raise
+            drained = chunk_end >= target_time
+            completed = self.state_publisher.publish_backfill_progress(
+                {
+                    "status": "completed",
+                    "target_time": target_time.isoformat(),
+                    "chunk_start": cursor.isoformat(),
+                    "chunk_end": chunk_end.isoformat(),
+                    "backlog_drained": drained,
+                }
+            )
+            if not completed.success:
+                logger.warning(
+                    "Failed to report SatNOGS backfill progress: status=%s body=%s",
+                    completed.status_code,
+                    completed.response_body,
+                )
+                return
+            cursor = chunk_end
 
     def _run_observation_pages(
         self,
@@ -155,12 +260,14 @@ class AdapterRunner:
         start_time: str | None = None,
         end_time: str | None = None,
         max_observations: int | None = None,
+        connector: SatnogsNetworkConnector | None = None,
     ) -> None:
+        active_connector = connector or self.network_connector
         next_url: str | None = None
         observations_seen = 0
         while True:
             try:
-                observation_page = self.network_connector.list_recent_observations(
+                observation_page = active_connector.list_recent_observations(
                     next_url=next_url,
                     start_time=None if next_url else start_time,
                     end_time=None if next_url else end_time,
@@ -181,7 +288,7 @@ class AdapterRunner:
                 if max_observations is not None and observations_seen >= max_observations:
                     return
                 observations_seen += 1
-                self._process_observation_payload(raw_observation)
+                self._process_observation_payload(raw_observation, connector=active_connector)
             if not observation_page.next_url:
                 return
             next_url = observation_page.next_url
@@ -201,22 +308,20 @@ class AdapterRunner:
                 path.unlink(missing_ok=True)
         return replayed
 
-    def _process_observation_payload(self, raw_observation: dict[str, object]) -> None:
+    def _process_observation_payload(self, raw_observation: dict[str, object], *, connector: SatnogsNetworkConnector | None = None) -> None:
+        active_connector = connector or self.network_connector
         observation_id = str(raw_observation.get("id"))
-        if self.checkpoint_store.is_processed_observation(observation_id):
-            logger.info("Skipping already-processed observation %s", observation_id)
-            return
-        if not self.network_connector.is_eligible_observation(raw_observation):
+        if not active_connector.is_eligible_observation(raw_observation):
             logger.info("Skipping non-eligible observation %s", observation_id)
             return
 
         detail = raw_observation
         if not raw_observation.get("demoddata"):
-            detail = self.network_connector.get_observation_detail(observation_id)
-        if not self.network_connector.is_eligible_observation(detail):
+            detail = active_connector.get_observation_detail(observation_id)
+        if not active_connector.is_eligible_observation(detail):
             logger.info("Skipping observation %s after detail mismatch", observation_id)
             return
-        observation = self.network_connector.normalize_observation(detail)
+        observation = active_connector.normalize_observation(detail)
         if not self._has_demoddata(observation):
             logger.info("Skipping observation %s without demoddata", observation_id)
             return
@@ -226,7 +331,7 @@ class AdapterRunner:
             return
 
         try:
-            frames, invalid_lines = self.network_connector.extract_frames(observation)
+            frames, invalid_lines = active_connector.extract_frames(observation)
         except (binascii.Error, ValueError) as exc:
             logger.warning("Frame extraction failed for observation %s: %r", observation.observation_id, exc)
             self._write_observation_dlq("frame_extraction_failed", observation, extra={"error": repr(exc)})
@@ -279,11 +384,9 @@ class AdapterRunner:
             self._write_observation_dlq("missing_receiver_id", observation)
             return
 
-        partial_key = f"observation:{observation.observation_id}:last_published_frame_index"
-        resume_index = int(self.checkpoint_store.get(partial_key, -1))
         batch: list[TelemetryEvent] = []
-        batch_last_frame_index = resume_index
-        sequence_seed = int(self.checkpoint_store.get(f"observation:{observation.observation_id}:sequence", 0))
+        batch_last_frame_index = -1
+        sequence_seed = 0
         skipped_non_originated = 0
         failed_ax25_decode = 0
         unknown_payload_format_count = 0
@@ -293,9 +396,6 @@ class AdapterRunner:
         skipped_published_frame_count = 0
 
         for frame in frames:
-            if frame.frame_index <= resume_index:
-                skipped_published_frame_count += 1
-                continue
             try:
                 ax25 = parse_ax25_frame(frame.frame_bytes)
             except ValueError as exc:
@@ -355,7 +455,6 @@ class AdapterRunner:
             if len(batch) >= self.config.publisher.batch_size_events:
                 if not self._flush_batch(batch, observation=observation, last_frame_index=batch_last_frame_index):
                     return
-                self.checkpoint_store.set(f"observation:{observation.observation_id}:sequence", sequence_seed)
                 batch = []
 
         if batch and not self._flush_batch(batch, observation=observation, last_frame_index=batch_last_frame_index):
@@ -374,9 +473,6 @@ class AdapterRunner:
             failed_payload_decode,
         )
 
-        self.checkpoint_store.mark_processed_observation(observation.observation_id)
-        self.checkpoint_store.pop(partial_key)
-        self.checkpoint_store.pop(f"observation:{observation.observation_id}:sequence")
 
     def _flush_batch(self, batch: list[TelemetryEvent], *, observation: ObservationRecord, last_frame_index: int) -> bool:
         result = self.publisher.publish(
@@ -407,10 +503,6 @@ class AdapterRunner:
             last_frame_index,
             result.status_code,
             result.attempts,
-        )
-        self.checkpoint_store.set(
-            f"observation:{observation.observation_id}:last_published_frame_index",
-            last_frame_index,
         )
         return True
 
@@ -454,28 +546,3 @@ class AdapterRunner:
         if error.metadata:
             payload["metadata"] = error.metadata
         self.dlq.write("frame", payload)
-
-
-def replay_dlq(config: AdapterConfig, *, max_age_seconds: int | None = None) -> int:
-    dlq = FilesystemDlq(config.dlq.root_dir)
-    checkpoint_store = FileCheckpointStore(config.checkpoints.path)
-    network_connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id)
-    publisher = IngestPublisher(ingest_url=config.platform.ingest_url, config=config.publisher, dlq=dlq)
-    observations_publisher = ObservationsPublisher(
-        batch_upsert_url=config.platform.observations_batch_upsert_url.format(source_id=config.platform.source_id or ""),
-        config=config.publisher,
-        dlq=dlq,
-    )
-    runner = AdapterRunner(
-        config,
-        network_connector=network_connector,
-        publisher=publisher,
-        observations_publisher=observations_publisher,
-        checkpoint_store=checkpoint_store,
-        dlq=dlq,
-        payload_decode_service=PayloadDecodeService(
-            decoder_config=config.vehicle.decoder,
-            registry=DecoderRegistry(),
-        ),
-    )
-    return runner.replay_batch_dlq(max_age_seconds=max_age_seconds)

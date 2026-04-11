@@ -528,6 +528,8 @@ class SourceCreate(BaseModel):
     description: Optional[str] = None
     base_url: Optional[str] = None  # required for simulator
     vehicle_config_path: str
+    monitoring_start_time: Optional[datetime] = None
+    history_mode: Optional[Literal["live_only", "time_window_replay", "cursor_replay"]] = None
 
 
 class SourceResolveRequest(BaseModel):
@@ -543,12 +545,20 @@ class SourceResolveResponse(BaseModel):
     """Response body for vehicle source resolution."""
 
     id: str
+    source_id: str
     name: str
     description: Optional[str] = None
     source_type: str
     base_url: Optional[str] = None
     vehicle_config_path: str
     created: bool
+    monitoring_start_time: datetime
+    last_reconciled_at: Optional[datetime] = None
+    history_mode: Literal["live_only", "time_window_replay", "cursor_replay"]
+    live_state: Literal["idle", "active", "error"]
+    backfill_state: Literal["idle", "running", "complete", "error"]
+    active_backfill_target_time: Optional[datetime] = None
+    chunk_size_hours: int
 
 
 class SourceUpdate(BaseModel):
@@ -558,6 +568,26 @@ class SourceUpdate(BaseModel):
     description: Optional[str] = None
     base_url: Optional[str] = None  # for simulators
     vehicle_config_path: Optional[str] = None
+    monitoring_start_time: Optional[datetime] = None
+    history_mode: Optional[Literal["live_only", "time_window_replay", "cursor_replay"]] = None
+
+
+class BackfillProgressUpdate(BaseModel):
+    """Durable source backfill progress reported by an adapter."""
+
+    status: Literal["started", "completed", "failed"]
+    target_time: datetime
+    chunk_start: Optional[datetime] = None
+    chunk_end: Optional[datetime] = None
+    backlog_drained: Optional[bool] = None
+    error: Optional[str] = None
+
+
+class LiveStateUpdate(BaseModel):
+    """Durable source live worker state reported by an adapter."""
+
+    state: Literal["idle", "active", "error"]
+    error: Optional[str] = None
 
 
 SourceObservationStatus = Literal["scheduled", "in_progress", "completed", "cancelled", "missed"]
@@ -566,7 +596,7 @@ SourceObservationStatus = Literal["scheduled", "in_progress", "completed", "canc
 class SourceObservationUpsert(BaseModel):
     """Observation/contact window published for a source."""
 
-    external_id: Optional[str] = None
+    external_id: str = Field(..., min_length=1)
     status: SourceObservationStatus = "scheduled"
     start_time: datetime
     end_time: datetime

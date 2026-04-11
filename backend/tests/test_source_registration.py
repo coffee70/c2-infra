@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import sys
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 from types import SimpleNamespace
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +22,8 @@ from app.services.realtime_service import repair_registered_sources_on_startup
 from app.services.realtime_service import register_source_if_missing
 from app.services.realtime_service import resolve_source
 from app.services.realtime_service import source_has_telemetry_history
+from app.services.realtime_service import update_backfill_progress
+from app.services.realtime_service import update_live_state
 from app.services.realtime_service import update_source
 from app.models.telemetry import TelemetryChannelAlias
 from app.models.telemetry import TelemetryMetadata
@@ -1698,3 +1701,119 @@ def test_update_source_rejects_simulator_definition_path_changes() -> None:
         )
 
     assert "Cannot change vehicle_config_path for simulator sources" in str(exc_info.value)
+
+
+def test_infer_auto_registration_fields_reads_simulator_base_url_from_full_config() -> None:
+    item = SimpleNamespace(category="simulators")
+    loaded = SimpleNamespace(
+        path="simulators/drogonsat.yaml",
+        parsed=SimpleNamespace(name="DrogonSat"),
+    )
+
+    fields = infer_auto_registration_fields("simulators/drogonsat.yaml", item, loaded)
+
+    assert fields["source_type"] == "simulator"
+    assert fields["base_url"] == "http://simulator:8001"
+
+
+def test_update_source_live_only_history_mode_marks_backfill_complete() -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    existing = MagicMock()
+    existing.id = "source-1"
+    existing.source_type = "vehicle"
+    existing.history_mode = "time_window_replay"
+    existing.backfill_state = "running"
+    existing.last_reconciled_at = datetime.now(timezone.utc)
+    db.get.return_value = existing
+
+    update_source(
+        db,
+        embedding_provider=embedding_provider,
+        source_id=existing.id,
+        history_mode="live_only",
+    )
+
+    assert existing.history_mode == "live_only"
+    assert existing.backfill_state == "complete"
+    assert existing.active_backfill_target_time is None
+    assert existing.last_backfill_error is None
+
+
+def test_backfill_progress_requires_single_active_target() -> None:
+    db = MagicMock()
+    source = MagicMock()
+    source.backfill_state = "idle"
+    source.active_backfill_target_time = None
+    db.get.return_value = source
+    target = datetime(2026, 4, 10, 12, tzinfo=timezone.utc)
+
+    update_backfill_progress(
+        db,
+        source_id="source-1",
+        status="started",
+        target_time=target,
+    )
+
+    assert source.backfill_state == "running"
+    assert source.active_backfill_target_time == target
+    assert source.last_backfill_error is None
+
+    with pytest.raises(ValueError, match="already running"):
+        update_backfill_progress(
+            db,
+            source_id="source-1",
+            status="started",
+            target_time=target,
+        )
+
+
+def test_backfill_completed_rejects_mismatched_target() -> None:
+    db = MagicMock()
+    source = MagicMock()
+    source.backfill_state = "running"
+    source.active_backfill_target_time = datetime(2026, 4, 10, 12, tzinfo=timezone.utc)
+    db.get.return_value = source
+
+    with pytest.raises(ValueError, match="target_time"):
+        update_backfill_progress(
+            db,
+            source_id="source-1",
+            status="completed",
+            target_time=datetime(2026, 4, 10, 13, tzinfo=timezone.utc),
+            chunk_end=datetime(2026, 4, 10, 13, tzinfo=timezone.utc),
+        )
+
+
+def test_backfill_completed_advances_checkpoint_and_clears_target() -> None:
+    db = MagicMock()
+    source = MagicMock()
+    source.backfill_state = "running"
+    target = datetime(2026, 4, 10, 12, tzinfo=timezone.utc)
+    chunk_end = datetime(2026, 4, 10, 10, tzinfo=timezone.utc)
+    source.active_backfill_target_time = target
+    db.get.return_value = source
+
+    update_backfill_progress(
+        db,
+        source_id="source-1",
+        status="completed",
+        target_time=target,
+        chunk_end=chunk_end,
+        backlog_drained=True,
+    )
+
+    assert source.last_reconciled_at == chunk_end
+    assert source.backfill_state == "complete"
+    assert source.active_backfill_target_time is None
+    assert source.last_backfill_error is None
+
+
+def test_update_live_state_sets_durable_source_state() -> None:
+    db = MagicMock()
+    source = MagicMock()
+    db.get.return_value = source
+
+    update_live_state(db, source_id="source-1", state="active")
+
+    assert source.live_state == "active"

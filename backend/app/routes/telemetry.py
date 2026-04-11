@@ -23,12 +23,14 @@ from app.models.telemetry import (
 from app.models.schemas import (
     ActiveStreamUpdate,
     AnomaliesResponse,
+    BackfillProgressUpdate,
     ChannelSourceItem,
     ChannelSourcesResponse,
     DataPoint,
     ExplainResponse,
     RecentDataPoint,
     RelatedChannel,
+    LiveStateUpdate,
     SourceCreate,
     SourceObservationBatchUpsert,
     SourceObservationBatchUpsertResponse,
@@ -69,6 +71,8 @@ from app.services.realtime_service import (
     create_source,
     get_telemetry_sources,
     resolve_source,
+    update_backfill_progress,
+    update_live_state,
     update_source,
 )
 from app.utils.subsystem import infer_subsystem
@@ -323,6 +327,8 @@ def create_source_route(
             description=body.description,
             base_url=body.base_url,
             vehicle_config_path=body.vehicle_config_path,
+            monitoring_start_time=body.monitoring_start_time,
+            history_mode=body.history_mode,
         )
         audit_log("sources.create", source_id=result["id"], name=body.name)
         return result
@@ -355,7 +361,11 @@ def resolve_source_route(
             vehicle_config_path=result["vehicle_config_path"],
             created=created,
         )
-        return {**result, "created": created}
+        return {
+            **result,
+            "created": created,
+            "chunk_size_hours": get_settings().source_reconciliation_chunk_size_hours,
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -378,12 +388,64 @@ def update_source_route(
             description=updates.get("description"),
             base_url=updates.get("base_url"),
             vehicle_config_path=updates.get("vehicle_config_path"),
+            monitoring_start_time=updates.get("monitoring_start_time"),
+            history_mode=updates.get("history_mode"),
         )
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     if result is None:
         raise HTTPException(status_code=404, detail="Source not found")
     audit_log("sources.update", source_id=source_id)
+    return result
+
+
+@router.post("/sources/{source_id}/backfill-progress")
+def update_source_backfill_progress(
+    source_id: str,
+    body: BackfillProgressUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update durable platform-owned historical backfill progress for a source."""
+    logical_source_id = normalize_source_id(source_id)
+    try:
+        result = update_backfill_progress(
+            db,
+            source_id=logical_source_id,
+            status=body.status,
+            target_time=body.target_time,
+            chunk_end=body.chunk_end,
+            backlog_drained=body.backlog_drained,
+            error=body.error,
+        )
+    except ValueError as e:
+        status_code = 409 if "already running" in str(e) else 400
+        raise HTTPException(status_code=status_code, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    audit_log("sources.backfill_progress", source_id=logical_source_id, status=body.status)
+    return result
+
+
+@router.post("/sources/{source_id}/live-state")
+def update_source_live_state(
+    source_id: str,
+    body: LiveStateUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update durable adapter live-worker state for a source."""
+    logical_source_id = normalize_source_id(source_id)
+    try:
+        result = update_live_state(
+            db,
+            source_id=logical_source_id,
+            state=body.state,
+            error=body.error,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    audit_log("sources.live_state", source_id=logical_source_id, state=body.state)
     return result
 
 
@@ -468,6 +530,8 @@ def batch_upsert_source_observations(
         )
     except SourceObservationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     audit_log(
         "source_observations.batch_upsert",
         source_id=logical_source_id,

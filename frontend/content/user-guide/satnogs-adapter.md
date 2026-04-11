@@ -1,6 +1,6 @@
 # SatNOGS Adapter
 
-**Workflow:** Start backend → start adapter → publish upcoming windows → ingest completed SatNOGS observations
+**Workflow:** Start backend → start adapter → live ingest + background backfill
 
 Use the SatNOGS adapter to ingest AX.25 telemetry from one SatNOGS satellite/transmitter pair into the platform. The example config uses LASARSAT NORAD `62391` with transmitter UUID `C3RnLSSuaKzWhHrtJCqUgu`.
 
@@ -10,6 +10,7 @@ Edit `satnogs_adapter/config.example.yaml` or provide your own config file.
 
 - Keep `platform.source_resolve_url` pointed at `/telemetry/sources/resolve`.
 - Keep `platform.observations_batch_upsert_url` pointed at `/telemetry/sources/{source_id}/observations:batch-upsert`.
+- Keep `platform.backfill_progress_url` and `platform.live_state_url` pointed at the matching source state endpoints.
 - Keep `vehicle.vehicle_config_path` pointed at `vehicles/lasarsat.yaml` for the example pair.
 - Set `vehicle.norad_id` to the satellite NORAD ID.
 - Set `vehicle.decoder.strategy` to the payload decoder strategy. Use `aprs` for APRS payloads such as ISS, or `kaitai` plus `vehicle.decoder.decoder_id: "lasarsat"` for LASARSAT.
@@ -18,7 +19,7 @@ Edit `satnogs_adapter/config.example.yaml` or provide your own config file.
 - Set `satnogs.upcoming_status` to the provider status used for future scheduled observations, normally `future`.
 - Set `SATNOGS_API_TOKEN` if your SatNOGS deployment requires authenticated observation access.
 
-The adapter resolves the canonical backend `source_id` from `vehicle.vehicle_config_path` during startup. `platform.source_id` is still supported as an advanced override for testing or debugging, but it is normally omitted.
+The adapter resolves the canonical backend `source_id` from `vehicle.vehicle_config_path` during startup. Adapter configs do not carry a durable source ID, checkpoint path, or backfill window; those decisions live in the platform source record.
 
 ## 2. Start the service
 
@@ -26,13 +27,13 @@ The adapter resolves the canonical backend `source_id` from `vehicle.vehicle_con
 docker compose up -d satnogs-adapter
 ```
 
-The backend auto-registers known vehicle configs during startup. If the LASARSAT source already exists, the adapter receives that existing source ID. If it is missing, the backend creates it through the generic vehicle source resolution path. The adapter publishes future expected contact windows to the source observation API, then polls recent SatNOGS observations using `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, and decodes the AX.25 payload with the configured strategy. Only observations matching the configured satellite, transmitter, and status are eligible for ingestion.
+The backend auto-registers known vehicle configs during startup. If the LASARSAT source already exists, the adapter receives that existing source ID and ingestion contract. If it is missing, the backend creates it through the generic vehicle source resolution path. The adapter publishes future expected contact windows to the source observation API, runs live polling, and for replay-capable sources drains a background historical backlog in chunks. Only observations matching the configured satellite, transmitter, and status are eligible for ingestion.
 
 ## 3. Runtime behavior
 
 - One SatNOGS observation becomes one platform stream: `satnogs-obs-{observation_id}`.
 - Future scheduled observations are published as source-scoped expected contact windows. Planning uses those windows to show upcoming observations; they are not a guarantee that telemetry will decode.
-- Each poll starts with the filtered observations URL and follows the response `Link` header until no next link remains. Re-reading earlier results is safe because processed observations are checkpointed by SatNOGS observation ID.
+- Each poll starts with the filtered observations URL and follows the response `Link` header until no next link remains. Re-reading earlier results is safe because backend ingest is replay-tolerant and observation windows are keyed by source and upstream external ID.
 - Observations without demoddata are skipped. Observations with `payload_demod` files are downloaded, decoded, and published.
 - Only packets from the configured source callsign are accepted. Relay or digipeated traffic is dropped immediately after AX.25 decode.
 - Stable fields defined in the configured vehicle file emit catalog-backed `channel_name` values.
@@ -43,7 +44,9 @@ The backend auto-registers known vehicle configs during startup. If the LASARSAT
 
 ## 4. Backfill and replay
 
-- Use adapter `--mode backfill` only for bounded historical recovery windows.
+- The platform stores `monitoring_start_time`, `last_reconciled_at`, `history_mode`, `live_state`, and `backfill_state` for each source.
+- When background backfill starts, the adapter captures one target time, computes the backlog from `last_reconciled_at` or `monitoring_start_time`, splits that backlog by `chunk_size_hours`, and reports progress after each chunk.
+- Live polling and backfill can run at the same time. SatNOGS HTTP requests go through one shared coordinator so rate-limit and retry-after handling apply globally.
 - Use adapter `--mode replay-dlq` to retry batch DLQ entries after fixing an ingest or mapping issue.
 
-DLQ and checkpoints are written under `tmp/satnogs-adapter/` by default.
+DLQ files are written under `tmp/satnogs-adapter/` by default. The adapter does not write local checkpoint state.

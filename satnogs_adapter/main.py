@@ -5,24 +5,19 @@ from __future__ import annotations
 import argparse
 import logging
 
-from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import AdapterConfig, load_config
 from satnogs_adapter.connectors import SatnogsNetworkConnector
 from satnogs_adapter.decoders import DecoderRegistry, PayloadDecodeService
 from satnogs_adapter.dlq import FilesystemDlq
-from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher
+from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher, SourceStatePublisher
+from satnogs_adapter.request_coordinator import CoordinatedHttpClient, SatnogsRequestCoordinator
 from satnogs_adapter.runner import AdapterRunner
-from satnogs_adapter.source_resolver import BackendSourceResolver
+from satnogs_adapter.source_resolver import BackendSourceResolver, ResolvedSource
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_runtime_source_id(config: AdapterConfig) -> str:
-    if config.platform.source_id:
-        logger.info("Using configured source_id override: %s", config.platform.source_id)
-        return config.platform.source_id
-    if not config.platform.source_resolve_url:
-        raise ValueError("platform.source_resolve_url is required when platform.source_id is absent")
+def resolve_runtime_source(config: AdapterConfig) -> ResolvedSource:
     logger.info("Resolving source for vehicle_config_path=%s", config.vehicle.vehicle_config_path)
     resolve_retry = config.publisher.retry.model_copy(
         update={
@@ -37,51 +32,67 @@ def resolve_runtime_source_id(config: AdapterConfig) -> str:
     )
     source = resolver.resolve_vehicle_source(config.vehicle)
     logger.info(
-        "Resolved backend source id=%s created=%s vehicle_config_path=%s",
+        "Resolved backend source id=%s created=%s vehicle_config_path=%s history_mode=%s",
         source.id,
         source.created,
         source.vehicle_config_path,
+        source.history_mode,
     )
-    return source.id
+    return source
 
 
 def build_runner(config_path: str) -> AdapterRunner:
     config = load_config(config_path)
-    source_id = resolve_runtime_source_id(config)
-    checkpoint_store = FileCheckpointStore(config.checkpoints.path)
+    payload_decode_service = PayloadDecodeService(
+        decoder_config=config.vehicle.decoder,
+        registry=DecoderRegistry(),
+    )
+    payload_decode_service.validate_configuration()
+    source = resolve_runtime_source(config)
     dlq = FilesystemDlq(config.dlq.root_dir)
-    network_connector = SatnogsNetworkConnector(config.satnogs, norad_id=config.vehicle.norad_id)
+    coordinator = SatnogsRequestCoordinator()
+    network_connector = SatnogsNetworkConnector(
+        config.satnogs,
+        norad_id=config.vehicle.norad_id,
+        client=CoordinatedHttpClient(coordinator, owner="live"),
+    )
+    backfill_network_connector = SatnogsNetworkConnector(
+        config.satnogs,
+        norad_id=config.vehicle.norad_id,
+        client=CoordinatedHttpClient(coordinator, owner="backfill"),
+    )
     publisher = IngestPublisher(
         ingest_url=config.platform.ingest_url,
         config=config.publisher,
         dlq=dlq,
     )
     observations_publisher = ObservationsPublisher(
-        batch_upsert_url=config.platform.observations_batch_upsert_url.format(source_id=source_id),
+        batch_upsert_url=config.platform.observations_batch_upsert_url.format(source_id=source.id),
         config=config.publisher,
         dlq=dlq,
     )
-    payload_decode_service = PayloadDecodeService(
-        decoder_config=config.vehicle.decoder,
-        registry=DecoderRegistry(),
+    state_publisher = SourceStatePublisher(
+        backfill_progress_url=config.platform.backfill_progress_url.format(source_id=source.id),
+        live_state_url=config.platform.live_state_url.format(source_id=source.id),
+        config=config.publisher,
     )
-    payload_decode_service.validate_configuration()
     return AdapterRunner(
         config,
         network_connector=network_connector,
+        backfill_network_connector=backfill_network_connector,
         publisher=publisher,
         observations_publisher=observations_publisher,
-        checkpoint_store=checkpoint_store,
+        state_publisher=state_publisher,
         dlq=dlq,
         payload_decode_service=payload_decode_service,
-        source_id=source_id,
+        source_contract=source,
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="SatNOGS AX.25/APRS telemetry adapter")
     parser.add_argument("--config", default="satnogs_adapter/config.example.yaml", help="Path to adapter YAML config")
-    parser.add_argument("--mode", choices=["live", "backfill", "replay-dlq", "once"], default="live")
+    parser.add_argument("--mode", choices=["live", "replay-dlq", "once"], default="live")
     parser.add_argument("--max-age-seconds", type=int, default=None, help="Replay only DLQ files newer than this age")
     args = parser.parse_args()
 
@@ -93,9 +104,6 @@ def main() -> None:
         return
     if args.mode == "once":
         runner.run_live_once()
-        return
-    if args.mode == "backfill":
-        runner.run_backfill_once()
         return
     replayed = runner.replay_batch_dlq(max_age_seconds=args.max_age_seconds)
     logging.getLogger(__name__).info("Replayed %s DLQ batches", replayed)

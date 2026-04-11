@@ -102,10 +102,10 @@ Operational sequence:
 
 1. Add or confirm the LASARSAT vehicle configuration file at `vehicle-configurations/vehicles/lasarsat.yaml`.
 2. Start the backend so it can auto-register vehicle configs.
-3. Configure `platform.observations_batch_upsert_url`, `vehicle.norad_id`, `vehicle.decoder`, `satnogs.transmitter_uuid`, and `satnogs.status`.
+3. Configure the platform source resolve, observation upsert, backfill progress, and live state URLs, plus `vehicle.norad_id`, `vehicle.decoder`, `satnogs.transmitter_uuid`, and `satnogs.status`.
 4. Start the adapter with `docker compose up -d satnogs-adapter`.
 
-The adapter resolves the canonical backend source at startup through `POST /telemetry/sources/resolve` using `vehicle_config_path="vehicles/lasarsat.yaml"`, publishes future expected contact windows to `POST /telemetry/sources/{source_id}/observations:batch-upsert`, queries SatNOGS observations with `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, decodes the AX.25 info payload through the configured strategy, then publishes batched events to `POST /telemetry/realtime/ingest`. Backend telemetry remains vehicle-scoped; the transmitter UUID is not sent in ingest payloads or tags. `platform.source_id` remains available as an advanced override, but normal operation does not require copying backend UUIDs into adapter YAML.
+The adapter resolves the canonical backend source at startup through `POST /telemetry/sources/resolve` using `vehicle_config_path="vehicles/lasarsat.yaml"`, publishes future expected contact windows to `POST /telemetry/sources/{source_id}/observations:batch-upsert`, starts live polling, and drains replay-capable historical backlog in platform-owned chunks. Live and backfill requests share one SatNOGS coordinator so retry-after and rate-limit handling are global. Backend telemetry remains vehicle-scoped; the transmitter UUID is not sent in ingest payloads or tags. Adapter configs do not carry durable source IDs, local checkpoints, or local backfill windows.
 
 For LASARSAT in this first rollout, decoded upstream semantic field names such as `psu_battery`, `uhf_trx_temp`, and `dos_mode` remain discovered fields. The adapter does not rename them into catalog-canonical aliases; the backend derives discovered channel names from `decoder`, `decoder_strategy`, and `field_name`.
 

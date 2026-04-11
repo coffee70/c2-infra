@@ -182,6 +182,19 @@ class TelemetrySource(Base):
     source_type: Mapped[str] = mapped_column(Text, nullable=False)  # vehicle | simulator
     base_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # for simulators
     vehicle_config_path: Mapped[str] = mapped_column(Text, nullable=False)
+    monitoring_start_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    last_reconciled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    history_mode: Mapped[str] = mapped_column(Text, nullable=False, default="time_window_replay")
+    live_state: Mapped[str] = mapped_column(Text, nullable=False, default="idle")
+    backfill_state: Mapped[str] = mapped_column(Text, nullable=False, default="idle")
+    active_backfill_target_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_backfill_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_backfill_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_backfill_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -404,9 +417,8 @@ class SourceObservation(Base):
         Index("ix_source_observations_source_start", "source_id", "start_time"),
         Index("ix_source_observations_source_status_start", "source_id", "status", "start_time"),
         Index(
-            "uq_source_observations_source_provider_external",
+            "uq_source_observations_source_external",
             "source_id",
-            "provider",
             "external_id",
             unique=True,
             postgresql_where=text("external_id IS NOT NULL"),

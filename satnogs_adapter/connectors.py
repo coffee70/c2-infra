@@ -16,6 +16,7 @@ import httpx
 
 from satnogs_adapter.config import SatnogsConfig
 from satnogs_adapter.models import FrameRecord, ObservationRecord
+from satnogs_adapter.request_coordinator import CoordinatedRateLimitError
 
 @dataclass(frozen=True, slots=True)
 class ObservationPage:
@@ -73,11 +74,14 @@ class SatnogsNetworkConnector:
         if now < self._rate_limited_until_monotonic:
             raise SatnogsRateLimitError(ceil(self._rate_limited_until_monotonic - now))
 
-        response = self.client.get(
-            self._build_url(path),
-            params=params,
-            headers=self._headers(),
-        )
+        try:
+            response = self.client.get(
+                self._build_url(path),
+                params=params,
+                headers=self._headers(),
+            )
+        except CoordinatedRateLimitError as exc:
+            raise SatnogsRateLimitError(exc.retry_after_seconds) from exc
         if response.status_code == 429:
             retry_after = _parse_retry_after(response.headers.get("Retry-After"))
             self._rate_limited_until_monotonic = time.monotonic() + retry_after

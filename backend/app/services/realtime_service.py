@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 SPARKLINE_POINTS = 30
 CHANNEL_ORIGIN_CATALOG = "catalog"
 CHANNEL_ORIGIN_DISCOVERED = "discovered"
+HISTORY_MODES = {"live_only", "time_window_replay", "cursor_replay"}
+LIVE_STATES = {"idle", "active", "error"}
+BACKFILL_STATES = {"idle", "running", "complete", "error"}
 
 
 def _resolve_stream_source_id(db: Session, source_id: str) -> str:
@@ -65,16 +68,45 @@ def _resolve_realtime_stream_scope(
 def _source_to_dict(src: TelemetrySource) -> dict:
     return {
         "id": src.id,
+        "source_id": src.id,
         "name": src.name,
         "description": src.description,
         "source_type": src.source_type,
         "base_url": src.base_url,
         "vehicle_config_path": src.vehicle_config_path,
+        "monitoring_start_time": src.monitoring_start_time,
+        "last_reconciled_at": src.last_reconciled_at,
+        "history_mode": src.history_mode,
+        "live_state": src.live_state,
+        "backfill_state": src.backfill_state,
+        "active_backfill_target_time": src.active_backfill_target_time,
+        "last_backfill_started_at": src.last_backfill_started_at,
+        "last_backfill_completed_at": src.last_backfill_completed_at,
+        "last_backfill_error": src.last_backfill_error,
     }
 
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _coerce_aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _default_history_mode(source_type: str, history_mode: str | None) -> str:
+    resolved = history_mode or ("live_only" if source_type == "simulator" else "time_window_replay")
+    if resolved not in HISTORY_MODES:
+        raise ValueError("history_mode must be live_only, time_window_replay, or cursor_replay")
+    return resolved
+
+
+def _default_backfill_state(history_mode: str) -> str:
+    return "complete" if history_mode == "live_only" else "idle"
 
 
 def create_discovered_channel_metadata(
@@ -845,12 +877,15 @@ def _create_source_row(
     description: str | None,
     base_url: str | None,
     vehicle_config_path: str,
+    monitoring_start_time: datetime | None = None,
+    history_mode: str | None = None,
     source_id: str | None = None,
 ) -> TelemetrySource:
     if source_type not in ("vehicle", "simulator"):
         raise ValueError("source_type must be 'vehicle' or 'simulator'")
     if source_type == "simulator" and not base_url:
         raise ValueError("base_url is required for simulator sources")
+    resolved_history_mode = _default_history_mode(source_type, history_mode)
     resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
     src = TelemetrySource(
         id=source_id or str(uuid.uuid4()),
@@ -859,6 +894,10 @@ def _create_source_row(
         source_type=source_type,
         base_url=base_url if source_type == "simulator" else None,
         vehicle_config_path=resolved_vehicle_config_path,
+        monitoring_start_time=_coerce_aware_utc(monitoring_start_time) or _now_utc(),
+        history_mode=resolved_history_mode,
+        live_state="idle",
+        backfill_state=_default_backfill_state(resolved_history_mode),
     )
     db.add(src)
     db.flush()
@@ -886,6 +925,8 @@ def create_source(
     description: str | None = None,
     base_url: str | None = None,
     vehicle_config_path: str,
+    monitoring_start_time: datetime | None = None,
+    history_mode: str | None = None,
 ) -> dict:
     """Create a new telemetry source. Returns the created source dict."""
     src = _create_source_row(
@@ -895,6 +936,8 @@ def create_source(
         description=description,
         base_url=base_url,
         vehicle_config_path=vehicle_config_path,
+        monitoring_start_time=monitoring_start_time,
+        history_mode=history_mode,
     )
     _seed_metadata_for_source(
         db,
@@ -916,6 +959,8 @@ def update_source(
     description: str | None = None,
     base_url: str | None = None,
     vehicle_config_path: str | None = None,
+    monitoring_start_time: datetime | None = None,
+    history_mode: str | None = None,
 ) -> dict | None:
     """Update a telemetry source. Returns updated source dict or None if not found."""
     src = db.get(TelemetrySource, source_id)
@@ -927,6 +972,21 @@ def update_source(
         src.description = description
     if base_url is not None and src.source_type == "simulator":
         src.base_url = base_url
+    if monitoring_start_time is not None:
+        src.monitoring_start_time = _coerce_aware_utc(monitoring_start_time) or monitoring_start_time
+    if history_mode is not None and history_mode != src.history_mode:
+        if history_mode not in HISTORY_MODES:
+            raise ValueError("history_mode must be live_only, time_window_replay, or cursor_replay")
+        old_history_mode = src.history_mode
+        src.history_mode = history_mode
+        src.last_backfill_error = None
+        if history_mode == "live_only":
+            src.backfill_state = "complete"
+            src.active_backfill_target_time = None
+        elif old_history_mode == "live_only":
+            src.backfill_state = "idle"
+        elif src.backfill_state != "running":
+            src.backfill_state = "idle"
     if vehicle_config_path is not None:
         next_path = canonical_vehicle_config_path(vehicle_config_path)
         if src.source_type == "simulator" and next_path != src.vehicle_config_path:
@@ -986,20 +1046,29 @@ def register_source_if_missing(
     description: str | None = None,
     base_url: str | None = None,
     vehicle_config_path: str,
+    monitoring_start_time: datetime | None = None,
+    history_mode: str | None = None,
 ) -> tuple[dict, bool]:
     resolved_vehicle_config_path = canonical_vehicle_config_path(vehicle_config_path)
     existing = get_source_by_vehicle_config_path(db, resolved_vehicle_config_path)
     if existing is not None:
         return _source_to_dict(existing), False
     try:
+        create_kwargs = {
+            "embedding_provider": embedding_provider,
+            "source_type": source_type,
+            "name": name,
+            "description": description,
+            "base_url": base_url,
+            "vehicle_config_path": resolved_vehicle_config_path,
+        }
+        if monitoring_start_time is not None:
+            create_kwargs["monitoring_start_time"] = monitoring_start_time
+        if history_mode is not None:
+            create_kwargs["history_mode"] = history_mode
         created = create_source(
             db,
-            embedding_provider=embedding_provider,
-            source_type=source_type,
-            name=name,
-            description=description,
-            base_url=base_url,
-            vehicle_config_path=resolved_vehicle_config_path,
+            **create_kwargs,
         )
     except IntegrityError:
         db.rollback()
@@ -1018,6 +1087,8 @@ def resolve_source(
     *,
     description: str | None = None,
     vehicle_config_path: str,
+    monitoring_start_time: datetime | None = None,
+    history_mode: str | None = None,
 ) -> tuple[dict, bool]:
     """Resolve or create a canonical vehicle source for adapter startup."""
     if source_type != "vehicle":
@@ -1030,7 +1101,77 @@ def resolve_source(
         description=description,
         base_url=None,
         vehicle_config_path=vehicle_config_path,
+        monitoring_start_time=monitoring_start_time,
+        history_mode=history_mode,
     )
+
+
+def update_backfill_progress(
+    db: Session,
+    *,
+    source_id: str,
+    status: str,
+    target_time: datetime,
+    chunk_end: datetime | None = None,
+    backlog_drained: bool | None = None,
+    error: str | None = None,
+) -> dict | None:
+    src = db.get(TelemetrySource, source_id)
+    if src is None:
+        return None
+    target = _coerce_aware_utc(target_time) or target_time
+    now = _now_utc()
+    if status == "started":
+        if src.backfill_state == "running":
+            raise ValueError("Backfill is already running for source")
+        src.active_backfill_target_time = target
+        src.backfill_state = "running"
+        src.last_backfill_started_at = now
+        src.last_backfill_error = None
+    elif status == "completed":
+        if chunk_end is None:
+            raise ValueError("chunk_end is required for completed backfill progress")
+        if src.active_backfill_target_time != target:
+            raise ValueError("target_time does not match active backfill target")
+        src.last_reconciled_at = _coerce_aware_utc(chunk_end) or chunk_end
+        src.last_backfill_completed_at = now
+        src.last_backfill_error = None
+        if backlog_drained:
+            src.backfill_state = "complete"
+            src.active_backfill_target_time = None
+        else:
+            src.backfill_state = "running"
+    elif status == "failed":
+        if src.active_backfill_target_time is not None and src.active_backfill_target_time != target:
+            raise ValueError("target_time does not match active backfill target")
+        src.backfill_state = "error"
+        src.last_backfill_error = error or "Backfill failed"
+        src.active_backfill_target_time = None
+    else:
+        raise ValueError("status must be started, completed, or failed")
+    db.commit()
+    db.refresh(src)
+    return _source_to_dict(src)
+
+
+def update_live_state(
+    db: Session,
+    *,
+    source_id: str,
+    state: str,
+    error: str | None = None,
+) -> dict | None:
+    src = db.get(TelemetrySource, source_id)
+    if src is None:
+        return None
+    if state not in LIVE_STATES:
+        raise ValueError("live_state must be idle, active, or error")
+    src.live_state = state
+    if state == "error":
+        src.last_backfill_error = error or src.last_backfill_error
+    db.commit()
+    db.refresh(src)
+    return _source_to_dict(src)
 
 
 def _is_simulator_category(category: str | None) -> bool:
@@ -1045,11 +1186,17 @@ def infer_auto_registration_fields(
 ) -> dict:
     source_type = "simulator" if _is_simulator_category(getattr(config_item, "category", None)) else "vehicle"
     display_name = loaded_config.parsed.name or Path(config_path).stem
+    base_url = None
+    if source_type == "simulator":
+        try:
+            base_url = load_vehicle_config_file(loaded_config.path).base_url
+        except Exception:
+            base_url = None
     return {
         "source_type": source_type,
         "name": display_name,
         "description": f"Auto-registered from vehicle configuration: {loaded_config.path}",
-        "base_url": getattr(loaded_config.parsed, "base_url", None) if source_type == "simulator" else None,
+        "base_url": base_url,
         "vehicle_config_path": loaded_config.path,
     }
 

@@ -188,6 +188,8 @@ interface SourceMutationInput {
   description?: string;
   base_url?: string;
   vehicle_config_path: string;
+  monitoring_start_time?: string;
+  history_mode?: "live_only" | "time_window_replay" | "cursor_replay";
 }
 
 interface SourceUpdateInput {
@@ -196,6 +198,8 @@ interface SourceUpdateInput {
   description?: string;
   base_url?: string;
   vehicle_config_path?: string;
+  monitoring_start_time?: string;
+  history_mode?: "live_only" | "time_window_replay" | "cursor_replay";
 }
 
 interface VehicleConfigValidateInput {

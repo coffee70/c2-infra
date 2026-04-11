@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 import pytest
 
-from satnogs_adapter.checkpoints import FileCheckpointStore
 from satnogs_adapter.config import RetryConfig, load_config
 from satnogs_adapter.connectors import ObservationPage, SatnogsNetworkConnector, SatnogsRateLimitError
 from satnogs_adapter.decoders import DecoderRegistry, PayloadDecodeError, PayloadDecodeService, parse_aprs_payload, parse_ax25_frame
@@ -20,7 +19,7 @@ from satnogs_adapter.mapper import TelemetryMapper
 from satnogs_adapter.models import AX25Frame, FrameRecord, ObservationRecord
 from satnogs_adapter.publisher import IngestPublisher, ObservationsPublisher
 from satnogs_adapter.runner import AdapterRunner
-from satnogs_adapter.source_resolver import BackendSourceResolver, SourceResolutionError
+from satnogs_adapter.source_resolver import BackendSourceResolver, ResolvedSource, SourceResolutionError
 
 
 class FakeObservationsPublisher:
@@ -56,12 +55,11 @@ def _config_yaml(
     platform_lines = [
         "platform:",
         '  ingest_url: "http://backend:8000/telemetry/realtime/ingest"',
+        f'  source_resolve_url: "{source_resolve_url or "http://backend:8000/telemetry/sources/resolve"}"',
         '  observations_batch_upsert_url: "http://backend:8000/telemetry/sources/{source_id}/observations:batch-upsert"',
+        '  backfill_progress_url: "http://backend:8000/telemetry/sources/{source_id}/backfill-progress"',
+        '  live_state_url: "http://backend:8000/telemetry/sources/{source_id}/live-state"',
     ]
-    if source_id is not None:
-        platform_lines.append(f'  source_id: "{source_id}"')
-    if source_resolve_url is not None:
-        platform_lines.append(f'  source_resolve_url: "{source_resolve_url}"')
     return "\n".join(
         [
             *platform_lines,
@@ -116,31 +114,36 @@ def test_load_config_prefers_definition_stable_field_mappings(tmp_path: Path) ->
     assert config.resolve_stable_field_mappings()["latitude"] == "ISS_POS_LAT_DEG"
 
 
-def test_config_allows_source_id_without_resolve_url(tmp_path: Path) -> None:
+def test_config_rejects_source_id_override(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
-    path.write_text(_config_yaml(source_id="source-uuid"), encoding="utf-8")
+    path.write_text(
+        _config_yaml().replace(
+            '  source_resolve_url: "http://backend:8000/telemetry/sources/resolve"\n',
+            '  source_resolve_url: "http://backend:8000/telemetry/sources/resolve"\n  source_id: "source-uuid"\n',
+        ),
+        encoding="utf-8",
+    )
 
-    config = load_config(str(path))
-
-    assert config.platform.source_id == "source-uuid"
-    assert config.platform.source_resolve_url is None
+    with pytest.raises(ValueError):
+        load_config(str(path))
 
 
-def test_config_allows_resolve_url_without_source_id(tmp_path: Path) -> None:
+def test_config_requires_source_resolve_url(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
     path.write_text(_config_yaml(source_resolve_url="http://backend:8000/telemetry/sources/resolve"), encoding="utf-8")
 
     config = load_config(str(path))
-
-    assert config.platform.source_id is None
     assert config.platform.source_resolve_url == "http://backend:8000/telemetry/sources/resolve"
 
 
-def test_config_requires_source_id_or_resolve_url(tmp_path: Path) -> None:
+def test_config_rejects_missing_source_resolve_url(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
-    path.write_text(_config_yaml(), encoding="utf-8")
+    path.write_text(
+        _config_yaml().replace('  source_resolve_url: "http://backend:8000/telemetry/sources/resolve"\n', ""),
+        encoding="utf-8",
+    )
 
-    with pytest.raises(ValueError, match="platform.source_id or platform.source_resolve_url is required"):
+    with pytest.raises(ValueError, match="source_resolve_url"):
         load_config(str(path))
 
 
@@ -628,7 +631,6 @@ def test_runner_full_path_aprs_regression_still_publishes(tmp_path: Path) -> Non
     config_path = tmp_path / "config.yaml"
     config_path.write_text(_config_yaml(source_id="source-uuid"), encoding="utf-8")
     config = load_config(str(config_path))
-    config.checkpoints.path = str(tmp_path / "checkpoints.json")
     config.dlq.root_dir = str(tmp_path / "dlq")
     published: list[dict[str, object]] = []
 
@@ -697,7 +699,7 @@ def test_runner_full_path_aprs_regression_still_publishes(tmp_path: Path) -> Non
         network_connector=FakeNetworkConnector(),
         publisher=CapturingPublisher(),
         observations_publisher=FakeObservationsPublisher(),
-        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        checkpoint_store=None,
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
         source_id="source-uuid",
@@ -713,7 +715,6 @@ def test_runner_full_path_aprs_regression_still_publishes(tmp_path: Path) -> Non
 
 def test_runner_full_path_lasarsat_flow_reaches_publish(tmp_path: Path) -> None:
     config = load_config("satnogs_adapter/config.example.yaml")
-    config.checkpoints.path = str(tmp_path / "checkpoints.json")
     config.dlq.root_dir = str(tmp_path / "dlq")
     published: list[dict[str, object]] = []
 
@@ -782,7 +783,7 @@ def test_runner_full_path_lasarsat_flow_reaches_publish(tmp_path: Path) -> None:
         network_connector=FakeNetworkConnector(),
         publisher=CapturingPublisher(),
         observations_publisher=FakeObservationsPublisher(),
-        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        checkpoint_store=None,
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
         source_id="source-uuid",
@@ -799,7 +800,6 @@ def test_runner_full_path_lasarsat_flow_reaches_publish(tmp_path: Path) -> None:
 
 def test_runner_non_matching_frames_do_not_create_payload_dlq_noise(tmp_path: Path) -> None:
     config = load_config("satnogs_adapter/config.example.yaml")
-    config.checkpoints.path = str(tmp_path / "checkpoints.json")
     config.dlq.root_dir = str(tmp_path / "dlq")
 
     class FakeNetworkConnector:
@@ -863,7 +863,7 @@ def test_runner_non_matching_frames_do_not_create_payload_dlq_noise(tmp_path: Pa
         network_connector=FakeNetworkConnector(),
         publisher=CapturingPublisher(),
         observations_publisher=FakeObservationsPublisher(),
-        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        checkpoint_store=None,
         dlq=dlq,
         payload_decode_service=_payload_decode_service(config),
         source_id="source-uuid",
@@ -875,9 +875,8 @@ def test_runner_non_matching_frames_do_not_create_payload_dlq_noise(tmp_path: Pa
 
 def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path: Path) -> None:
     config = load_config("satnogs_adapter/config.example.yaml")
-    config.checkpoints.path = str(tmp_path / "checkpoints.json")
     config.dlq.root_dir = str(tmp_path / "dlq")
-    checkpoint_store = FileCheckpointStore(config.checkpoints.path)
+    checkpoint_store = None
     dlq = FilesystemDlq(config.dlq.root_dir)
 
     class FakeNetworkConnector:
@@ -940,12 +939,9 @@ def test_runner_skips_missing_ground_station_and_writes_observation_dlq(tmp_path
     assert payload["reason"] == "missing_ground_station_id"
 
 
-def test_runner_uses_link_pagination_and_observation_id_dedupe(tmp_path: Path) -> None:
+def test_runner_uses_link_pagination_without_local_observation_dedupe(tmp_path: Path) -> None:
     config = load_config("satnogs_adapter/config.example.yaml")
-    config.checkpoints.path = str(tmp_path / "checkpoints.json")
     config.dlq.root_dir = str(tmp_path / "dlq")
-    checkpoint_store = FileCheckpointStore(config.checkpoints.path)
-    checkpoint_store.mark_processed_observation("obs-1")
     dlq = FilesystemDlq(config.dlq.root_dir)
     next_urls_seen: list[str | None] = []
 
@@ -982,18 +978,17 @@ def test_runner_uses_link_pagination_and_observation_id_dedupe(tmp_path: Path) -
             raise AssertionError(f"unexpected next_url={next_url}")
 
         def is_eligible_observation(self, payload):
-            raise AssertionError("processed observations should be deduped before eligibility checks")
+            return False
 
     class FakePublisher:
         def publish(self, events, *, context):
-            raise AssertionError("publisher should not be called for processed observations")
+            raise AssertionError("publisher should not be called for ineligible observations")
 
     runner = AdapterRunner(
         config,
         network_connector=FakeNetworkConnector(),
         publisher=FakePublisher(),
         observations_publisher=FakeObservationsPublisher(),
-        checkpoint_store=checkpoint_store,
         dlq=dlq,
         payload_decode_service=_payload_decode_service(config),
         source_id="source-uuid",
@@ -1002,12 +997,10 @@ def test_runner_uses_link_pagination_and_observation_id_dedupe(tmp_path: Path) -
     runner.run_live_once()
 
     assert next_urls_seen == [None, "https://network.satnogs.org/api/observations/?cursor=abc"]
-    assert checkpoint_store.is_processed_observation("obs-1")
 
 
 def test_runner_syncs_upcoming_observations_with_replacement_payload(tmp_path: Path) -> None:
     config = load_config("satnogs_adapter/config.example.yaml")
-    config.checkpoints.path = str(tmp_path / "checkpoints.json")
     config.dlq.root_dir = str(tmp_path / "dlq")
     captured: dict[str, object] = {}
 
@@ -1070,7 +1063,7 @@ def test_runner_syncs_upcoming_observations_with_replacement_payload(tmp_path: P
         network_connector=FakeNetworkConnector(),
         publisher=FakePublisher(),
         observations_publisher=CapturingObservationsPublisher(),
-        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        checkpoint_store=None,
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
         source_id="source-uuid",
@@ -1099,14 +1092,12 @@ def test_runner_syncs_upcoming_observations_with_replacement_payload(tmp_path: P
     ]
 
 
-def test_backfill_uses_linked_observations_with_configured_bounds(tmp_path: Path) -> None:
+def test_backfill_snapshot_uses_platform_chunk_bounds(tmp_path: Path) -> None:
     config = load_config("satnogs_adapter/config.example.yaml")
-    config.backfill.enabled = True
-    config.backfill.start_time = "2026-04-01T00:00:00Z"
-    config.backfill.end_time = "2026-04-02T00:00:00Z"
-    config.checkpoints.path = str(tmp_path / "checkpoints.json")
     config.dlq.root_dir = str(tmp_path / "dlq")
     seen: list[tuple[str | None, str | None, str | None]] = []
+    progress: list[dict[str, object]] = []
+    start = datetime.now(timezone.utc) - timedelta(hours=1)
 
     class FakeNetworkConnector:
         def list_recent_observations(self, *, next_url=None, start_time=None, end_time=None, now=None):
@@ -1114,6 +1105,17 @@ def test_backfill_uses_linked_observations_with_configured_bounds(tmp_path: Path
             if next_url is None:
                 return ObservationPage(results=[], next_url=None)
             raise AssertionError("backfill should stop on the empty first page")
+
+    class FakeStatePublisher:
+        def publish_backfill_progress(self, payload):
+            progress.append(payload)
+
+            class Result:
+                success = True
+                status_code = 200
+                response_body = ""
+
+            return Result()
 
     class FakePublisher:
         def publish(self, events, *, context):
@@ -1124,15 +1126,32 @@ def test_backfill_uses_linked_observations_with_configured_bounds(tmp_path: Path
         network_connector=FakeNetworkConnector(),
         publisher=FakePublisher(),
         observations_publisher=FakeObservationsPublisher(),
-        checkpoint_store=FileCheckpointStore(config.checkpoints.path),
+        state_publisher=FakeStatePublisher(),
         dlq=FilesystemDlq(config.dlq.root_dir),
         payload_decode_service=_payload_decode_service(config),
-        source_id="source-uuid",
+        source_contract=ResolvedSource(
+            id="source-uuid",
+            name="source",
+            source_type="vehicle",
+            vehicle_config_path="vehicles/lasarsat.yaml",
+            created=False,
+            monitoring_start_time=start,
+            last_reconciled_at=start,
+            history_mode="time_window_replay",
+            live_state="idle",
+            backfill_state="idle",
+            chunk_size_hours=6,
+        ),
     )
 
-    runner.run_backfill_once()
+    runner.run_backfill_snapshot()
 
-    assert seen == [(None, "2026-04-01T00:00:00Z", "2026-04-02T00:00:00Z")]
+    assert len(seen) == 1
+    assert seen[0][0] is None
+    assert seen[0][1] == start.isoformat()
+    assert progress[0]["status"] == "started"
+    assert progress[-1]["status"] == "completed"
+    assert progress[-1]["backlog_drained"] is True
 
 
 def test_satnogs_connector_rejects_mismatched_status() -> None:
@@ -1246,6 +1265,13 @@ def test_source_resolver_posts_vehicle_request_and_parses_response() -> None:
                 "base_url": None,
                 "vehicle_config_path": "vehicles/lasarsat.yaml",
                 "created": False,
+                "monitoring_start_time": "2026-04-10T00:00:00Z",
+                "last_reconciled_at": None,
+                "history_mode": "time_window_replay",
+                "live_state": "idle",
+                "backfill_state": "idle",
+                "active_backfill_target_time": None,
+                "chunk_size_hours": 6,
             },
         )
 
@@ -1261,6 +1287,8 @@ def test_source_resolver_posts_vehicle_request_and_parses_response() -> None:
 
     assert source.id == "resolved-source"
     assert source.created is False
+    assert source.history_mode == "time_window_replay"
+    assert source.chunk_size_hours == 6
     assert seen["json"] == {
         "source_type": "vehicle",
         "name": "LASARSAT",
@@ -1295,19 +1323,18 @@ def test_source_resolver_fails_on_malformed_response() -> None:
         resolver.resolve_vehicle_source(config.vehicle)
 
 
-def test_build_runner_uses_source_id_override_without_resolving(tmp_path: Path, monkeypatch) -> None:
+def test_build_runner_rejects_source_id_override(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "config.yaml"
-    path.write_text(_config_yaml(source_id="override-source"), encoding="utf-8")
+    path.write_text(
+        _config_yaml().replace(
+            '  source_resolve_url: "http://backend:8000/telemetry/sources/resolve"\n',
+            '  source_resolve_url: "http://backend:8000/telemetry/sources/resolve"\n  source_id: "override-source"\n',
+        ),
+        encoding="utf-8",
+    )
 
-    class FailResolver:
-        def __init__(self, **_kwargs):
-            raise AssertionError("resolver should not be constructed")
-
-    monkeypatch.setattr("satnogs_adapter.main.BackendSourceResolver", FailResolver)
-
-    runner = build_runner(str(path))
-
-    assert runner.mapper.source_id == "override-source"
+    with pytest.raises(ValueError):
+        build_runner(str(path))
 
 
 def test_build_runner_resolves_source_id_when_override_absent(tmp_path: Path, monkeypatch) -> None:
@@ -1326,6 +1353,12 @@ def test_build_runner_resolves_source_id_when_override_absent(tmp_path: Path, mo
                 id = "resolved-source"
                 created = False
                 vehicle_config_path = vehicle.vehicle_config_path
+                history_mode = "live_only"
+                live_state = "idle"
+                backfill_state = "complete"
+                monitoring_start_time = datetime.now(timezone.utc)
+                last_reconciled_at = None
+                chunk_size_hours = 6
 
             return Source()
 
