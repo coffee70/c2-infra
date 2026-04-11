@@ -109,6 +109,8 @@ The adapter resolves the canonical backend source at startup through `POST /tele
 
 For LASARSAT in this first rollout, decoded upstream semantic field names such as `psu_battery`, `uhf_trx_temp`, and `dos_mode` remain discovered fields. The adapter does not rename them into catalog-canonical aliases; the backend derives discovered channel names from `decoder`, `decoder_strategy`, and `field_name`.
 
+See `satnogs_adapter/README.md` for adapter-specific operational notes, including manual SatNOGS observations API ordering and `start`/`end` verification.
+
 ## Browser Validation
 
 The repo-owned Playwright workspace lives in `tools/playwright`. Use it for browser checks instead of installing Playwright under `.cursor`.
