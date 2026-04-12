@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     openai_base_url: str = ""
     # Comma-separated list of allowed CORS origins (e.g. https://app.example.com). Default: localhost for dev.
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    source_reconciliation_chunk_size_hours: int = 6
 
     def get_cors_origins_list(self) -> list[str]:
         """Return CORS origins as a list, stripping whitespace."""

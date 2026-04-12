@@ -53,13 +53,14 @@ def upsert_source_observations(
 
     inserted = 0
     for item in batch.observations:
+        if not item.external_id:
+            raise ValueError("external_id is required for source observations")
         observation = None
         if not batch.replace_future_scheduled and item.external_id:
             observation = (
                 db.execute(
                     select(SourceObservation).where(
                         SourceObservation.source_id == source_id,
-                        SourceObservation.provider == batch.provider,
                         SourceObservation.external_id == item.external_id,
                     )
                 )

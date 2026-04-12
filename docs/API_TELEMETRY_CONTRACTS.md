@@ -23,6 +23,9 @@ This document describes the `source_id` parameter added to telemetry endpoints f
 ### POST /telemetry/data
 - **Body**: `{ telemetry_name, data: [...], source_id?: "default" }` — `source_id` scopes ingested data when `telemetry_data` is source-aware.
 
+### POST /telemetry/realtime/ingest
+- **Body events**: each event requires `source_id`, `stream_id`, timestamp information, value, channel identity, and stream-scoped `sequence`. Historical storage keys samples by stream, channel, timestamp, and sequence.
+
 ### POST /telemetry/recompute-stats
 - **source_id** (query, optional): `null` — When set, recomputes only for that source. When `telemetry_statistics` is source-aware.
 - **all_sources** (query, optional): `false` — When true, recomputes per source (when source-aware).

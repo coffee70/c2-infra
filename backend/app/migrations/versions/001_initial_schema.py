@@ -26,6 +26,15 @@ def upgrade() -> None:
         sa.Column("source_type", sa.Text(), nullable=False),
         sa.Column("base_url", sa.Text(), nullable=True),
         sa.Column("vehicle_config_path", sa.Text(), nullable=False),
+        sa.Column("monitoring_start_time", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("last_reconciled_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("history_mode", sa.Text(), nullable=False),
+        sa.Column("live_state", sa.Text(), nullable=False),
+        sa.Column("backfill_state", sa.Text(), nullable=False),
+        sa.Column("active_backfill_target_time", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_backfill_started_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_backfill_completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_backfill_error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index(
@@ -121,6 +130,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("timestamp", sa.DateTime(timezone=True), primary_key=True, nullable=False),
+        sa.Column("sequence", sa.Integer(), primary_key=True, nullable=False),
         sa.Column("value", sa.Numeric(20, 10), nullable=False),
         sa.Column("packet_source", sa.Text(), nullable=True),
         sa.Column("receiver_id", sa.Text(), nullable=True),
@@ -128,7 +138,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_telemetry_data_source_telemetry_timestamp",
         "telemetry_data",
-        ["source_id", "telemetry_id", "timestamp"],
+        ["source_id", "telemetry_id", "timestamp", "sequence"],
     )
     op.execute(
         sa.text(
@@ -364,9 +374,9 @@ def upgrade() -> None:
         ["source_id", "status", "start_time"],
     )
     op.create_index(
-        "uq_source_observations_source_provider_external",
+        "uq_source_observations_source_external",
         "source_observations",
-        ["source_id", "provider", "external_id"],
+        ["source_id", "external_id"],
         unique=True,
         postgresql_where=sa.text("external_id IS NOT NULL"),
     )
@@ -374,7 +384,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(
-        "uq_source_observations_source_provider_external",
+        "uq_source_observations_source_external",
         table_name="source_observations",
         postgresql_where=sa.text("external_id IS NOT NULL"),
     )

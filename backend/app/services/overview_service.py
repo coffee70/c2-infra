@@ -177,7 +177,7 @@ def _get_latest_value_and_ts(
             TelemetryData.telemetry_id == telemetry_id,
             TelemetryData.stream_id == data_source_id,
         )
-        .order_by(desc(TelemetryData.timestamp))
+        .order_by(desc(TelemetryData.timestamp), desc(TelemetryData.sequence))
         .limit(1)
     )
     row = db.execute(stmt).fetchone()
@@ -197,7 +197,7 @@ def _get_recent_for_sparkline(
             TelemetryData.telemetry_id == telemetry_id,
             TelemetryData.stream_id == data_source_id,
         )
-        .order_by(desc(TelemetryData.timestamp))
+        .order_by(desc(TelemetryData.timestamp), desc(TelemetryData.sequence))
         .limit(limit)
     )
     rows = db.execute(stmt).fetchall()

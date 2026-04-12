@@ -96,16 +96,20 @@ The Overview page will show live updates (green "Live" badge when connected). Th
 
 ## SatNOGS Adapter
 
-The repo includes a compose-managed `satnogs-adapter` service for AX.25 telemetry ingestion from SatNOGS observations for one configured satellite/transmitter pair. The example config uses LASARSAT NORAD `62391` with transmitter UUID `C3RnLSSuaKzWhHrtJCqUgu`.
+The repo includes a compose-managed `satnogs-adapter` service for AX.25 telemetry ingestion from SatNOGS observations for one configured satellite/transmitter pair. Payload decode now runs through a strategy layer after AX.25 parsing: APRS remains a first-class option, and the example config uses the vendored SatNOGS LASARSAT Kaitai decoder for LASARSAT NORAD `62391` with transmitter UUID `C3RnLSSuaKzWhHrtJCqUgu`.
 
 Operational sequence:
 
 1. Add or confirm the LASARSAT vehicle configuration file at `vehicle-configurations/vehicles/lasarsat.yaml`.
 2. Start the backend so it can auto-register vehicle configs.
-3. Configure `platform.observations_batch_upsert_url`, `vehicle.norad_id`, `satnogs.transmitter_uuid`, and `satnogs.status`.
+3. Configure the platform source resolve, observation upsert, backfill progress, and live state URLs, plus `vehicle.norad_id`, `vehicle.monitoring_start_time`, `vehicle.decoder`, `satnogs.transmitter_uuid`, and `satnogs.status`.
 4. Start the adapter with `docker compose up -d satnogs-adapter`.
 
-The adapter resolves the canonical backend source at startup through `POST /telemetry/sources/resolve` using `vehicle_config_path="vehicles/lasarsat.yaml"`, publishes future expected contact windows to `POST /telemetry/sources/{source_id}/observations:batch-upsert`, queries SatNOGS observations with `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, then publishes batched events to `POST /telemetry/realtime/ingest`. Backend telemetry remains vehicle-scoped; the transmitter UUID is not sent in ingest payloads or tags. `platform.source_id` remains available as an advanced override, but normal operation does not require copying backend UUIDs into adapter YAML.
+The adapter resolves the canonical backend source at startup through `POST /telemetry/sources/resolve` using `vehicle_config_path="vehicles/lasarsat.yaml"` and the configured first-run monitoring start, publishes future expected contact windows to `POST /telemetry/sources/{source_id}/observations:batch-upsert`, starts live polling, and drains replay-capable historical backlog in platform-owned chunks. Live and backfill requests share one SatNOGS coordinator so retry-after and rate-limit handling are global. Backend telemetry remains vehicle-scoped; the transmitter UUID is not sent in ingest payloads or tags. Adapter configs do not carry durable source IDs or local checkpoints.
+
+For LASARSAT in this first rollout, decoded upstream semantic field names such as `psu_battery`, `uhf_trx_temp`, and `dos_mode` remain discovered fields. The adapter does not rename them into catalog-canonical aliases; the backend derives discovered channel names from `decoder`, `decoder_strategy`, and `field_name`.
+
+See `satnogs_adapter/README.md` for adapter-specific operational notes, including manual SatNOGS observations API ordering and `start`/`end` verification.
 
 ## Browser Validation
 
@@ -146,14 +150,14 @@ Response:
 
 Ingest realtime measurement events (batch).
 
-`generation_time` is preferred, but packets that only know when they were received may omit it and send `reception_time` instead. In that case the backend synthesizes `generation_time = reception_time`.
+`generation_time` is preferred, but packets that only know when they were received may omit it and send `reception_time` instead. In that case the backend synthesizes `generation_time = reception_time`. Each event must include a stream-scoped `sequence`; history uses it to preserve repeated samples with the same timestamp.
 
 ```bash
 curl -X POST http://localhost:8000/telemetry/realtime/ingest \
   -H "Content-Type: application/json" \
   -d '{
     "events": [
-      {"source_id": "vehicle1", "channel_name": "PWR_BUS_A_VOLT", "reception_time": "2025-03-02T12:00:00Z", "value": 28.3}
+      {"source_id": "vehicle1", "stream_id": "vehicle1-pass-1", "channel_name": "PWR_BUS_A_VOLT", "reception_time": "2025-03-02T12:00:00Z", "value": 28.3, "sequence": 1}
     ]
   }'
 ```

@@ -84,6 +84,7 @@ def _latest_data_rows(
                 partition_by=TelemetryData.telemetry_id,
                 order_by=(
                     TelemetryData.timestamp.desc(),
+                    TelemetryData.sequence.desc(),
                     TelemetryData.stream_id.desc(),
                 ),
             )

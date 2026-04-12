@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { SatelliteIcon, CpuIcon } from "lucide-react";
 import {
@@ -31,11 +32,41 @@ interface TelemetrySource {
   source_type: string;
   base_url?: string | null;
   vehicle_config_path?: string;
+  monitoring_start_time?: string;
+  last_reconciled_at?: string | null;
+  history_mode?: "live_only" | "time_window_replay" | "cursor_replay";
+  live_state?: "idle" | "active" | "error";
+  backfill_state?: "idle" | "running" | "complete" | "error";
 }
 
 interface SimulatorStatus {
   connected: boolean;
   state?: "idle" | "running" | "paused";
+}
+
+type HistoryMode = "live_only" | "time_window_replay" | "cursor_replay";
+
+function toDateTimeLocalValue(value: Date = new Date()) {
+  const offsetMs = value.getTimezoneOffset() * 60 * 1000;
+  return new Date(value.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function dateTimeLocalToIso(value: string) {
+  return new Date(value).toISOString();
+}
+
+function formatIngestionTime(value?: string | null) {
+  if (!value) return "Not reconciled";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
+function historyModeLabel(value?: HistoryMode) {
+  if (value === "live_only") return "Live only";
+  if (value === "cursor_replay") return "Cursor replay";
+  return "Time window replay";
 }
 
 export default function SourcesPage() {
@@ -45,12 +76,16 @@ export default function SourcesPage() {
   const [wizardName, setWizardName] = useState("");
   const [wizardBaseUrl, setWizardBaseUrl] = useState("");
   const [wizardDefinitionPath, setWizardDefinitionPath] = useState("");
+  const [wizardMonitoringStart, setWizardMonitoringStart] = useState(toDateTimeLocalValue());
+  const [wizardHistoryMode, setWizardHistoryMode] = useState<HistoryMode>("live_only");
   const [wizardSubmitting, setWizardSubmitting] = useState(false);
   const [wizardError, setWizardError] = useState<string | null>(null);
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editDefinitionPath, setEditDefinitionPath] = useState("");
+  const [editMonitoringStart, setEditMonitoringStart] = useState("");
+  const [editHistoryMode, setEditHistoryMode] = useState<HistoryMode>("time_window_replay");
   const [editError, setEditError] = useState<string | null>(null);
   const sourcesQuery = useTelemetrySourcesQuery<TelemetrySource[]>();
   const createSourceMutation = useCreateTelemetrySourceMutation();
@@ -72,6 +107,8 @@ export default function SourcesPage() {
     setWizardName("");
     setWizardBaseUrl("");
     setWizardDefinitionPath("");
+    setWizardMonitoringStart(toDateTimeLocalValue());
+    setWizardHistoryMode("live_only");
     setWizardError(null);
     setWizardOpen(true);
   }
@@ -91,6 +128,10 @@ export default function SourcesPage() {
       setWizardError("Simulator base URL is required");
       return;
     }
+    if (!wizardMonitoringStart) {
+      setWizardError("Monitoring start time is required");
+      return;
+    }
     setWizardSubmitting(true);
     setWizardError(null);
     try {
@@ -99,6 +140,8 @@ export default function SourcesPage() {
         name: wizardName.trim(),
         base_url: wizardType === "simulator" ? wizardBaseUrl.trim() : undefined,
         vehicle_config_path: wizardDefinitionPath.trim(),
+        monitoring_start_time: dateTimeLocalToIso(wizardMonitoringStart),
+        history_mode: wizardHistoryMode,
       });
       setWizardOpen(false);
     } catch (e) {
@@ -113,6 +156,10 @@ export default function SourcesPage() {
     setEditName(source.name);
     setEditBaseUrl(source.base_url || "");
     setEditDefinitionPath(source.vehicle_config_path || "");
+    setEditMonitoringStart(
+      source.monitoring_start_time ? toDateTimeLocalValue(new Date(source.monitoring_start_time)) : toDateTimeLocalValue()
+    );
+    setEditHistoryMode(source.history_mode || (source.source_type === "simulator" ? "live_only" : "time_window_replay"));
     setEditError(null);
   }
 
@@ -120,6 +167,10 @@ export default function SourcesPage() {
     if (!editingSourceId) return;
     const source = sources.find((entry) => entry.id === editingSourceId);
     const isSimulator = source?.source_type === "simulator";
+    if (!editMonitoringStart) {
+      setEditError("Monitoring start time is required");
+      return;
+    }
     try {
       setEditError(null);
       await updateSourceMutation.mutateAsync({
@@ -127,6 +178,8 @@ export default function SourcesPage() {
         name: editName.trim(),
         base_url: editBaseUrl.trim() || undefined,
         vehicle_config_path: isSimulator ? undefined : editDefinitionPath.trim() || undefined,
+        monitoring_start_time: dateTimeLocalToIso(editMonitoringStart),
+        history_mode: editHistoryMode,
       });
       setEditingSourceId(null);
     } catch (error) {
@@ -182,6 +235,9 @@ export default function SourcesPage() {
                               {s.description}
                             </span>
                           )}
+                          <p className="text-muted-foreground mt-1 text-xs">
+                            Live {s.live_state || "idle"} · Backfill {s.backfill_state || "idle"} · {historyModeLabel(s.history_mode)}
+                          </p>
                         </div>
                         <div className="flex gap-2">
                           {!isEditing ? (
@@ -212,9 +268,10 @@ export default function SourcesPage() {
                         </div>
                       </div>
                       {!isEditing ? (
-                        <p className="text-muted-foreground font-mono text-xs">
-                          {s.vehicle_config_path || "—"}
-                        </p>
+                        <div className="text-muted-foreground space-y-1 text-xs">
+                          <p className="font-mono">{s.vehicle_config_path || "—"}</p>
+                          <p>Last reconciled: {formatIngestionTime(s.last_reconciled_at)}</p>
+                        </div>
                       ) : (
                         <div className="space-y-2">
                           <div className="grid gap-2 sm:grid-cols-2">
@@ -235,6 +292,29 @@ export default function SourcesPage() {
                                 onChange={(e) => setEditDefinitionPath(e.target.value)}
                                 className="mt-1"
                               />
+                            </div>
+                            <div>
+                              <Label htmlFor={`edit-monitoring-${s.id}`}>Monitoring Start</Label>
+                              <Input
+                                id={`edit-monitoring-${s.id}`}
+                                type="datetime-local"
+                                value={editMonitoringStart}
+                                onChange={(e) => setEditMonitoringStart(e.target.value)}
+                                className="mt-1"
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor={`edit-history-${s.id}`}>History Mode</Label>
+                              <Select value={editHistoryMode} onValueChange={(value) => setEditHistoryMode(value as HistoryMode)}>
+                                <SelectTrigger id={`edit-history-${s.id}`} className="mt-1 w-full">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="live_only">Live only</SelectItem>
+                                  <SelectItem value="time_window_replay">Time window replay</SelectItem>
+                                  <SelectItem value="cursor_replay">Cursor replay</SelectItem>
+                                </SelectContent>
+                              </Select>
                             </div>
                           </div>
                           {editError ? <p className="text-destructive text-sm">{editError}</p> : null}
@@ -271,11 +351,18 @@ export default function SourcesPage() {
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
-                          <span className="font-medium">{s.name}</span>
-                          <SimulatorStatusBadge
-                            connected={connected}
-                            state={status?.state}
-                          />
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{s.name}</span>
+                              <SimulatorStatusBadge
+                                connected={connected}
+                                state={status?.state}
+                              />
+                            </div>
+                            <p className="text-muted-foreground mt-1 text-xs">
+                              Live {s.live_state || "idle"} · Backfill {s.backfill_state || "complete"} · {historyModeLabel(s.history_mode)}
+                            </p>
+                          </div>
                         </div>
                         <div className="flex gap-2">
                           {!isEditing ? (
@@ -316,6 +403,7 @@ export default function SourcesPage() {
                         <div className="text-muted-foreground space-y-1 font-mono text-xs">
                           <p>{s.base_url || "—"}</p>
                           <p>{s.vehicle_config_path || "—"}</p>
+                          <p className="font-sans">Last reconciled: {formatIngestionTime(s.last_reconciled_at)}</p>
                         </div>
                       ) : (
                         <div className="space-y-2">
@@ -338,6 +426,29 @@ export default function SourcesPage() {
                                 placeholder="http://simulator:8001"
                                 className="mt-1"
                               />
+                            </div>
+                            <div>
+                              <Label htmlFor={`edit-monitoring-${s.id}`}>Monitoring Start</Label>
+                              <Input
+                                id={`edit-monitoring-${s.id}`}
+                                type="datetime-local"
+                                value={editMonitoringStart}
+                                onChange={(e) => setEditMonitoringStart(e.target.value)}
+                                className="mt-1"
+                              />
+                            </div>
+                            <div>
+                              <Label htmlFor={`edit-history-${s.id}`}>History Mode</Label>
+                              <Select value={editHistoryMode} onValueChange={(value) => setEditHistoryMode(value as HistoryMode)}>
+                                <SelectTrigger id={`edit-history-${s.id}`} className="mt-1 w-full">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="live_only">Live only</SelectItem>
+                                  <SelectItem value="time_window_replay">Time window replay</SelectItem>
+                                  <SelectItem value="cursor_replay">Cursor replay</SelectItem>
+                                </SelectContent>
+                              </Select>
                             </div>
                           </div>
                           {editError ? <p className="text-destructive text-sm">{editError}</p> : null}
@@ -375,6 +486,7 @@ export default function SourcesPage() {
                 type="button"
                 onClick={() => {
                   setWizardType("vehicle");
+                  setWizardHistoryMode("time_window_replay");
                   handleWizardNext();
                 }}
                 className="border-input bg-background hover:bg-accent hover:text-accent-foreground flex items-start gap-4 rounded-lg border p-4 text-left transition-colors"
@@ -393,6 +505,7 @@ export default function SourcesPage() {
                 type="button"
                 onClick={() => {
                   setWizardType("simulator");
+                  setWizardHistoryMode("live_only");
                   handleWizardNext();
                 }}
                 className="border-input bg-background hover:bg-accent hover:text-accent-foreground flex items-start gap-4 rounded-lg border p-4 text-left transition-colors"
@@ -429,6 +542,31 @@ export default function SourcesPage() {
                   placeholder={wizardType === "simulator" ? "simulators/drogonsat.yaml" : "vehicles/aegon-relay.yaml"}
                   className="mt-1"
                 />
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="wizard-monitoring-start">Monitoring Start</Label>
+                  <Input
+                    id="wizard-monitoring-start"
+                    type="datetime-local"
+                    value={wizardMonitoringStart}
+                    onChange={(e) => setWizardMonitoringStart(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="wizard-history-mode">History Mode</Label>
+                  <Select value={wizardHistoryMode} onValueChange={(value) => setWizardHistoryMode(value as HistoryMode)}>
+                    <SelectTrigger id="wizard-history-mode" className="mt-1 w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="live_only">Live only</SelectItem>
+                      <SelectItem value="time_window_replay">Time window replay</SelectItem>
+                      <SelectItem value="cursor_replay">Cursor replay</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               {wizardType === "simulator" ? (
                 <div>

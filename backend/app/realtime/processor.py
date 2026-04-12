@@ -56,6 +56,25 @@ def _parse_time(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+def _is_current_candidate_newer(
+    *,
+    gen_time: datetime,
+    recv_time: datetime,
+    sequence: int,
+    current,
+) -> bool:
+    if gen_time > current.generation_time:
+        return True
+    if gen_time < current.generation_time:
+        return False
+    if recv_time > current.reception_time:
+        return True
+    if recv_time < current.reception_time:
+        return False
+    current_sequence = current.sequence if current.sequence is not None else -1
+    return sequence >= current_sequence
+
+
 def _get_orbit_mappings(db: Session) -> dict[str, dict[str, str]]:
     """Return source_id -> frame-aware channel mapping for orbit ingestion."""
     stmt = (
@@ -245,6 +264,9 @@ class RealtimeProcessor:
         """Process single measurement: validate, persist, update current, check alerts."""
         source_id = normalize_source_id(event.source_id)
         stream_id = event.stream_id
+        if event.sequence is None:
+            logger.warning("Skipping measurement without required sequence")
+            return
         gen_time = _parse_time(event.generation_time)
         recv_time = (
             _parse_time(event.reception_time)
@@ -307,6 +329,7 @@ class RealtimeProcessor:
                     stream_id=stream_id,
                     telemetry_id=meta.id,
                     timestamp=gen_time,
+                    sequence=event.sequence,
                     value=Decimal(str(event.value)),
                     packet_source=event.packet_source,
                     receiver_id=event.receiver_id,
@@ -320,9 +343,14 @@ class RealtimeProcessor:
         else:
             savepoint.commit()
 
-        # Out-of-order: only update current if generation_time is newer
+        # Out-of-order: only update current if the event is newer by time, then sequence.
         current = db.get(TelemetryCurrent, (stream_id, meta.id))
-        if current and gen_time <= current.generation_time:
+        if current and not _is_current_candidate_newer(
+            gen_time=gen_time,
+            recv_time=recv_time,
+            sequence=event.sequence,
+            current=current,
+        ):
             return
 
         # Compute state

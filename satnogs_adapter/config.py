@@ -3,29 +3,29 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
-from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from satnogs_adapter.decoders.models import DecoderConfig
 from telemetry_catalog.definitions import VehicleConfigurationFile, load_vehicle_config_file
 
 
 class PlatformConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     ingest_url: str
     observations_batch_upsert_url: str
-    source_id: str | None = None
-    source_resolve_url: str | None = None
+    source_resolve_url: str
+    backfill_progress_url: str = "http://backend:8000/telemetry/sources/{source_id}/backfill-progress"
+    live_state_url: str = "http://backend:8000/telemetry/sources/{source_id}/live-state"
 
     @model_validator(mode="after")
     def validate_source_identity(self) -> "PlatformConfig":
-        if self.source_id == "":
-            self.source_id = None
-        if self.source_resolve_url == "":
-            self.source_resolve_url = None
-        if not self.source_id and not self.source_resolve_url:
-            raise ValueError("platform.source_id or platform.source_resolve_url is required")
+        if not self.source_resolve_url.strip():
+            raise ValueError("platform.source_resolve_url is required")
         return self
 
 
@@ -54,16 +54,6 @@ class SatnogsConfig(BaseModel):
         return self
 
 
-class BackfillConfig(BaseModel):
-    enabled: bool = False
-    mode: Literal["seed", "bounded_range"] = "bounded_range"
-    start_time: str | None = None
-    end_time: str | None = None
-    max_observations_per_run: int = 250
-    requests_per_minute: int = 20
-    checkpoint_store_path: str = "tmp/satnogs-adapter/checkpoints.json"
-
-
 class RetryConfig(BaseModel):
     max_attempts: int = 3
     backoff_seconds: float = 1.0
@@ -82,17 +72,15 @@ class DlqConfig(BaseModel):
     write_observation_dlq: bool = True
 
 
-class CheckpointConfig(BaseModel):
-    path: str = "tmp/satnogs-adapter/checkpoints.json"
-
-
 class VehicleConfig(BaseModel):
     slug: str = "lasarsat"
     name: str = "LASARSAT"
     norad_id: int
     allowed_source_callsigns: list[str] = Field(default_factory=lambda: ["OK0LSR"])
     vehicle_config_path: str = "vehicles/lasarsat.yaml"
+    monitoring_start_time: datetime | None = None
     stable_field_mappings: dict[str, str] = Field(default_factory=dict)
+    decoder: DecoderConfig = Field(default_factory=DecoderConfig)
 
 
 class AdapterConfig(BaseModel):
@@ -101,9 +89,7 @@ class AdapterConfig(BaseModel):
     platform: PlatformConfig
     vehicle: VehicleConfig
     satnogs: SatnogsConfig
-    backfill: BackfillConfig = Field(default_factory=BackfillConfig)
     publisher: PublisherConfig = Field(default_factory=PublisherConfig)
-    checkpoints: CheckpointConfig = Field(default_factory=CheckpointConfig)
     dlq: DlqConfig = Field(default_factory=DlqConfig)
 
     def load_definition(self) -> VehicleConfigurationFile:

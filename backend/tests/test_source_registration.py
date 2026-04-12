@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import sys
 import uuid
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 from types import SimpleNamespace
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +22,8 @@ from app.services.realtime_service import repair_registered_sources_on_startup
 from app.services.realtime_service import register_source_if_missing
 from app.services.realtime_service import resolve_source
 from app.services.realtime_service import source_has_telemetry_history
+from app.services.realtime_service import update_backfill_progress
+from app.services.realtime_service import update_live_state
 from app.services.realtime_service import update_source
 from app.models.telemetry import TelemetryChannelAlias
 from app.models.telemetry import TelemetryMetadata
@@ -256,6 +259,45 @@ def test_resolve_source_returns_existing_auto_registered_vehicle_without_mutatin
     assert existing.name == "International Space Station"
     assert existing.description == "Auto-registered from vehicle configuration: vehicles/iss.yaml"
     assert create_calls == []
+
+
+def test_resolve_source_applies_first_run_monitoring_start_to_existing_source(monkeypatch) -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    existing = MagicMock()
+    existing.id = "source-lasarsat"
+    existing.name = "LASARSAT"
+    existing.description = "Auto-registered from vehicle configuration: vehicles/lasarsat.yaml"
+    existing.source_type = "vehicle"
+    existing.base_url = None
+    existing.vehicle_config_path = "vehicles/lasarsat.yaml"
+    existing.monitoring_start_time = datetime(2026, 4, 11, 20, tzinfo=timezone.utc)
+    existing.last_reconciled_at = None
+    existing.history_mode = "time_window_replay"
+    existing.backfill_state = "complete"
+    existing.live_state = "idle"
+    existing.active_backfill_target_time = None
+    monkeypatch.setattr(
+        "app.services.realtime_service.get_source_by_vehicle_config_path",
+        lambda _db, _path: existing,
+    )
+
+    start = datetime(2026, 4, 11, 18, tzinfo=timezone.utc)
+    result, created = resolve_source(
+        db,
+        embedding_provider=embedding_provider,
+        source_type="vehicle",
+        name="LASARSAT",
+        vehicle_config_path="vehicles/lasarsat.yaml",
+        monitoring_start_time=start,
+    )
+
+    assert created is False
+    assert existing.monitoring_start_time == start
+    assert existing.backfill_state == "idle"
+    db.commit.assert_called_once()
+    db.refresh.assert_called_once_with(existing)
+    assert result["monitoring_start_time"] == start
 
 
 def test_register_source_if_missing_rereads_winner_after_unique_conflict(monkeypatch) -> None:
@@ -1133,6 +1175,8 @@ def test_seed_metadata_merges_discovered_alias_conflict_into_canonical_channel(m
     assert any("tmp_same_source_stream_scope" in stmt for stmt in statements)
     data_merge_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_data" in stmt)
     current_merge_sql = next(stmt for stmt in statements if "INSERT INTO telemetry_current" in stmt)
+    assert "sequence" in data_merge_sql
+    assert "ON CONFLICT (source_id, telemetry_id, timestamp, sequence)" in data_merge_sql
     assert "packet_source" in data_merge_sql
     assert "receiver_id" in data_merge_sql
     assert "packet_source" in current_merge_sql
@@ -1698,3 +1742,156 @@ def test_update_source_rejects_simulator_definition_path_changes() -> None:
         )
 
     assert "Cannot change vehicle_config_path for simulator sources" in str(exc_info.value)
+
+
+def test_infer_auto_registration_fields_reads_simulator_base_url_from_full_config() -> None:
+    item = SimpleNamespace(category="simulators")
+    loaded = SimpleNamespace(
+        path="simulators/drogonsat.yaml",
+        parsed=SimpleNamespace(name="DrogonSat"),
+    )
+
+    fields = infer_auto_registration_fields("simulators/drogonsat.yaml", item, loaded)
+
+    assert fields["source_type"] == "simulator"
+    assert fields["base_url"] == "http://simulator:8001"
+
+
+def test_update_source_live_only_history_mode_marks_backfill_complete() -> None:
+    db = MagicMock()
+    embedding_provider = MagicMock()
+    existing = MagicMock()
+    existing.id = "source-1"
+    existing.source_type = "vehicle"
+    existing.history_mode = "time_window_replay"
+    existing.backfill_state = "running"
+    existing.last_reconciled_at = datetime.now(timezone.utc)
+    db.get.return_value = existing
+
+    update_source(
+        db,
+        embedding_provider=embedding_provider,
+        source_id=existing.id,
+        history_mode="live_only",
+    )
+
+    assert existing.history_mode == "live_only"
+    assert existing.backfill_state == "complete"
+    assert existing.active_backfill_target_time is None
+    assert existing.last_backfill_error is None
+
+
+def test_backfill_progress_started_supersedes_running_target(monkeypatch) -> None:
+    db = MagicMock()
+    source = MagicMock()
+    source.backfill_state = "running"
+    source.active_backfill_target_time = datetime(2026, 4, 10, 12, tzinfo=timezone.utc)
+    source.last_reconciled_at = datetime(2026, 4, 10, 9, tzinfo=timezone.utc)
+    db.get.return_value = source
+    target = datetime(2026, 4, 10, 13, tzinfo=timezone.utc)
+    audit_events = []
+    monkeypatch.setattr(
+        "app.services.realtime_service.audit_log",
+        lambda action, **kwargs: audit_events.append((action, kwargs)),
+    )
+
+    update_backfill_progress(
+        db,
+        source_id="source-1",
+        status="started",
+        target_time=target,
+    )
+
+    assert source.backfill_state == "running"
+    assert source.active_backfill_target_time == target
+    assert source.last_reconciled_at == datetime(2026, 4, 10, 9, tzinfo=timezone.utc)
+    assert source.last_backfill_error is None
+    assert audit_events == [
+        (
+            "sources.backfill_superseded",
+            {
+                "level": "warning",
+                "source_id": "source-1",
+                "old_target_time": datetime(2026, 4, 10, 12, tzinfo=timezone.utc),
+                "new_target_time": target,
+            },
+        )
+    ]
+
+
+def test_backfill_completed_rejects_mismatched_target() -> None:
+    db = MagicMock()
+    source = MagicMock()
+    source.backfill_state = "running"
+    source.active_backfill_target_time = datetime(2026, 4, 10, 12, tzinfo=timezone.utc)
+    db.get.return_value = source
+
+    with pytest.raises(ValueError, match="target_time"):
+        update_backfill_progress(
+            db,
+            source_id="source-1",
+            status="completed",
+            target_time=datetime(2026, 4, 10, 13, tzinfo=timezone.utc),
+            chunk_end=datetime(2026, 4, 10, 13, tzinfo=timezone.utc),
+        )
+
+
+def test_backfill_completed_rejects_superseded_target(monkeypatch) -> None:
+    db = MagicMock()
+    source = MagicMock()
+    old_target = datetime(2026, 4, 10, 12, tzinfo=timezone.utc)
+    new_target = datetime(2026, 4, 10, 13, tzinfo=timezone.utc)
+    source.backfill_state = "running"
+    source.active_backfill_target_time = old_target
+    db.get.return_value = source
+    monkeypatch.setattr("app.services.realtime_service.audit_log", lambda *args, **kwargs: None)
+
+    update_backfill_progress(
+        db,
+        source_id="source-1",
+        status="started",
+        target_time=new_target,
+    )
+
+    with pytest.raises(ValueError, match="target_time"):
+        update_backfill_progress(
+            db,
+            source_id="source-1",
+            status="completed",
+            target_time=old_target,
+            chunk_end=old_target,
+        )
+
+
+def test_backfill_completed_advances_checkpoint_and_clears_target() -> None:
+    db = MagicMock()
+    source = MagicMock()
+    source.backfill_state = "running"
+    target = datetime(2026, 4, 10, 12, tzinfo=timezone.utc)
+    chunk_end = datetime(2026, 4, 10, 10, tzinfo=timezone.utc)
+    source.active_backfill_target_time = target
+    db.get.return_value = source
+
+    update_backfill_progress(
+        db,
+        source_id="source-1",
+        status="completed",
+        target_time=target,
+        chunk_end=chunk_end,
+        backlog_drained=True,
+    )
+
+    assert source.last_reconciled_at == chunk_end
+    assert source.backfill_state == "complete"
+    assert source.active_backfill_target_time is None
+    assert source.last_backfill_error is None
+
+
+def test_update_live_state_sets_durable_source_state() -> None:
+    db = MagicMock()
+    source = MagicMock()
+    db.get.return_value = source
+
+    update_live_state(db, source_id="source-1", state="active")
+
+    assert source.live_state == "active"
