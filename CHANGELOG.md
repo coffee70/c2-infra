@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Telemetry detail data scope** — Channel detail pages now use one page-wide Data Scope for Summary, Live & Trends, History, Explanation, and Events. Operators can view latest data, selected streams, selected streams with time bounds, or all channel data in a date range from one control above the tabs.
 - **Telemetry inventory section and detail reparenting** — Added a dedicated top-level Telemetry section for source-scoped channel browsing and watchlist discovery, moved canonical channel detail routes to `/telemetry/{source_id}/{channel_name}`, and removed the old Sources-scoped telemetry detail path.
 - **SatNOGS adapter satellite/transmitter identity** — The adapter now requires `vehicle.norad_id`, `satnogs.transmitter_uuid`, and `satnogs.status`, queries observations with `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, deduplicates by SatNOGS observation ID, and keeps transmitter UUID out of backend ingest payloads and tags.
 - **SatNOGS adapter source identity** — The adapter now resolves its backend vehicle source automatically at startup through `platform.source_resolve_url`. `platform.source_id` remains available as an override, but normal operation no longer requires copying backend UUIDs into YAML.

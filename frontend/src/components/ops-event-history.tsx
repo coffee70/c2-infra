@@ -42,20 +42,21 @@ function formatTime(iso: string): string {
 export function OpsEventHistory({ vehicleId, streamId }: OpsEventHistoryProps) {
   const [rangeMinutes, setRangeMinutes] = useState(15);
   const [eventTypeFilter, setEventTypeFilter] = useState<string>("all");
-  const params: Record<string, string> = {
+  const params = new URLSearchParams({
     source_id: vehicleId,
+    scope: streamId ? "streams" : "latest",
     since_minutes: String(rangeMinutes),
     limit: "100",
     offset: "0",
-  };
+  });
   if (streamId) {
-    params.stream_id = streamId;
+    params.append("stream_ids", streamId);
   }
   if (eventTypeFilter !== "all") {
     if (eventTypeFilter === "alerts") {
-      params.event_types = "alert.opened,alert.cleared,alert.acked,alert.resolved";
+      params.set("event_types", "alert.opened,alert.cleared,alert.acked,alert.resolved");
     } else if (eventTypeFilter === "system") {
-      params.event_types = "system.feed_status";
+      params.set("event_types", "system.feed_status");
     }
   }
   const eventsQuery = useOpsEventsQuery(params);
@@ -149,12 +150,17 @@ export function OpsEventHistory({ vehicleId, streamId }: OpsEventHistoryProps) {
                 </div>
                 <p className="mt-1 text-sm">{event.summary}</p>
                 {event.entity_id && (
-                  <Link
-                    href={buildTelemetryDetailHref(
-                      vehicleId,
-                      event.entity_id,
-                      event.stream_id ?? streamId ?? undefined,
-                    )}
+	                  <Link
+	                    href={buildTelemetryDetailHref(
+	                      vehicleId,
+	                      event.entity_id,
+	                      event.stream_id || streamId
+                          ? {
+                              mode: "streams",
+                              streamIds: [event.stream_id ?? streamId ?? ""],
+                            }
+                          : { mode: "latest" },
+	                    )}
                     className="text-primary mt-1 inline-block text-xs hover:underline"
                   >
                     View {event.entity_id}

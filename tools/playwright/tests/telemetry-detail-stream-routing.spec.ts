@@ -4,12 +4,6 @@ const API_URL = process.env.PLAYWRIGHT_API_URL || "http://127.0.0.1:8000";
 
 test.describe.configure({ mode: "serial" });
 
-function formatStreamLabel(streamId: string): string {
-  const match = streamId.match(/-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/);
-  if (!match) return streamId;
-  return `Stream started at ${match[1]} ${match[2]}:${match[3]} UTC`;
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -21,6 +15,7 @@ async function ingestRealtimeSample(
   channelName: string,
   value: number,
   receptionTime: string,
+  sequence: number,
 ) {
   const response = await request.post(`${API_URL}/telemetry/realtime/ingest`, {
     data: {
@@ -31,6 +26,7 @@ async function ingestRealtimeSample(
           channel_name: channelName,
           value,
           reception_time: receptionTime,
+          sequence,
         },
       ],
     },
@@ -41,7 +37,16 @@ async function ingestRealtimeSample(
   expect(payload.accepted).toBe(1);
 }
 
-test("telemetry detail preserves source scope while honoring stream query", async ({
+async function getRegisteredSourceId(request: APIRequestContext): Promise<string> {
+  const sourcesResponse = await request.get(`${API_URL}/telemetry/sources`);
+  expect(sourcesResponse.ok()).toBeTruthy();
+  const sources = (await sourcesResponse.json()) as Array<{ id?: string }>;
+  const sourceId = sources.find((source) => typeof source.id === "string" && source.id.length > 0)?.id;
+  expect(sourceId).toBeTruthy();
+  return sourceId!;
+}
+
+test("telemetry detail applies repeated stream_ids scope", async ({
   page,
   request,
 }) => {
@@ -90,28 +95,28 @@ test("telemetry detail preserves source scope while honoring stream query", asyn
   expect(selected).toBeTruthy();
   if (!selected) return;
 
-  const expectedStreamLabel = formatStreamLabel(selected.streamId);
   await page.goto(
-    `/telemetry/${encodeURIComponent(selected.sourceId)}/${encodeURIComponent(selected.channelName)}?stream_id=${encodeURIComponent(selected.streamId)}`,
+    `/telemetry/${encodeURIComponent(selected.sourceId)}/${encodeURIComponent(selected.channelName)}?scope=streams&stream_ids=${encodeURIComponent(selected.streamId)}`,
   );
 
   await expect(page).toHaveURL(
     new RegExp(
       `${escapeRegExp(
         `/telemetry/${selected.sourceId}/${selected.channelName}`,
-      )}\\?stream_id=${escapeRegExp(selected.streamId)}$`,
+      )}\\?scope=streams&stream_ids=${escapeRegExp(selected.streamId)}$`,
     ),
   );
 
+  await expect(page.getByText("Viewing 1 selected stream")).toBeVisible();
   await page.getByRole("tab", { name: "History" }).click();
-  await expect(page.locator("#history-stream")).toContainText(expectedStreamLabel);
+  await expect(page.locator("#history-stream")).toHaveCount(0);
 });
 
-test("telemetry history stream dropdown preserves backend ordering for opaque ids", async ({
+test("data scope stream picker preserves backend ordering for opaque ids", async ({
   page,
   request,
 }) => {
-  const sourceId = "86a0057f-4733-4de6-af60-455cb3954f1d";
+  const sourceId = await getRegisteredSourceId(request);
   const channelName = "PWR_MAIN_BUS_VOLT";
   const olderRunId = "fffffff0-0000-0000-0000-000000000000";
   const newerRunId = "00000000-0000-0000-0000-000000000001";
@@ -123,6 +128,7 @@ test("telemetry history stream dropdown preserves backend ordering for opaque id
     channelName,
     3.1,
     "2026-03-28T12:00:00Z",
+    1,
   );
   await ingestRealtimeSample(
     request,
@@ -131,6 +137,7 @@ test("telemetry history stream dropdown preserves backend ordering for opaque id
     channelName,
     3.2,
     "2026-03-28T12:05:00Z",
+    2,
   );
 
   await expect
@@ -155,24 +162,21 @@ test("telemetry history stream dropdown preserves backend ordering for opaque id
     .toBeTruthy();
 
   await page.goto(
-    `/telemetry/${encodeURIComponent(sourceId)}/${encodeURIComponent(channelName)}?stream_id=${encodeURIComponent(newerRunId)}`,
+    `/telemetry/${encodeURIComponent(sourceId)}/${encodeURIComponent(channelName)}?scope=streams&stream_ids=${encodeURIComponent(newerRunId)}`,
   );
 
   await expect(page).toHaveURL(
     new RegExp(
-      `${escapeRegExp(`/telemetry/${sourceId}/${channelName}`)}\\?stream_id=${escapeRegExp(newerRunId)}$`,
+      `${escapeRegExp(`/telemetry/${sourceId}/${channelName}`)}\\?scope=streams&stream_ids=${escapeRegExp(newerRunId)}$`,
     ),
   );
 
-  await page.getByRole("tab", { name: "History" }).click();
-  await page.locator("#history-stream").click();
+  await page.getByRole("button", { name: "Add stream" }).click();
 
-  const options = page.getByRole("option");
-  const optionTexts = await options.allTextContents();
-  expect(optionTexts[0]).toContain("Active / latest");
+  const optionTexts = await page.getByRole("button").allTextContents();
   const newerIndex = optionTexts.findIndex((text) => text.includes(newerRunId));
   const olderIndex = optionTexts.findIndex((text) => text.includes(olderRunId));
-  expect(newerIndex).toBeGreaterThan(0);
+  expect(newerIndex).toBeGreaterThanOrEqual(0);
   expect(olderIndex).toBeGreaterThan(newerIndex);
 });
 
@@ -180,8 +184,9 @@ test("telemetry detail defaults to the latest stream that contains the channel",
   page,
   request,
 }) => {
+  const sourceId = await getRegisteredSourceId(request);
   const selected = {
-    sourceId: "86a0057f-4733-4de6-af60-455cb3954f1d",
+    sourceId,
     channelName: "PWR_MAIN_BUS_VOLT",
     fallbackChannelName: "GPS_LAT",
     streamId: "selected-channel-9999-01-01T00-10-00Z",
@@ -195,6 +200,7 @@ test("telemetry detail defaults to the latest stream that contains the channel",
     selected.channelName,
     3.3,
     "9999-01-01T00:10:00Z",
+    1,
   );
   await ingestRealtimeSample(
     request,
@@ -203,6 +209,7 @@ test("telemetry detail defaults to the latest stream that contains the channel",
     selected.fallbackChannelName,
     4.56,
     "9999-01-01T00:05:00Z",
+    2,
   );
 
   await expect
@@ -238,10 +245,6 @@ test("telemetry detail defaults to the latest stream that contains the channel",
   );
 
   await page.getByRole("tab", { name: "History" }).click();
-  await expect(page.locator("#history-stream")).toContainText("Active / latest");
-  await page.locator("#history-stream").click();
-  const options = page.getByRole("option");
-  const optionTexts = await options.allTextContents();
-  expect(optionTexts.join(" ")).toContain(formatStreamLabel(selected.streamId));
-  expect(optionTexts.join(" ")).not.toContain(formatStreamLabel(newerStreamId));
+  await expect(page.locator("#history-stream")).toHaveCount(0);
+  await expect(page.getByText("Viewing latest stream").first()).toBeVisible();
 });

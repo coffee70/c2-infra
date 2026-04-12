@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
+import type { TelemetryDetailScope } from "@/lib/telemetry-detail-scope";
 
 function formatWithUnits(
   value: number,
@@ -47,10 +48,11 @@ export interface RelatedChannel {
 
 interface SimilarTelemetryCardProps {
   detailSourceId: string;
+  scope: TelemetryDetailScope;
   channels: RelatedChannel[];
 }
 
-export function SimilarTelemetryCard({ detailSourceId, channels }: SimilarTelemetryCardProps) {
+export function SimilarTelemetryCard({ detailSourceId, scope, channels }: SimilarTelemetryCardProps) {
   if (channels.length === 0) return null;
 
   return (
@@ -64,9 +66,9 @@ export function SimilarTelemetryCard({ detailSourceId, channels }: SimilarTeleme
       <CardContent>
         <ul className="space-y-2">
           {channels.map((r) => (
-            <li key={r.name}>
-              <Link
-                href={buildTelemetryDetailHref(detailSourceId, r.name)}
+	            <li key={r.name}>
+	              <Link
+	                href={buildTelemetryDetailHref(detailSourceId, r.name, scope)}
                 className="hover:bg-accent focus-visible:ring-ring text-primary block rounded-md border p-2 text-sm underline-offset-4 transition-colors duration-200 hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">

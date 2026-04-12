@@ -62,6 +62,7 @@ interface TelemetryDetailHeaderProps {
   description?: string | null;
   /** When true, show a Live badge (value is updating from stream). */
   live?: boolean;
+  scopeBadge?: string;
 }
 
 export function TelemetryDetailHeader({
@@ -76,6 +77,7 @@ export function TelemetryDetailHeader({
   lastTimestamp,
   description,
   live = false,
+  scopeBadge,
 }: TelemetryDetailHeaderProps) {
   const [copied, setCopied] = useState<string | null>(null);
   const [copyFailedKey, setCopyFailedKey] = useState<string | null>(null);
@@ -127,6 +129,11 @@ export function TelemetryDetailHeader({
               <Badge variant="default" className="shrink-0 gap-1.5 bg-emerald-600 text-xs text-white hover:bg-emerald-600">
                 <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current opacity-80" />
                 Live
+              </Badge>
+            )}
+            {!live && scopeBadge && (
+              <Badge variant="outline" className="shrink-0 text-xs">
+                {scopeBadge}
               </Badge>
             )}
             <span className="shrink-0 text-lg font-medium tabular-nums" data-value={value ?? ""}>

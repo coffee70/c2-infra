@@ -1,5 +1,10 @@
 import { notFound, redirect } from "next/navigation";
 import { TelemetryDetailTabs } from "@/components/telemetry-detail-tabs";
+import {
+  parseTelemetryDetailScope,
+  telemetryScopeToQueryParams,
+  type TelemetryDetailScope,
+} from "@/lib/telemetry-detail-scope";
 
 const API_URL =
   process.env.API_SERVER_URL ||
@@ -50,6 +55,7 @@ interface ExplainResponse {
 interface RecentPoint {
   timestamp: string;
   value: number;
+  stream_id?: string | null;
 }
 
 interface SummaryFetchResult {
@@ -60,11 +66,10 @@ interface SummaryFetchResult {
 async function fetchSummary(
   name: string,
   sourceId: string,
-  streamId?: string | null,
+  scope: TelemetryDetailScope,
 ): Promise<SummaryFetchResult> {
   try {
-    const params = new URLSearchParams();
-    if (streamId) params.set("stream_id", streamId);
+    const params = telemetryScopeToQueryParams(scope);
     const suffix = params.toString() ? `?${params.toString()}` : "";
     const res = await fetch(
       `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/summary${suffix}`,
@@ -88,11 +93,11 @@ async function fetchSummary(
 async function fetchRecent(
   name: string,
   sourceId: string,
-  streamId?: string | null,
+  scope: TelemetryDetailScope,
 ): Promise<RecentPoint[]> {
   try {
-    const params = new URLSearchParams({ limit: "100" });
-    if (streamId) params.set("stream_id", streamId);
+    const params = telemetryScopeToQueryParams(scope);
+    params.set("limit", "100");
     const res = await fetch(
       `${API_URL}/telemetry/sources/${encodeURIComponent(sourceId)}/channels/${encodeURIComponent(name)}/recent?${params.toString()}`,
       { cache: "no-store" },
@@ -116,16 +121,12 @@ export default async function TelemetryDetailPage({
   const resolvedSearchParams = await searchParams;
   const requestedSourceId = decodeURIComponent(rawSourceId);
   const decodedName = decodeURIComponent(name);
-  const requestedStreamParam = resolvedSearchParams.stream_id;
-  const requestedStreamId =
-    typeof requestedStreamParam === "string" && requestedStreamParam
-      ? requestedStreamParam
-      : null;
+  const scope = parseTelemetryDetailScope(resolvedSearchParams);
   const sourceId = requestedSourceId;
 
   const [summary, recentData] = await Promise.all([
-    fetchSummary(decodedName, sourceId, requestedStreamId),
-    fetchRecent(decodedName, sourceId, requestedStreamId),
+    fetchSummary(decodedName, sourceId, scope),
+    fetchRecent(decodedName, sourceId, scope),
   ]);
   const explain = summary.explain;
 
@@ -134,11 +135,7 @@ export default async function TelemetryDetailPage({
   }
   if (!explain) notFound();
   if (explain.name !== decodedName) {
-    const redirectParams = new URLSearchParams();
-    const selectedStream = resolvedSearchParams.stream_id;
-    if (typeof selectedStream === "string" && selectedStream) {
-      redirectParams.set("stream_id", selectedStream);
-    }
+    const redirectParams = telemetryScopeToQueryParams(scope);
     const suffix = redirectParams.toString();
     redirect(
       `/telemetry/${encodeURIComponent(requestedSourceId)}/${encodeURIComponent(explain.name)}${suffix ? `?${suffix}` : ""}`
@@ -150,7 +147,7 @@ export default async function TelemetryDetailPage({
       explain={explain}
       recentData={recentData}
       sourceId={sourceId}
-      currentStreamId={requestedStreamId}
+      scope={scope}
       decodedName={decodedName}
     />
   );

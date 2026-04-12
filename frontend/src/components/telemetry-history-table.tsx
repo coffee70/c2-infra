@@ -5,13 +5,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -20,50 +13,28 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
-import { CustomTimestampPicker } from "@/components/custom-timestamp-picker";
 import { CheckIcon, CopyIcon, FlagIcon, FlagOffIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
 import {
-  useTelemetryChannelStreamsQuery,
-  useTelemetryRecentQuery,
+  useTelemetryScopedRecentQuery,
   type HistoryPoint,
 } from "@/lib/query-hooks";
-
-type TimePreset = 15 | 60 | 360 | 1440;
-
-const RANGE_PRESETS: { label: string; minutes: TimePreset }[] = [
-  { label: "15 min", minutes: 15 },
-  { label: "1 hr", minutes: 60 },
-  { label: "6 hr", minutes: 360 },
-  { label: "24 hr", minutes: 1440 },
-];
-
-const ACTIVE_LATEST_VALUE = "__active_latest__";
+import { telemetryScopeSummary, type TelemetryDetailScope } from "@/lib/telemetry-detail-scope";
 
 interface TelemetryHistoryTableProps {
   channelName: string;
   /** Source (banner source id); streams dropdown is scoped to this source. */
   sourceId: string;
-  /** Default stream to select (e.g. current stream for Summary/Live); table and exports use selected stream. */
-  defaultStreamId?: string;
+  scope: TelemetryDetailScope;
   units?: string | null;
 }
 
 interface DownloadMeta {
-  sinceIso?: string;
-  untilIso?: string;
   requestedSince?: string | null;
   requestedUntil?: string | null;
   effectiveSince?: string | null;
   effectiveUntil?: string | null;
   appliedTimeFilter?: boolean;
   fallbackToRecent?: boolean;
-}
-
-function toIsoMinutesAgo(minutes: number): string {
-  const d = new Date();
-  d.setMinutes(d.getMinutes() - minutes);
-  return d.toISOString();
 }
 
 function formatTimestamp(iso: string, useUTC: boolean): string {
@@ -83,12 +54,14 @@ function buildCsv(
   rows: HistoryPoint[],
   channelName: string,
   sourceId: string,
+  includeStream: boolean,
 ): string {
-  const header = "channel_name,source_id,timestamp_utc,value\n";
+  const header = `channel_name,source_id${includeStream ? ",stream_id" : ""},timestamp_utc,value\n`;
   const lines = rows.map((r) =>
     [
       JSON.stringify(channelName),
       JSON.stringify(sourceId),
+      ...(includeStream ? [JSON.stringify(r.stream_id ?? "")] : []),
       JSON.stringify(r.timestamp),
       r.value,
     ].join(","),
@@ -111,48 +84,20 @@ function triggerDownload(filename: string, mime: string, data: BlobPart) {
 export function TelemetryHistoryTable({
   channelName,
   sourceId,
-  defaultStreamId,
+  scope,
   units,
 }: TelemetryHistoryTableProps) {
-  const [rangeMinutes, setRangeMinutes] = useState<TimePreset>(60);
-  const [customSince, setCustomSince] = useState<string | null>(null);
-  const [useCustom, setUseCustom] = useState(false);
   const [useUTC, setUseUTC] = useState(true);
   const [valueFilter, setValueFilter] = useState("");
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [selectedStreamOverride, setSelectedStreamOverride] = useState<string | null>(null);
-  const selectedStreamId = selectedStreamOverride ?? defaultStreamId ?? "";
-
-  const streamsQuery = useTelemetryChannelStreamsQuery(channelName, sourceId);
-  const streams = useMemo(() => streamsQuery.data ?? [], [streamsQuery.data]);
-
-  const sinceIso = useMemo(
-    () => (useCustom && customSince ? customSince : toIsoMinutesAgo(rangeMinutes)),
-    [customSince, rangeMinutes, useCustom]
-  );
-  const limit = useMemo(() => {
-    if (useCustom && customSince) {
-      const now = new Date();
-      const sinceDate = new Date(customSince);
-      const minutesBack = Math.max(
-        0,
-        Math.round((now.getTime() - sinceDate.getTime()) / 60000),
-      );
-      if (minutesBack <= 60) return 500;
-      if (minutesBack <= 1440) return 1000;
-      return 2000;
-    }
-    return rangeMinutes <= 60 ? 500 : 1000;
-  }, [customSince, rangeMinutes, useCustom]);
-
-  const historyQuery = useTelemetryRecentQuery({
+  const limit = scope.mode === "latest" ? "500" : "2000";
+  const historyQuery = useTelemetryScopedRecentQuery(
     channelName,
-    catalogSourceId: sourceId,
-    limit: String(limit),
-    since: sinceIso,
-    ...(selectedStreamId ? { stream_id: selectedStreamId } : {}),
-  });
+    sourceId,
+    scope,
+    limit,
+  );
   const rows = useMemo(() => historyQuery.data?.data ?? [], [historyQuery.data]);
   const loading = historyQuery.isLoading || historyQuery.isFetching;
   const error = historyQuery.isError ? historyQuery.error.message : null;
@@ -161,8 +106,6 @@ export function TelemetryHistoryTable({
     () =>
       historyQuery.data
         ? {
-            sinceIso,
-            untilIso: undefined,
             requestedSince: historyQuery.data.requested_since ?? null,
             requestedUntil: historyQuery.data.requested_until ?? null,
             effectiveSince: historyQuery.data.effective_since ?? null,
@@ -171,7 +114,7 @@ export function TelemetryHistoryTable({
             fallbackToRecent: Boolean(historyQuery.data.fallback_to_recent),
         }
         : {},
-    [historyQuery.data, sinceIso]
+    [historyQuery.data]
   );
 
   /** Parse ">10", "< 0", ">=5", "<=", "42" etc. and filter rows by numeric comparison or substring. */
@@ -223,11 +166,12 @@ export function TelemetryHistoryTable({
 
   const handleExportCsv = () => {
     if (!filteredRows.length) return;
-    const exportSourceId = selectedStreamId || sourceId;
-    const csv = buildCsv(filteredRows, channelName, exportSourceId);
-    const { sinceIso, untilIso } = downloadMeta;
+    const csv = buildCsv(filteredRows, channelName, sourceId, showStreamColumn);
+    const { requestedSince, requestedUntil, effectiveSince, effectiveUntil } = downloadMeta;
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = exportSourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = sourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const sinceIso = requestedSince ?? effectiveSince ?? undefined;
+    const untilIso = requestedUntil ?? effectiveUntil ?? undefined;
     const suffix =
       sinceIso && untilIso
         ? `${sinceIso}_${untilIso}`
@@ -240,14 +184,14 @@ export function TelemetryHistoryTable({
 
   const handleExportJson = () => {
     if (!filteredRows.length) return;
-    const exportSourceId = selectedStreamId || sourceId;
     const payload = {
       channel_name: channelName,
-      source_id: exportSourceId,
+      source_id: sourceId,
+      scope,
       points: filteredRows,
     };
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = exportSourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = sourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
     const filename = `${safeChannel}_${safeSource}_history.json`;
     triggerDownload(
       filename,
@@ -258,7 +202,7 @@ export function TelemetryHistoryTable({
 
   const handleExportParquet = () => {
     const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = (selectedStreamId || sourceId).replace(/[^a-zA-Z0-9_-]+/g, "_");
+    const safeSource = sourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
     const filename = `${safeChannel}_${safeSource}_history.parquet.txt`;
     const note =
       "# Parquet export\n" +
@@ -273,38 +217,11 @@ export function TelemetryHistoryTable({
   const total = rows.length;
   const visible = filteredRows.length;
   const fallbackToRecent = downloadMeta.fallbackToRecent ?? false;
-
-  const streamOptions = useMemo(() => {
-    const getStreamKey = (stream: { stream_id?: string }) => stream.stream_id ?? "";
-    const byId = new Map<string, { stream_id?: string; label: string }>();
-    for (const stream of streams) {
-      const key = getStreamKey(stream);
-      if (!byId.has(key)) {
-        byId.set(key, stream);
-      }
-    }
-    if (selectedStreamId && !byId.has(selectedStreamId)) {
-      byId.set(selectedStreamId, {
-        stream_id: selectedStreamId,
-        label:
-          /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}/.test(selectedStreamId)
-            ? (() => {
-                const m = selectedStreamId.match(
-                  /-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/,
-                );
-                return m
-                  ? `Stream started at ${m[1]} ${m[2]}:${m[3]} UTC`
-                  : selectedStreamId;
-              })()
-            : selectedStreamId,
-      });
-    }
-    return Array.from(byId.values());
-  }, [selectedStreamId, streams]);
+  const streamCount = new Set(rows.map((row) => row.stream_id).filter(Boolean)).size;
+  const showStreamColumn = streamCount > 1 || scope.mode === "streams";
 
   const handleCopyRow = async (point: HistoryPoint) => {
-    const exportSourceId = selectedStreamId || sourceId;
-    const line = `channel=${channelName} source=${exportSourceId} timestamp=${point.timestamp} value=${point.value}`;
+    const line = `channel=${channelName} source=${sourceId}${point.stream_id ? ` stream=${point.stream_id}` : ""} timestamp=${point.timestamp} value=${point.value}`;
     await navigator.clipboard.writeText(line);
     setCopiedKey(point.timestamp);
     setTimeout(() => {
@@ -353,72 +270,12 @@ export function TelemetryHistoryTable({
                 Local
               </Button>
             </div>
-            <Select
-              value={useCustom ? "custom" : String(rangeMinutes)}
-              onValueChange={(v) => {
-                if (v === "custom") {
-                  setUseCustom(true);
-                  const iso = toIsoMinutesAgo(60);
-                  setCustomSince(iso);
-                } else {
-                  setUseCustom(false);
-                  setRangeMinutes(Number(v) as TimePreset);
-                }
-              }}
-            >
-              <SelectTrigger size="sm" className="w-[140px] text-xs">
-                <SelectValue placeholder="Range" />
-              </SelectTrigger>
-              <SelectContent>
-                {RANGE_PRESETS.map((p) => (
-                  <SelectItem key={p.minutes} value={String(p.minutes)}>
-                    {p.label}
-                  </SelectItem>
-                ))}
-                <SelectItem value="custom">Custom</SelectItem>
-              </SelectContent>
-            </Select>
-            {useCustom && (
-              <CustomTimestampPicker
-                value={customSince}
-                onChange={setCustomSince}
-                placeholder="Custom start time"
-                id="history-custom-time"
-                aria-label="Custom start time"
-                className={cn(
-                  "h-8 w-48 justify-start text-left font-normal text-xs",
-                  !customSince && "text-muted-foreground",
-                )}
-              />
-            )}
           </div>
         </div>
+        <p className="text-muted-foreground mt-3 text-xs">
+          {telemetryScopeSummary(scope)}
+        </p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <div className="flex flex-col gap-1">
-            <Label htmlFor="history-stream" className="text-muted-foreground text-[11px]">
-              Stream
-            </Label>
-            <Select
-              value={selectedStreamId || ACTIVE_LATEST_VALUE}
-              onValueChange={(value) => {
-                setSelectedStreamOverride(
-                  value === ACTIVE_LATEST_VALUE ? null : value
-                );
-              }}
-            >
-              <SelectTrigger id="history-stream" className="h-8 w-[200px] text-xs">
-                <SelectValue placeholder="Stream" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ACTIVE_LATEST_VALUE}>Active / latest</SelectItem>
-                {streamOptions.map((s) => (
-                  <SelectItem key={s.stream_id ?? ""} value={s.stream_id ?? ""}>
-                    {s.label || s.stream_id}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
           <div className="flex flex-col gap-1">
             <Label htmlFor="history-value-filter" className="text-muted-foreground text-[11px]">
               Filter by value
@@ -431,8 +288,6 @@ export function TelemetryHistoryTable({
               className="h-8 w-full max-w-[180px] text-xs"
             />
           </div>
-          {/* Only one “since” concept now: range presets + optional Custom start time.
-              The value filter remains as a simple client-side refinement. */}
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -541,11 +396,14 @@ export function TelemetryHistoryTable({
               <table className="min-w-full text-left text-xs">
                 <thead className="bg-muted sticky top-0">
                   <tr>
-                    <th className="px-3 py-2 font-medium">
-                      Timestamp ({useUTC ? "UTC" : "local"})
-                    </th>
-                    <th className="px-3 py-2 font-medium">
-                      Value{units ? ` (${units})` : ""}
+	                    <th className="px-3 py-2 font-medium">
+	                      Timestamp ({useUTC ? "UTC" : "local"})
+	                    </th>
+                      {showStreamColumn && (
+                        <th className="px-3 py-2 font-medium">Stream</th>
+                      )}
+	                    <th className="px-3 py-2 font-medium">
+	                      Value{units ? ` (${units})` : ""}
                     </th>
                     <th className="px-3 py-2 text-right font-medium">
                       Actions
@@ -569,10 +427,15 @@ export function TelemetryHistoryTable({
                             isFlagged ? "bg-muted/40" : ""
                           }`}
                         >
-                          <td className="px-3 py-1.5 align-middle">
-                            {formatTimestamp(r.timestamp, useUTC)}
-                          </td>
-                          <td className="px-3 py-1.5 align-middle">
+	                          <td className="px-3 py-1.5 align-middle">
+	                            {formatTimestamp(r.timestamp, useUTC)}
+	                          </td>
+                            {showStreamColumn && (
+                              <td className="max-w-48 truncate px-3 py-1.5 align-middle" title={r.stream_id ?? ""}>
+                                {r.stream_id ?? "Unknown"}
+                              </td>
+                            )}
+	                          <td className="px-3 py-1.5 align-middle">
                             {r.value}
                           </td>
                           <td className="px-3 py-1.5 text-right align-middle">

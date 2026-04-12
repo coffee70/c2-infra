@@ -140,6 +140,7 @@ class RecentDataPoint(BaseModel):
 
     timestamp: str
     value: float
+    stream_id: Optional[str] = None
 
 
 class RecentDataResponse(BaseModel):
@@ -155,10 +156,16 @@ class RecentDataResponse(BaseModel):
 
 
 class ChannelSourceItem(BaseModel):
-    """Stream that has data for a channel; label is display-friendly."""
+    """Stream that has data for a channel; display metadata is backend-owned."""
 
     stream_id: str
-    label: str
+    label: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    sample_count: Optional[int] = None
+    last_timestamp: Optional[str] = None
+    provider: Optional[str] = None
+    summary: Optional[str] = None
 
 
 class ChannelSourcesResponse(BaseModel):

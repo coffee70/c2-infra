@@ -96,7 +96,7 @@ def test_query_events_with_stream_scope_keeps_feed_status_events() -> None:
     query_events(
         db,
         source_id="source-a",
-        stream_id="vehicle-a-2026-03-28T12-00-00Z",
+        stream_ids=["vehicle-a-2026-03-28T12-00-00Z"],
         since=datetime(2026, 3, 28, 11, 0, tzinfo=timezone.utc),
     )
 

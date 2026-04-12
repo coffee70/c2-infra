@@ -112,6 +112,7 @@ export interface RealtimeTelemetryProviderProps {
   sourceId: string;
   /** Optional explicit stream id for realtime subscription. */
   streamId?: string | null;
+  enabled?: boolean;
   /** Optional initial state per channel (from API/snapshot). */
   initialChannels?: InitialChannelInput[];
   children: ReactNode;
@@ -127,6 +128,7 @@ export function RealtimeTelemetryProvider({
   channelNames,
   sourceId,
   streamId = null,
+  enabled = true,
   initialChannels = [],
   children,
 }: RealtimeTelemetryProviderProps) {
@@ -259,17 +261,19 @@ export function RealtimeTelemetryProvider({
   );
 
   useEffect(() => {
+    if (!enabled) return;
     const unsubscribe = client.subscribe(handleMessage);
     client.connect();
     return () => {
       unsubscribe();
       client.disconnect();
     };
-  }, [client, handleMessage]);
+  }, [client, enabled, handleMessage]);
 
   useEffect(() => {
+    if (!enabled) return;
     client.subscribeWatchlist(channelNames, sourceId, streamId);
-  }, [client, channelNames, streamId, sourceId]);
+  }, [client, channelNames, enabled, streamId, sourceId]);
 
   useEffect(() => {
     let cancelled = false;

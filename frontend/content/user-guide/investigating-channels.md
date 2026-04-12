@@ -28,19 +28,20 @@ The page is organized into **vertical tabs** so you can quickly switch between d
 - **Summary** – current value, state badge (Normal, Caution, Warning), compact statistics (P5/P95, min/max, sample count), and description.
 - Registered catalog channels can open before data arrives. In that case, the detail page shows **No data**, omits percentile/statistics values, and keeps History and Trend Analysis in their empty states until samples are ingested.
 - Discovered channels stay queryable like catalog channels, but they may have no units, no description, and no engineering limits until you curate them.
-- **Live & Trends** – live time-series view plus the full **Trend Analysis** chart with range presets (15m, 1h, 6h, 24h, Custom), UTC/local toggle, comparison channels, and zoom controls.
+- **Data scope** – choose whether the whole page uses the latest stream, one or more selected streams, selected streams with time bounds, or all channel data in a date range.
+- **Live & Trends** – live time-series view plus the full **Trend Analysis** chart using the page Data scope, with UTC/local toggle, comparison channels, and local zoom controls. Live updates are available only in Latest mode.
 - **History** – a tabular view of archived samples for this channel:
-  - Choose **Stream** to restrict the table (and copy/export) to a specific telemetry stream of the selected source. The dropdown lists only streams that belong to the source in the Context Banner, labeled by start time. Defaults to the current stream (newest for that source).
-  - Select a time range (15 min, 1 hr, 6 hr, 24 hr, or custom start time).
+  - The table uses the page Data scope. It does not have separate stream or date controls.
+  - When the scope spans multiple streams, the table includes a Stream column.
   - See a sortable table of timestamp and value (with units), with a UTC/local time toggle.
-  - Filter rows by value. If the selected time window has no data, a banner explains that the table is showing the most recent samples instead.
+  - Filter rows by value.
   - Use the toolbar to **copy the table**, or export the visible range to **CSV**, **JSON**, or a Parquet-friendly text stub for data-science workflows.
   - Copy an individual row to the clipboard or **flag** samples you want to keep an eye on; flagged samples are highlighted for the current session.
 - **Explanation & Events** – AI explanation plus recent ops events (alerts opened, acked, resolved) for that channel.
 
-**Source and stream:** The **Context Banner** is the only place to change the source. The whole page is for that source. Summary, Live & Trends, and the default stream in History use the source’s current stream. In the History tab, the **Stream** dropdown lists only streams for that source so you can narrow the table to a chosen ingest session. If the target source does not provide the current channel, the app sends you back to the source’s **Telemetry** inventory with a clear unavailable message.
+**Source and data scope:** The **Context Banner** is the only place to change the source. The **Data scope** card is the only place to change which dataset the detail page uses. If the target source does not provide the current channel, the app sends you back to the source’s **Telemetry** inventory with a clear unavailable message.
 
-When you open a channel from an event or alert, the selected stream is carried separately in the URL so the page stays scoped to the source while still loading the chosen ingest session.
+When you open a related channel from this page, the current Data scope is preserved. Changing source resets the detail page to Latest.
 
 ## 3. LLM Explanation
 

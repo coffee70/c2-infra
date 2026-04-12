@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TelemetryDetailHeader } from "@/components/telemetry-detail-header";
 import { TelemetryDetailLive } from "@/components/telemetry-detail-live";
+import { TelemetryDetailScopeCard } from "@/components/telemetry-detail-scope-card";
 import {
   RealtimeTelemetryProvider,
   useRealtimeChannel,
@@ -34,6 +35,13 @@ import { ChevronDownIcon } from "lucide-react";
 import { formatSmartValue } from "@/lib/format-value";
 import { useTelemetrySourcesQuery } from "@/lib/query-hooks";
 import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
+import {
+  isRealtimeEligible,
+  telemetryScopeBadge,
+  telemetryScopeSubtitle,
+  telemetryScopeSummary,
+  type TelemetryDetailScope,
+} from "@/lib/telemetry-detail-scope";
 
 interface ExplainResponse {
   name: string;
@@ -64,6 +72,7 @@ interface ExplainResponse {
 interface RecentPoint {
   timestamp: string;
   value: number;
+  stream_id?: string | null;
 }
 
 type TabId = "summary" | "live" | "history" | "explanation";
@@ -73,8 +82,7 @@ interface TelemetryDetailTabsProps {
   recentData: RecentPoint[];
   /** Source (from banner / URL); only telemetry_sources ids. */
   sourceId: string;
-  /** Selected stream id, if any. Omit to use the active/latest stream for the source. */
-  currentStreamId?: string | null;
+  scope: TelemetryDetailScope;
   decodedName: string;
 }
 
@@ -100,9 +108,10 @@ export function TelemetryDetailTabs({
   explain,
   recentData,
   sourceId,
-  currentStreamId,
+  scope,
   decodedName,
 }: TelemetryDetailTabsProps) {
+  const realtimeEnabled = isRealtimeEligible(scope);
   const initialChannels = [
     {
       name: decodedName,
@@ -120,17 +129,17 @@ export function TelemetryDetailTabs({
 
   return (
     <RealtimeTelemetryProvider
-      key={`${sourceId}:${currentStreamId ?? ""}`}
+      key={`${sourceId}:${telemetryScopeSummary(scope)}`}
       channelNames={[decodedName]}
       sourceId={sourceId}
-      streamId={currentStreamId ?? null}
+      enabled={realtimeEnabled}
       initialChannels={initialChannels}
     >
       <TelemetryDetailTabsContent
         explain={explain}
         recentData={recentData}
         sourceId={sourceId}
-        currentStreamId={currentStreamId ?? undefined}
+        scope={scope}
         decodedName={decodedName}
       />
     </RealtimeTelemetryProvider>
@@ -141,13 +150,14 @@ function TelemetryDetailTabsContent({
   explain,
   recentData,
   sourceId,
-  currentStreamId,
+  scope,
   decodedName,
 }: TelemetryDetailTabsProps) {
   const [activeTab, setActiveTab] = useState<TabId>("summary");
   const router = useRouter();
   const liveChannel = useRealtimeChannel(decodedName);
   const { isLive } = useRealtimeTelemetry();
+  const realtimeEnabled = isRealtimeEligible(scope);
   const sourcesQuery = useTelemetrySourcesQuery<TelemetrySource[]>();
   const sources = sourcesQuery.data ?? [];
   const sourceName = sources.find((source) => source.id === sourceId)?.name ?? sourceId;
@@ -198,6 +208,12 @@ function TelemetryDetailTabsContent({
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
+        <TelemetryDetailScopeCard
+          key={telemetryScopeSummary(scope)}
+          sourceId={sourceId}
+          channelName={decodedName}
+          scope={scope}
+        />
 
         <div className="flex min-h-0 gap-12">
           <aside className="sticky top-20 shrink-0 self-start">
@@ -280,15 +296,19 @@ function TelemetryDetailTabsContent({
                   zScore={liveChannel?.zScore ?? explain.z_score}
                   lastTimestamp={liveChannel?.lastTimestamp ?? explain.last_timestamp}
                   description={explain.description}
-                  live={isLive}
+                  live={realtimeEnabled && isLive}
+                  scopeBadge={realtimeEnabled ? undefined : telemetryScopeBadge(scope)}
                 />
 
                 <Card className="border-muted mt-2">
-                  <CardHeader>
-                    <CardTitle className="text-muted-foreground text-sm font-medium">
-                      Statistics
-                    </CardTitle>
-                  </CardHeader>
+	                  <CardHeader>
+	                    <CardTitle className="text-muted-foreground text-sm font-medium">
+	                      Statistics
+	                    </CardTitle>
+                      <p className="text-muted-foreground text-xs">
+                        {telemetryScopeSubtitle(scope)}
+                      </p>
+	                  </CardHeader>
                   <CardContent className="space-y-4">
                     {!hasStats ? (
                       <p className="text-muted-foreground text-sm">
@@ -403,6 +423,11 @@ function TelemetryDetailTabsContent({
                   role="tabpanel"
                   aria-label="Live telemetry and trends"
                 >
+                {!realtimeEnabled && (
+                  <div className="rounded-md border px-3 py-2 text-sm">
+                    Live updates are only available in Latest mode.
+                  </div>
+                )}
                 <TelemetryDetailLive
                   channelName={decodedName}
                   initialValue={explain.recent_value}
@@ -413,6 +438,7 @@ function TelemetryDetailTabsContent({
                   initialStateReason={explain.state_reason}
                   initialZScore={explain.z_score}
                   recentData={recentData}
+                  realtimeEnabled={realtimeEnabled}
                 />
 
                 <Card className="overflow-visible">
@@ -420,11 +446,11 @@ function TelemetryDetailTabsContent({
                     <CardTitle>Trend analysis</CardTitle>
                   </CardHeader>
                   <CardContent>
-                    <TrendChartAnalysis
-                      channelName={decodedName}
-                      vehicleId={sourceId}
-                      streamId={currentStreamId ?? null}
-                      units={explain.units}
+	                    <TrendChartAnalysis
+	                      channelName={decodedName}
+	                      vehicleId={sourceId}
+	                      scope={scope}
+	                      units={explain.units}
                       bounds={{
                         p5: hasStats ? explain.statistics.p5 : null,
                         p50: hasStats ? explain.statistics.p50 : null,
@@ -448,12 +474,12 @@ function TelemetryDetailTabsContent({
                   role="tabpanel"
                   aria-label="Telemetry history table"
                 >
-                <TelemetryHistoryTable
-                  channelName={decodedName}
-                  sourceId={sourceId}
-                  defaultStreamId={currentStreamId ?? undefined}
-                  units={explain.units}
-                />
+	                <TelemetryHistoryTable
+	                  channelName={decodedName}
+	                  sourceId={sourceId}
+                    scope={scope}
+	                  units={explain.units}
+	                />
                 </div>
               )}
 
@@ -463,17 +489,16 @@ function TelemetryDetailTabsContent({
                   role="tabpanel"
                   aria-label="Explanation and related events"
                 >
-                <ExplanationBlock
-                  channelName={decodedName}
-                  sourceId={sourceId}
-                  streamId={currentStreamId ?? undefined}
-                />
-                <ChannelRecentEvents
-                  channelName={decodedName}
-                  vehicleId={sourceId}
-                  streamId={currentStreamId ?? undefined}
-                  sinceMinutes={60}
-                />
+	                <ExplanationBlock
+	                  channelName={decodedName}
+	                  sourceId={sourceId}
+                    scope={scope}
+	                />
+		                <ChannelRecentEvents
+		                  channelName={decodedName}
+		                  vehicleId={sourceId}
+                    scope={scope}
+		                />
                 </div>
               )}
             </div>

@@ -11,15 +11,16 @@ import { ChevronDownIcon } from "lucide-react";
 import { SimilarTelemetryCard } from "@/components/similar-telemetry-card";
 import { Spinner } from "@/components/ui/spinner";
 import { useTelemetryExplanationQuery } from "@/lib/query-hooks";
+import type { TelemetryDetailScope } from "@/lib/telemetry-detail-scope";
 
 interface ExplanationBlockProps {
   channelName: string;
   sourceId: string;
-  streamId?: string;
+  scope: TelemetryDetailScope;
 }
 
-export function ExplanationBlock({ channelName, sourceId, streamId }: ExplanationBlockProps) {
-  const explanationQuery = useTelemetryExplanationQuery(channelName, sourceId, streamId);
+export function ExplanationBlock({ channelName, sourceId, scope }: ExplanationBlockProps) {
+  const explanationQuery = useTelemetryExplanationQuery(channelName, sourceId, scope);
   const loading = explanationQuery.isLoading;
   const data = explanationQuery.data ?? null;
   const error = explanationQuery.isError;
@@ -93,7 +94,11 @@ export function ExplanationBlock({ channelName, sourceId, streamId }: Explanatio
         </CardContent>
       </Card>
 
-      <SimilarTelemetryCard detailSourceId={streamId ?? sourceId} channels={data.what_to_check_next ?? []} />
+      <SimilarTelemetryCard
+        detailSourceId={sourceId}
+        scope={scope}
+        channels={data.what_to_check_next ?? []}
+      />
     </>
   );
 }

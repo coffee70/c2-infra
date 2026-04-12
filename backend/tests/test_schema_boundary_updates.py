@@ -216,6 +216,7 @@ def test_active_run_route_is_removed() -> None:
 def test_source_observation_request_rejects_invalid_time_range() -> None:
     with pytest.raises(ValueError, match="end_time must be after start_time"):
         SourceObservationUpsert(
+            external_id="obs-invalid",
             start_time=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
             end_time=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
         )
@@ -240,6 +241,7 @@ def test_source_observation_routes_normalize_source_and_call_service(monkeypatch
             provider="satnogs",
             observations=[
                 SourceObservationUpsert(
+                    external_id="obs-1",
                     start_time=datetime(2026, 4, 7, 12, 0, tzinfo=timezone.utc),
                     end_time=datetime(2026, 4, 7, 12, 10, tzinfo=timezone.utc),
                 )
@@ -564,7 +566,8 @@ def test_ops_routes_use_source_id_contract(monkeypatch) -> None:
 
     response = ops_routes.get_timeline_events(
         source_id="source-a",
-        stream_id="stream-a",
+        scope="streams",
+        stream_ids=["stream-a"],
         db=MagicMock(),
     )
 

@@ -4,6 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 import { buildTelemetryApiBase } from "@/lib/telemetry-routes";
 import {
+  isRealtimeEligible,
+  telemetryScopeKey,
+  telemetryScopeSummary,
+  telemetryScopeToQueryParams,
+  type TelemetryDetailScope,
+} from "@/lib/telemetry-detail-scope";
+import {
   Line,
   XAxis,
   YAxis,
@@ -34,7 +41,6 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { CustomTimestampPicker } from "@/components/custom-timestamp-picker";
 import { ChevronDownIcon } from "lucide-react";
 
 const API_URL =
@@ -57,13 +63,6 @@ interface Bounds {
   minValue?: number | null;
   maxValue?: number | null;
 }
-
-const RANGE_PRESETS = [
-  { label: "15m", minutes: 15 },
-  { label: "1h", minutes: 60 },
-  { label: "6h", minutes: 360 },
-  { label: "24h", minutes: 1440 },
-] as const;
 
 function formatWithUnits(
   value: number | null | undefined,
@@ -138,14 +137,14 @@ function downsampleByWidth<T extends { timestamp: string; value: number }>(
 export function TrendChartAnalysis({
   channelName,
   vehicleId,
-  streamId = null,
+  scope,
   units,
   bounds,
   lastTimestamp,
 }: {
   channelName: string;
   vehicleId: string;
-  streamId?: string | null;
+  scope: TelemetryDetailScope;
   units?: string | null;
   bounds?: Bounds;
   lastTimestamp?: string | null;
@@ -155,12 +154,7 @@ export function TrendChartAnalysis({
   const [showP5P95, setShowP5P95] = useState(true);
   const [compareChannel, setCompareChannel] = useState<string | null>(null);
   const [channelList, setChannelList] = useState<string[]>([]);
-  const [rangeMinutes, setRangeMinutes] = useState<number>(60);
-  const [customStart, setCustomStart] = useState<string | null>(null);
-  const [customEnd, setCustomEnd] = useState<string | null>(null);
-  const [useCustomRange, setUseCustomRange] = useState(false);
   const [timeRangePct, setTimeRangePct] = useState<[number, number]>([0, 100]);
-  const [zoomRefetch, setZoomRefetch] = useState<{ since: string; until: string } | null>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [chartWidth, setChartWidth] = useState(800);
 
@@ -172,66 +166,32 @@ export function TrendChartAnalysis({
   }>({ requestKey: "", error: null });
   const [nowTs, setNowTs] = useState(() => Date.now());
 
-  const { sinceDate, untilDate } = useMemo(() => {
-    if (zoomRefetch) {
-      return {
-        sinceDate: zoomRefetch.since,
-        untilDate: zoomRefetch.until,
-      };
-    }
-    if (useCustomRange && customStart) {
-      const start = new Date(customStart);
-      const end = customEnd ? new Date(customEnd) : null;
-      return {
-        sinceDate: isNaN(start.getTime()) ? null : start.toISOString(),
-        untilDate: end && !isNaN(end.getTime()) ? end.toISOString() : null,
-      };
-    }
-    if (useCustomRange && !customStart) {
-      const since = new Date();
-      since.setMinutes(since.getMinutes() - 60);
-      return { sinceDate: since.toISOString(), untilDate: customEnd ?? null };
-    }
-    const since = new Date();
-    since.setMinutes(since.getMinutes() - rangeMinutes);
-    return { sinceDate: since.toISOString(), untilDate: null };
-  }, [useCustomRange, customStart, customEnd, rangeMinutes, zoomRefetch]);
-  const loadRequestKey = `${channelName}:${compareChannel ?? ""}:${sinceDate ?? ""}:${untilDate ?? ""}`;
+  const scopeKey = telemetryScopeKey(scope);
+  const realtimeEnabled = isRealtimeEligible(scope);
+  const loadRequestKey = `${channelName}:${compareChannel ?? ""}:${scopeKey}`;
   const loading = loadState.requestKey !== loadRequestKey;
   const error = loading ? null : loadState.error;
 
-  const fetchLimit = useMemo(() => {
-    if (zoomRefetch) return 1000;
-    const mins = useCustomRange ? 60 : rangeMinutes;
-    if (mins <= 15) return 150;
-    if (mins <= 60) return 300;
-    if (mins <= 360) return 600;
-    return 1000;
-  }, [zoomRefetch, useCustomRange, rangeMinutes]);
+  const fetchLimit = scope.mode === "latest" ? 300 : 1000;
 
   const fetchData = useCallback(
-    async (name: string, since: string, until: string | null) => {
-      const params = new URLSearchParams({
-        limit: `${fetchLimit}`,
-        since,
-      });
-      if (until) params.set("until", until);
-      if (streamId) params.set("stream_id", streamId);
+    async (name: string) => {
+      const params = telemetryScopeToQueryParams(scope);
+      params.set("limit", `${fetchLimit}`);
       const url = `${API_URL}${buildTelemetryApiBase(vehicleId, name)}/recent?${params.toString()}`;
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`Failed to fetch ${name}`);
       const json = await res.json();
       return (json.data || []) as DataPoint[];
     },
-    [fetchLimit, streamId, vehicleId]
+    [fetchLimit, scope, vehicleId]
   );
 
   useEffect(() => {
-    if (!sinceDate) return;
     Promise.all([
-      fetchData(channelName, sinceDate, untilDate),
+      fetchData(channelName),
       compareChannel
-        ? fetchData(compareChannel, sinceDate, untilDate)
+        ? fetchData(compareChannel)
         : Promise.resolve([]),
     ])
       .then(([main, compare]) => {
@@ -245,7 +205,6 @@ export function TrendChartAnalysis({
         });
         setCompareData(compare);
         setTimeRangePct([0, 100]);
-        setZoomRefetch(null);
         setLoadState({ requestKey: loadRequestKey, error: null });
       })
       .catch((e) =>
@@ -254,7 +213,7 @@ export function TrendChartAnalysis({
           error: e instanceof Error ? e.message : "Failed to load",
         })
       );
-  }, [channelName, compareChannel, fetchData, loadRequestKey, sinceDate, untilDate]);
+  }, [channelName, compareChannel, fetchData, loadRequestKey]);
 
   useEffect(() => {
     const el = chartContainerRef.current;
@@ -273,6 +232,7 @@ export function TrendChartAnalysis({
   }, [vehicleId]);
 
   useEffect(() => {
+    if (!realtimeEnabled) return;
     const client = new RealtimeWsClient();
     client.subscribe((msg) => {
       if (msg.type === "telemetry_update" && msg.channel?.name === channelName) {
@@ -302,9 +262,9 @@ export function TrendChartAnalysis({
       }
     });
     client.connect();
-    client.subscribeWatchlist([channelName], vehicleId, streamId);
+    client.subscribeWatchlist([channelName], vehicleId, null);
     return () => client.disconnect();
-  }, [channelName, fetchLimit, streamId, vehicleId]);
+  }, [channelName, fetchLimit, realtimeEnabled, vehicleId]);
 
   useEffect(() => {
     const id = setInterval(() => setNowTs(Date.now()), 1000);
@@ -475,13 +435,6 @@ export function TrendChartAnalysis({
     );
   }
 
-  const rangeAriaLabels: Record<string, string> = {
-    "15m": "Last 15 minutes",
-    "1h": "Last 1 hour",
-    "6h": "Last 6 hours",
-    "24h": "Last 24 hours",
-  };
-
   const isZoomed = timeRangePct[0] > 0 || timeRangePct[1] < 100;
   const dataMaxTime = chartData.length > 0 ? new Date(chartData[chartData.length - 1].timestamp).getTime() : 0;
   const isLiveData = lastPoint && dataMaxTime > 0 && nowTs - dataMaxTime < 60_000;
@@ -489,62 +442,9 @@ export function TrendChartAnalysis({
   return (
     <div className="space-y-3 overflow-visible">
       <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <span className="text-muted-foreground w-14 shrink-0 text-xs font-medium tracking-wider uppercase">
-            Range
-          </span>
-          <div className="flex flex-wrap items-center gap-1.5">
-          {RANGE_PRESETS.map(({ label, minutes }) => (
-            <Button
-              key={label}
-              variant={!useCustomRange && rangeMinutes === minutes ? "default" : "outline"}
-              size="sm"
-              aria-label={rangeAriaLabels[label] ?? `Last ${label}`}
-              onClick={() => {
-                setUseCustomRange(false);
-                setRangeMinutes(minutes);
-              }}
-            >
-              {label}
-            </Button>
-          ))}
-          <Button
-            variant={useCustomRange ? "default" : "outline"}
-            size="sm"
-            aria-label="Custom time range"
-            onClick={() => {
-              setUseCustomRange(true);
-              const now = new Date();
-              const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-              setCustomStart(oneHourAgo.toISOString());
-              setCustomEnd(now.toISOString());
-            }}
-          >
-            Custom
-          </Button>
-          {useCustomRange && (
-            <span className="inline-flex items-center gap-2 text-sm">
-              <CustomTimestampPicker
-                value={customStart}
-                onChange={setCustomStart}
-                placeholder="Start"
-                id="trend-custom-start"
-                aria-label="Custom range start"
-                className="h-8 w-48 justify-start text-left text-xs font-normal"
-              />
-              <span className="text-muted-foreground">to</span>
-              <CustomTimestampPicker
-                value={customEnd}
-                onChange={setCustomEnd}
-                placeholder="End"
-                id="trend-custom-end"
-                aria-label="Custom range end"
-                className="h-8 w-48 justify-start text-left text-xs font-normal"
-              />
-            </span>
-          )}
-          </div>
-        </div>
+        <p className="text-muted-foreground text-sm">
+          {telemetryScopeSummary(scope)}
+        </p>
         <Collapsible className="border-border border-t pt-3">
           <div className="flex flex-col gap-2">
             <CollapsibleTrigger className="text-muted-foreground hover:text-foreground flex w-fit cursor-pointer items-center gap-2 text-xs font-medium tracking-wider uppercase data-[state=open]:[&_svg]:rotate-180">
@@ -644,26 +544,6 @@ export function TrendChartAnalysis({
             />
             {isZoomed && (
               <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  aria-label="Zoom to selected range (refetch)"
-                  onClick={() => {
-                    const len = chartData.length;
-                    const startIdx = Math.floor((timeRangePct[0] / 100) * len);
-                    const endIdx = Math.min(Math.ceil((timeRangePct[1] / 100) * len), len);
-                    const startPt = chartData[startIdx];
-                    const endPt = chartData[endIdx];
-                    if (startPt && endPt) {
-                      setZoomRefetch({
-                        since: startPt.timestamp,
-                        until: endPt.timestamp,
-                      });
-                    }
-                  }}
-                >
-                  Zoom
-                </Button>
                 <Button
                   size="sm"
                   variant="ghost"
