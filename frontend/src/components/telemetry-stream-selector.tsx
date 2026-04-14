@@ -126,8 +126,11 @@ export function TelemetryStreamSelector({
             Add stream
           </Button>
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-[min(520px,calc(100vw-2rem))] p-0">
-          <div className="border-b p-2">
+        <PopoverContent
+          align="start"
+          className="flex max-h-[min(22rem,var(--radix-popover-content-available-height,22rem))] w-[min(520px,calc(100vw-2rem))] flex-col overflow-hidden p-0"
+        >
+          <div className="shrink-0 border-b p-2">
             <div className="relative">
               <SearchIcon className="text-muted-foreground absolute top-2.5 left-2 h-4 w-4" />
               <Input
@@ -138,7 +141,10 @@ export function TelemetryStreamSelector({
               />
             </div>
           </div>
-          <div className="max-h-80 overflow-auto p-1">
+          <div
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1"
+            onWheel={(event) => event.stopPropagation()}
+          >
             {loading ? (
               <p className="text-muted-foreground px-3 py-4 text-sm">
                 Loading streams...

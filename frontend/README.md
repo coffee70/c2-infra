@@ -21,6 +21,8 @@ Then open `http://localhost:3000` in your browser.
 
 By default the app expects the backend API at `http://localhost:8000`. You can override this with the `NEXT_PUBLIC_API_URL` environment variable.
 
+**Docker:** that value is read at **`next build`** time in the image. To point the browser at a different API host (e.g. LAN IP), rebuild the frontend image with a build arg — see the troubleshooting note in the root `README.md` after “Start services”.
+
 > When running the full stack with Docker, prefer the root-level instructions in `../README.md`, which start all services (database, backend, frontend, simulator) together.
 
 ## Browser Validation

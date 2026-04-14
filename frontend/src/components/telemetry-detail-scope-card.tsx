@@ -98,7 +98,7 @@ export function TelemetryDetailScopeCard({
   const dirty = !telemetryScopesEqual(scope, draftScope);
 
   const navigate = (nextScope: TelemetryDetailScope) => {
-    const href = buildTelemetryDetailHref(sourceId, channelName, nextScope);
+    const href = buildTelemetryDetailHref(sourceId, channelName, nextScope, "analysis");
     router.replace(href);
   };
 

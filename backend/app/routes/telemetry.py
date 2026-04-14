@@ -28,6 +28,8 @@ from app.models.schemas import (
     ChannelSourcesResponse,
     DataPoint,
     ExplainResponse,
+    TelemetryDetailPageScope,
+    TelemetryDetailScopeWindow,
     RecentDataPoint,
     RelatedChannel,
     LiveStateUpdate,
@@ -180,6 +182,37 @@ class DetailDataScope:
     until: datetime | None = None
 
 
+def _scope_timestamp_iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    aware = dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    return aware.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _detail_page_scope_payload(detail: DetailDataScope) -> TelemetryDetailPageScope:
+    window: TelemetryDetailScopeWindow | None = None
+    if detail.since is not None or detail.until is not None:
+        window = TelemetryDetailScopeWindow(
+            since=_scope_timestamp_iso(detail.since),
+            until=_scope_timestamp_iso(detail.until),
+        )
+    if detail.mode == "latest":
+        resolved = detail.stream_ids[0] if detail.stream_ids else None
+        return TelemetryDetailPageScope(
+            mode="latest",
+            resolved_stream_id=resolved,
+            window=window,
+        )
+    if detail.mode == "streams":
+        return TelemetryDetailPageScope(
+            mode="streams",
+            stream_count=len(detail.stream_ids),
+            stream_ids=list(detail.stream_ids),
+            window=window,
+        )
+    return TelemetryDetailPageScope(mode="date_range", window=window)
+
+
 def _parse_iso_datetime_param(value: Optional[str], name: str) -> datetime | None:
     if not value:
         return None
@@ -197,13 +230,13 @@ def _parse_detail_scope_params(
     since: Optional[str],
     until: Optional[str],
 ) -> DetailDataScope:
-    since_dt = _parse_iso_datetime_param(since, "since")
-    until_dt = _parse_iso_datetime_param(until, "until")
-    if since_dt is not None and until_dt is not None and since_dt > until_dt:
-        raise HTTPException(status_code=400, detail="since must be before until")
-
     if scope == "latest":
         return DetailDataScope(mode="latest")
+
+    since_dt = _parse_iso_datetime_param(since, "since") if since else None
+    until_dt = _parse_iso_datetime_param(until, "until") if until else None
+    if since_dt is not None and until_dt is not None and since_dt > until_dt:
+        raise HTTPException(status_code=400, detail="since must be before until")
     if scope == "streams":
         cleaned_stream_ids = tuple(stream_id for stream_id in stream_ids if stream_id)
         if not cleaned_stream_ids:
@@ -456,6 +489,7 @@ def _build_scoped_explain_response(
         what_to_check_next=related,
         confidence_indicator=_confidence_indicator(stats.n_samples, last_timestamp),
         llm_explanation=llm_explanation,
+        scope=_detail_page_scope_payload(scope),
     )
 
 
@@ -1098,6 +1132,14 @@ def search(
     return SearchResponse(results=results)
 
 
+def _summary_db_only_page_scope(db: Session, data_source_id: str, meta: TelemetryMetadata) -> TelemetryDetailPageScope:
+    try:
+        sid = _resolve_latest_stream_id_for_channel(db, data_source_id, meta.name)
+        return TelemetryDetailPageScope(mode="latest", resolved_stream_id=sid)
+    except HTTPException:
+        return TelemetryDetailPageScope(mode="latest", resolved_stream_id=None)
+
+
 def _get_explanation_summary_db_only(db: Session, name: str, source_id: str) -> ExplainResponse:
     """Build explain response using only DB—no embedding/LLM cold start."""
     data_source_id = normalize_source_id(source_id)
@@ -1149,6 +1191,7 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str) -> 
             what_to_check_next=[],
             confidence_indicator=None,
             llm_explanation="",
+            scope=_summary_db_only_page_scope(db, data_source_id, meta),
         )
 
     rows = _get_recent_values_db_only(db, name, limit=1, source_id=data_source_id)
@@ -1200,6 +1243,7 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str) -> 
         what_to_check_next=[],
         confidence_indicator=None,
         llm_explanation="",
+        scope=_summary_db_only_page_scope(db, data_source_id, meta),
     )
 
 

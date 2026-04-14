@@ -79,7 +79,7 @@ On the [Planning](/planning) page, the left-side **Earth view** card has two sep
 
 Each source has at most one active position mapping. If a source has no valid mapping, it won’t show a position on the globe when you add it to “Show on globe.”
 
-On channel detail pages, the **Data scope** card controls the whole page. Use it to view the latest stream, selected streams, selected streams within a time range, or all channel data in a date range. Live updates are available only in Latest mode.
+On channel detail pages, the sticky channel header shows the current **data scope** as a pill (hover for the full line). **Edit scope** opens a modal to use the latest stream, selected streams, selected streams within a time range, or all channel data in a date range. Live updates are available only in Latest mode.
 
 ### Workflow: Simulator on the Planning globe
 

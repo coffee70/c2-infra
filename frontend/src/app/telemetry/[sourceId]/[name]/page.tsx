@@ -1,10 +1,13 @@
 import { notFound, redirect } from "next/navigation";
 import { TelemetryDetailTabs } from "@/components/telemetry-detail-tabs";
+import { TelemetryDetailFetchError } from "@/components/telemetry-detail-fetch-error";
 import {
   parseTelemetryDetailScope,
   telemetryScopeToQueryParams,
   type TelemetryDetailScope,
 } from "@/lib/telemetry-detail-scope";
+import { parseTelemetryDetailView } from "@/lib/telemetry-routes";
+import type { TelemetryAppliedScope } from "@/lib/telemetry-applied-scope";
 
 const API_URL =
   process.env.API_SERVER_URL ||
@@ -50,6 +53,7 @@ interface ExplainResponse {
   what_to_check_next: RelatedChannel[];
   confidence_indicator?: string | null;
   llm_explanation: string;
+  scope?: TelemetryAppliedScope | null;
 }
 
 interface RecentPoint {
@@ -61,6 +65,7 @@ interface RecentPoint {
 interface SummaryFetchResult {
   explain: ExplainResponse | null;
   channelUnavailable: boolean;
+  summaryError: boolean;
 }
 
 async function fetchSummary(
@@ -78,15 +83,30 @@ async function fetchSummary(
     if (!res.ok) {
       const body = await res.json().catch(() => null);
       const detail = typeof body?.detail === "string" ? body.detail : "";
+      if (res.status === 404 && detail.startsWith("Telemetry not found")) {
+        return {
+          explain: null,
+          channelUnavailable: true,
+          summaryError: false,
+        };
+      }
       return {
         explain: null,
-        channelUnavailable:
-          res.status === 404 && detail.startsWith("Telemetry not found"),
+        channelUnavailable: false,
+        summaryError: true,
       };
     }
-    return { explain: await res.json(), channelUnavailable: false };
+    return {
+      explain: await res.json(),
+      channelUnavailable: false,
+      summaryError: false,
+    };
   } catch {
-    return { explain: null, channelUnavailable: false };
+    return {
+      explain: null,
+      channelUnavailable: false,
+      summaryError: true,
+    };
   }
 }
 
@@ -124,6 +144,18 @@ export default async function TelemetryDetailPage({
   const scope = parseTelemetryDetailScope(resolvedSearchParams);
   const sourceId = requestedSourceId;
 
+  const rawView = resolvedSearchParams.view;
+  const viewFlat = Array.isArray(rawView) ? rawView[0] : rawView;
+  if (viewFlat === undefined || viewFlat === "") {
+    const p = telemetryScopeToQueryParams(scope);
+    p.set("view", "analysis");
+    redirect(
+      `/telemetry/${encodeURIComponent(requestedSourceId)}/${encodeURIComponent(name)}?${p.toString()}`,
+    );
+  }
+
+  const initialView = parseTelemetryDetailView(resolvedSearchParams);
+
   const [summary, recentData] = await Promise.all([
     fetchSummary(decodedName, sourceId, scope),
     fetchRecent(decodedName, sourceId, scope),
@@ -131,14 +163,27 @@ export default async function TelemetryDetailPage({
   const explain = summary.explain;
 
   if (summary.channelUnavailable) {
-    redirect(`/telemetry?source=${encodeURIComponent(sourceId)}&channel_unavailable=${encodeURIComponent(decodedName)}`);
+    redirect(
+      `/telemetry?source=${encodeURIComponent(sourceId)}&channel_unavailable=${encodeURIComponent(decodedName)}`,
+    );
   }
-  if (!explain) notFound();
+  if (summary.summaryError) {
+    return (
+      <TelemetryDetailFetchError
+        sourceId={sourceId}
+        channelName={decodedName}
+      />
+    );
+  }
+  if (!explain) {
+    notFound();
+  }
   if (explain.name !== decodedName) {
     const redirectParams = telemetryScopeToQueryParams(scope);
+    redirectParams.set("view", initialView);
     const suffix = redirectParams.toString();
     redirect(
-      `/telemetry/${encodeURIComponent(requestedSourceId)}/${encodeURIComponent(explain.name)}${suffix ? `?${suffix}` : ""}`
+      `/telemetry/${encodeURIComponent(requestedSourceId)}/${encodeURIComponent(explain.name)}${suffix ? `?${suffix}` : ""}`,
     );
   }
 
@@ -149,6 +194,8 @@ export default async function TelemetryDetailPage({
       sourceId={sourceId}
       scope={scope}
       decodedName={decodedName}
+      pageScope={explain.scope ?? null}
+      initialView={initialView}
     />
   );
 }

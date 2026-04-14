@@ -26,6 +26,8 @@ interface TelemetryHistoryTableProps {
   sourceId: string;
   scope: TelemetryDetailScope;
   units?: string | null;
+  /** When true, table body uses a fixed viewport height to align with the trend chart pane. */
+  compactHeight?: boolean;
 }
 
 interface DownloadMeta {
@@ -37,10 +39,10 @@ interface DownloadMeta {
   fallbackToRecent?: boolean;
 }
 
-function formatTimestamp(iso: string, useUTC: boolean): string {
+function formatTimestamp(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString(undefined, {
-    timeZone: useUTC ? "UTC" : undefined,
+    timeZone: "UTC",
     year: "numeric",
     month: "short",
     day: "2-digit",
@@ -86,8 +88,8 @@ export function TelemetryHistoryTable({
   sourceId,
   scope,
   units,
+  compactHeight = false,
 }: TelemetryHistoryTableProps) {
-  const [useUTC, setUseUTC] = useState(true);
   const [valueFilter, setValueFilter] = useState("");
   const [flagged, setFlagged] = useState<Set<string>>(new Set());
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -200,25 +202,11 @@ export function TelemetryHistoryTable({
     );
   };
 
-  const handleExportParquet = () => {
-    const safeChannel = channelName.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const safeSource = sourceId.replace(/[^a-zA-Z0-9_-]+/g, "_");
-    const filename = `${safeChannel}_${safeSource}_history.parquet.txt`;
-    const note =
-      "# Parquet export\n" +
-      "# To generate a real Parquet file, load the JSON or CSV into your data tooling (e.g. pandas, pyarrow) and write to Parquet.\n";
-    triggerDownload(
-      filename,
-      "text/plain;charset=utf-8",
-      note,
-    );
-  };
-
   const total = rows.length;
   const visible = filteredRows.length;
   const fallbackToRecent = downloadMeta.fallbackToRecent ?? false;
   const streamCount = new Set(rows.map((row) => row.stream_id).filter(Boolean)).size;
-  const showStreamColumn = streamCount > 1 || scope.mode === "streams";
+  const showStreamColumn = !compactHeight && (streamCount > 1 || scope.mode === "streams");
 
   const handleCopyRow = async (point: HistoryPoint) => {
     const line = `channel=${channelName} source=${sourceId}${point.stream_id ? ` stream=${point.stream_id}` : ""} timestamp=${point.timestamp} value=${point.value}`;
@@ -253,24 +241,7 @@ export function TelemetryHistoryTable({
               Logged samples for this telemetry channel from the archive.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1">
-              <Button
-                size="sm"
-                variant={useUTC ? "default" : "outline"}
-                onClick={() => setUseUTC(true)}
-              >
-                UTC
-              </Button>
-              <Button
-                size="sm"
-                variant={!useUTC ? "default" : "outline"}
-                onClick={() => setUseUTC(false)}
-              >
-                Local
-              </Button>
-            </div>
-          </div>
+          <p className="text-muted-foreground text-xs">Timestamps shown in UTC.</p>
         </div>
         <p className="text-muted-foreground mt-3 text-xs">
           {telemetryScopeSummary(scope)}
@@ -317,12 +288,6 @@ export function TelemetryHistoryTable({
                   onClick={handleExportJson}
                 >
                   Export JSON
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  disabled={!rows.length}
-                  onClick={handleExportParquet}
-                >
-                  Parquet helper stub
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -392,12 +357,18 @@ export function TelemetryHistoryTable({
                 .
               </div>
             )}
-            <div className="max-h-[320px] overflow-auto rounded-md border">
+            <div
+              className={
+                compactHeight
+                  ? "max-h-[min(520px,calc(100vh-14rem))] min-h-[200px] overflow-auto rounded-md border"
+                  : "max-h-[320px] overflow-auto rounded-md border"
+              }
+            >
               <table className="min-w-full text-left text-xs">
                 <thead className="bg-muted sticky top-0">
                   <tr>
 	                    <th className="px-3 py-2 font-medium">
-	                      Timestamp ({useUTC ? "UTC" : "local"})
+	                      Timestamp (UTC)
 	                    </th>
                       {showStreamColumn && (
                         <th className="px-3 py-2 font-medium">Stream</th>
@@ -428,7 +399,7 @@ export function TelemetryHistoryTable({
                           }`}
                         >
 	                          <td className="px-3 py-1.5 align-middle">
-	                            {formatTimestamp(r.timestamp, useUTC)}
+	                            {formatTimestamp(r.timestamp)}
 	                          </td>
                             {showStreamColumn && (
                               <td className="max-w-48 truncate px-3 py-1.5 align-middle" title={r.stream_id ?? ""}>

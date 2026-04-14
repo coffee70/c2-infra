@@ -28,8 +28,8 @@ The page is organized into **vertical tabs** so you can quickly switch between d
 - **Summary** – current value, state badge (Normal, Caution, Warning), compact statistics (P5/P95, min/max, sample count), and description.
 - Registered catalog channels can open before data arrives. In that case, the detail page shows **No data**, omits percentile/statistics values, and keeps History and Trend Analysis in their empty states until samples are ingested.
 - Discovered channels stay queryable like catalog channels, but they may have no units, no description, and no engineering limits until you curate them.
-- **Data scope** – choose whether the whole page uses the latest stream, one or more selected streams, selected streams with time bounds, or all channel data in a date range.
-- **Live & Trends** – live time-series view plus the full **Trend Analysis** chart using the page Data scope, with UTC/local toggle, comparison channels, and local zoom controls. Live updates are available only in Latest mode.
+- **Data scope** – the sticky channel header shows a compact scope pill (hover for the full summary). **Edit scope** opens a modal to choose whether the whole page uses the latest stream, one or more selected streams, selected streams with time bounds, or all channel data in a date range.
+- **Analysis** – trend chart and history table for this channel using the page data scope, with comparison overlays and UTC presentation. Live value updates are available only in Latest mode.
 - **History** – a tabular view of archived samples for this channel:
   - The table uses the page Data scope. It does not have separate stream or date controls.
   - When the scope spans multiple streams, the table includes a Stream column.
@@ -39,7 +39,7 @@ The page is organized into **vertical tabs** so you can quickly switch between d
   - Copy an individual row to the clipboard or **flag** samples you want to keep an eye on; flagged samples are highlighted for the current session.
 - **Explanation & Events** – AI explanation plus recent ops events (alerts opened, acked, resolved) for that channel.
 
-**Source and data scope:** The **Context Banner** is the only place to change the source. The **Data scope** card is the only place to change which dataset the detail page uses. If the target source does not provide the current channel, the app sends you back to the source’s **Telemetry** inventory with a clear unavailable message.
+**Source and data scope:** The **Context Banner** is the only place to change the source. **Edit scope** in the channel header is where you change which dataset the detail page uses. If the target source does not provide the current channel, the app sends you back to the source’s **Telemetry** inventory with a clear unavailable message.
 
 When you open a related channel from this page, the current Data scope is preserved. Changing source resets the detail page to Latest.
 

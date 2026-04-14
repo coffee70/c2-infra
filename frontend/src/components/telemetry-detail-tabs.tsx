@@ -5,8 +5,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TelemetryDetailHeader } from "@/components/telemetry-detail-header";
-import { TelemetryDetailLive } from "@/components/telemetry-detail-live";
-import { TelemetryDetailScopeCard } from "@/components/telemetry-detail-scope-card";
 import {
   RealtimeTelemetryProvider,
   useRealtimeChannel,
@@ -31,17 +29,22 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Separator } from "@/components/ui/separator";
+import { Button } from "@/components/ui/button";
 import { ChevronDownIcon } from "lucide-react";
 import { formatSmartValue } from "@/lib/format-value";
 import { useTelemetrySourcesQuery } from "@/lib/query-hooks";
-import { buildTelemetryDetailHref } from "@/lib/telemetry-routes";
+import { buildTelemetryDetailHref, type TelemetryDetailView } from "@/lib/telemetry-routes";
 import {
   isRealtimeEligible,
-  telemetryScopeBadge,
+  LATEST_SCOPE,
+  telemetryScopeKey,
   telemetryScopeSubtitle,
-  telemetryScopeSummary,
   type TelemetryDetailScope,
 } from "@/lib/telemetry-detail-scope";
+import {
+  formatAppliedScopeSummaryLine,
+  type TelemetryAppliedScope,
+} from "@/lib/telemetry-applied-scope";
 
 interface ExplainResponse {
   name: string;
@@ -75,15 +78,14 @@ interface RecentPoint {
   stream_id?: string | null;
 }
 
-type TabId = "summary" | "live" | "history" | "explanation";
-
 interface TelemetryDetailTabsProps {
   explain: ExplainResponse;
   recentData: RecentPoint[];
-  /** Source (from banner / URL); only telemetry_sources ids. */
   sourceId: string;
   scope: TelemetryDetailScope;
   decodedName: string;
+  pageScope: TelemetryAppliedScope | null;
+  initialView: TelemetryDetailView;
 }
 
 interface TelemetrySource {
@@ -110,6 +112,8 @@ export function TelemetryDetailTabs({
   sourceId,
   scope,
   decodedName,
+  pageScope,
+  initialView,
 }: TelemetryDetailTabsProps) {
   const realtimeEnabled = isRealtimeEligible(scope);
   const initialChannels = [
@@ -129,7 +133,7 @@ export function TelemetryDetailTabs({
 
   return (
     <RealtimeTelemetryProvider
-      key={`${sourceId}:${telemetryScopeSummary(scope)}`}
+      key={`${sourceId}:${telemetryScopeKey(scope)}`}
       channelNames={[decodedName]}
       sourceId={sourceId}
       enabled={realtimeEnabled}
@@ -141,6 +145,8 @@ export function TelemetryDetailTabs({
         sourceId={sourceId}
         scope={scope}
         decodedName={decodedName}
+        pageScope={pageScope}
+        initialView={initialView}
       />
     </RealtimeTelemetryProvider>
   );
@@ -152,9 +158,11 @@ function TelemetryDetailTabsContent({
   sourceId,
   scope,
   decodedName,
+  pageScope,
+  initialView,
 }: TelemetryDetailTabsProps) {
-  const [activeTab, setActiveTab] = useState<TabId>("summary");
   const router = useRouter();
+  const [analysisPane, setAnalysisPane] = useState<"chart" | "table">("chart");
   const liveChannel = useRealtimeChannel(decodedName);
   const { isLive } = useRealtimeTelemetry();
   const realtimeEnabled = isRealtimeEligible(scope);
@@ -162,11 +170,22 @@ function TelemetryDetailTabsContent({
   const sources = sourcesQuery.data ?? [];
   const sourceName = sources.find((source) => source.id === sourceId)?.name ?? sourceId;
   const hasStats = hasNumericStatistics(explain.statistics);
+  const activeView = initialView;
 
   const handleSourceChange = (newSourceId: string) => {
     if (newSourceId === sourceId) return;
-    router.replace(buildTelemetryDetailHref(newSourceId, decodedName));
+    router.replace(
+      buildTelemetryDetailHref(newSourceId, decodedName, LATEST_SCOPE, "analysis"),
+    );
   };
+
+  const goView = (view: TelemetryDetailView) => {
+    router.replace(buildTelemetryDetailHref(sourceId, decodedName, scope, view));
+  };
+
+  const statsScopeLine = pageScope
+    ? formatAppliedScopeSummaryLine(pageScope)
+    : telemetryScopeSubtitle(scope);
 
   return (
     <div className="px-4 py-8 sm:px-6 lg:px-8">
@@ -208,11 +227,25 @@ function TelemetryDetailTabsContent({
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
-        <TelemetryDetailScopeCard
-          key={telemetryScopeSummary(scope)}
+
+        <TelemetryDetailHeader
+          name={explain.name}
           sourceId={sourceId}
-          channelName={decodedName}
-          scope={scope}
+          value={liveChannel?.value ?? explain.recent_value}
+          units={explain.units}
+          channelOrigin={explain.channel_origin}
+          state={liveChannel?.state ?? explain.state}
+          stateReason={liveChannel?.stateReason ?? explain.state_reason}
+          zScore={liveChannel?.zScore ?? explain.z_score}
+          lastTimestamp={liveChannel?.lastTimestamp ?? explain.last_timestamp}
+          description={explain.description}
+          live={realtimeEnabled && isLive}
+          scopeControl={{
+            pageScope,
+            scope,
+            channelName: decodedName,
+            currentView: activeView,
+          }}
         />
 
         <div className="flex min-h-0 gap-12">
@@ -225,52 +258,39 @@ function TelemetryDetailTabsContent({
               <button
                 type="button"
                 role="tab"
-                aria-selected={activeTab === "summary"}
+                aria-selected={activeView === "analysis"}
                 className={`-ml-3 block rounded-md px-3 py-2 text-left transition-colors ${
-                  activeTab === "summary"
+                  activeView === "analysis"
                     ? "bg-muted text-foreground font-medium"
                     : "hover:bg-muted/50 hover:text-foreground"
                 }`}
-                onClick={() => setActiveTab("summary")}
+                onClick={() => goView("analysis")}
+              >
+                Analysis
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeView === "summary"}
+                className={`-ml-3 block rounded-md px-3 py-2 text-left transition-colors ${
+                  activeView === "summary"
+                    ? "bg-muted text-foreground font-medium"
+                    : "hover:bg-muted/50 hover:text-foreground"
+                }`}
+                onClick={() => goView("summary")}
               >
                 Summary
               </button>
               <button
                 type="button"
                 role="tab"
-                aria-selected={activeTab === "live"}
+                aria-selected={activeView === "explanation"}
                 className={`-ml-3 block rounded-md px-3 py-2 text-left transition-colors ${
-                  activeTab === "live"
+                  activeView === "explanation"
                     ? "bg-muted text-foreground font-medium"
                     : "hover:bg-muted/50 hover:text-foreground"
                 }`}
-                onClick={() => setActiveTab("live")}
-              >
-                Live &amp; trends
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === "history"}
-                className={`-ml-3 block rounded-md px-3 py-2 text-left transition-colors ${
-                  activeTab === "history"
-                    ? "bg-muted text-foreground font-medium"
-                    : "hover:bg-muted/50 hover:text-foreground"
-                }`}
-                onClick={() => setActiveTab("history")}
-              >
-                History
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === "explanation"}
-                className={`-ml-3 block rounded-md px-3 py-2 text-left transition-colors ${
-                  activeTab === "explanation"
-                    ? "bg-muted text-foreground font-medium"
-                    : "hover:bg-muted/50 hover:text-foreground"
-                }`}
-                onClick={() => setActiveTab("explanation")}
+                onClick={() => goView("explanation")}
               >
                 Explanation &amp; events
               </button>
@@ -279,226 +299,214 @@ function TelemetryDetailTabsContent({
 
           <div className="flex min-w-0 flex-1 justify-center">
             <div className="flex w-full max-w-5xl flex-col space-y-8">
-              {activeTab === "summary" && (
+              {activeView === "analysis" && (
+                <div
+                  className="w-full space-y-6"
+                  role="tabpanel"
+                  aria-label="Analysis"
+                >
+                  {!realtimeEnabled && (
+                    <div className="rounded-md border px-3 py-2 text-sm">
+                      Live updates are only available in Latest mode.
+                    </div>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+                      View
+                    </span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={analysisPane === "chart" ? "default" : "outline"}
+                      onClick={() => setAnalysisPane("chart")}
+                    >
+                      Chart
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={analysisPane === "table" ? "default" : "outline"}
+                      onClick={() => setAnalysisPane("table")}
+                    >
+                      Table
+                    </Button>
+                  </div>
+
+                  {analysisPane === "chart" ? (
+                    <Card className="overflow-visible">
+                      <CardHeader>
+                        <CardTitle>Trend analysis</CardTitle>
+                        <p className="text-muted-foreground text-xs">
+                          Compare overlay uses the same UTC window as this channel; it does
+                          not restrict the other channel to the same streams.
+                        </p>
+                      </CardHeader>
+                      <CardContent>
+                        <TrendChartAnalysis
+                          channelName={decodedName}
+                          vehicleId={sourceId}
+                          scope={scope}
+                          units={explain.units}
+                          bounds={{
+                            p5: hasStats ? explain.statistics.p5 : null,
+                            p50: hasStats ? explain.statistics.p50 : null,
+                            p95: hasStats ? explain.statistics.p95 : null,
+                            mean: hasStats ? explain.statistics.mean : null,
+                            redLow: explain.red_low ?? undefined,
+                            redHigh: explain.red_high ?? undefined,
+                            minValue: hasStats ? explain.statistics.min_value : null,
+                            maxValue: hasStats ? explain.statistics.max_value : null,
+                          }}
+                          lastTimestamp={explain.last_timestamp}
+                        />
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="min-w-0">
+                      <TelemetryHistoryTable
+                        channelName={decodedName}
+                        sourceId={sourceId}
+                        scope={scope}
+                        units={explain.units}
+                        compactHeight
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeView === "summary" && (
                 <div
                   className="w-full space-y-8"
                   role="tabpanel"
                   aria-label="Summary"
                 >
-                <TelemetryDetailHeader
-                  name={explain.name}
-                  sourceId={sourceId}
-                  value={liveChannel?.value ?? explain.recent_value}
-                  units={explain.units}
-                  channelOrigin={explain.channel_origin}
-                  state={liveChannel?.state ?? explain.state}
-                  stateReason={liveChannel?.stateReason ?? explain.state_reason}
-                  zScore={liveChannel?.zScore ?? explain.z_score}
-                  lastTimestamp={liveChannel?.lastTimestamp ?? explain.last_timestamp}
-                  description={explain.description}
-                  live={realtimeEnabled && isLive}
-                  scopeBadge={realtimeEnabled ? undefined : telemetryScopeBadge(scope)}
-                />
-
-                <Card className="border-muted mt-2">
-	                  <CardHeader>
-	                    <CardTitle className="text-muted-foreground text-sm font-medium">
-	                      Statistics
-	                    </CardTitle>
-                      <p className="text-muted-foreground text-xs">
-                        {telemetryScopeSubtitle(scope)}
-                      </p>
-	                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {!hasStats ? (
-                      <p className="text-muted-foreground text-sm">
-                        No statistics yet. This channel is registered, but no samples have been received.
-                      </p>
-                    ) : (
-                    <>
-                    <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div>
-                        <dt className="text-muted-foreground text-xs">
-                          Typical range (P5–P95)
-                        </dt>
-                        <dd className="mt-0.5 font-medium">
-                          {formatSmartValue(explain.statistics.p5, explain.units)}{" "}
-                          to{" "}
-                          {formatSmartValue(explain.statistics.p95, explain.units)}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground text-xs">Spread</dt>
-                        <dd className="mt-0.5 font-medium">
-                          {formatSmartValue(
-                            explain.statistics.max_value! -
-                              explain.statistics.min_value!,
-                            explain.units,
-                          )}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground text-xs">
-                          Extremes
-                        </dt>
-                        <dd className="mt-0.5 font-medium">
-                          Min:{" "}
-                          {formatSmartValue(
-                            explain.statistics.min_value,
-                            explain.units,
-                          )}{" "}
-                          · Max:{" "}
-                          {formatSmartValue(
-                            explain.statistics.max_value,
-                            explain.units,
-                          )}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground text-xs">
-                          N samples
-                        </dt>
-                        <dd className="mt-0.5 font-medium">
-                          {(explain.statistics.n_samples ?? 0).toLocaleString()}
-                        </dd>
-                      </div>
-                    </dl>
-                    <Separator className="my-3" />
-                    <div className="text-muted-foreground space-y-1.5 text-sm">
-                      <p>
-                        5% of the time it&apos;s below{" "}
-                        {formatSmartValue(explain.statistics.p5, explain.units)}
-                      </p>
-                      <p>
-                        Median: 50% of the time it&apos;s below{" "}
-                        {formatSmartValue(explain.statistics.p50, explain.units)}
-                      </p>
-                      <p>
-                        95% of the time it&apos;s below{" "}
-                        {formatSmartValue(explain.statistics.p95, explain.units)}
-                      </p>
-                    </div>
-                    <Collapsible>
-                      <CollapsibleTrigger className="text-muted-foreground hover:text-foreground flex cursor-pointer items-center gap-2 text-xs data-[state=open]:[&_svg]:rotate-180">
-                        Mean, Std Dev
-                        <ChevronDownIcon className="size-3.5 transition-transform duration-200" />
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
-                          <div>
-                            <dt className="text-muted-foreground text-xs">
-                              Mean
-                            </dt>
-                            <dd>
-                              {formatSmartValue(
-                                explain.statistics.mean,
-                                explain.units,
-                              )}
-                            </dd>
+                  <Card className="border-muted mt-2">
+                    <CardHeader>
+                      <CardTitle className="text-muted-foreground text-sm font-medium">
+                        Statistics
+                      </CardTitle>
+                      <p className="text-muted-foreground text-xs">{statsScopeLine}</p>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {!hasStats ? (
+                        <p className="text-muted-foreground text-sm">
+                          No statistics yet. This channel is registered, but no samples have
+                          been received.
+                        </p>
+                      ) : (
+                        <>
+                          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <dt className="text-muted-foreground text-xs">
+                                Typical range (P5–P95)
+                              </dt>
+                              <dd className="mt-0.5 font-medium">
+                                {formatSmartValue(explain.statistics.p5, explain.units)}{" "}
+                                to{" "}
+                                {formatSmartValue(explain.statistics.p95, explain.units)}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="text-muted-foreground text-xs">Spread</dt>
+                              <dd className="mt-0.5 font-medium">
+                                {formatSmartValue(
+                                  explain.statistics.max_value! -
+                                    explain.statistics.min_value!,
+                                  explain.units,
+                                )}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="text-muted-foreground text-xs">Extremes</dt>
+                              <dd className="mt-0.5 font-medium">
+                                Min:{" "}
+                                {formatSmartValue(
+                                  explain.statistics.min_value,
+                                  explain.units,
+                                )}{" "}
+                                · Max:{" "}
+                                {formatSmartValue(
+                                  explain.statistics.max_value,
+                                  explain.units,
+                                )}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="text-muted-foreground text-xs">N samples</dt>
+                              <dd className="mt-0.5 font-medium">
+                                {(explain.statistics.n_samples ?? 0).toLocaleString()}
+                              </dd>
+                            </div>
+                          </dl>
+                          <Separator className="my-3" />
+                          <div className="text-muted-foreground space-y-1.5 text-sm">
+                            <p>
+                              5% of the time it&apos;s below{" "}
+                              {formatSmartValue(explain.statistics.p5, explain.units)}
+                            </p>
+                            <p>
+                              Median: 50% of the time it&apos;s below{" "}
+                              {formatSmartValue(explain.statistics.p50, explain.units)}
+                            </p>
+                            <p>
+                              95% of the time it&apos;s below{" "}
+                              {formatSmartValue(explain.statistics.p95, explain.units)}
+                            </p>
                           </div>
-                          <div>
-                            <dt className="text-muted-foreground text-xs">
-                              Std Dev
-                            </dt>
-                            <dd>
-                              {formatSmartValue(
-                                explain.statistics.std_dev,
-                                explain.units,
-                              )}
-                            </dd>
-                          </div>
-                        </dl>
-                      </CollapsibleContent>
-                    </Collapsible>
-                    </>
-                    )}
-                  </CardContent>
-                </Card>
+                          <Collapsible>
+                            <CollapsibleTrigger className="text-muted-foreground hover:text-foreground flex cursor-pointer items-center gap-2 text-xs data-[state=open]:[&_svg]:rotate-180">
+                              Mean, Std Dev
+                              <ChevronDownIcon className="size-3.5 transition-transform duration-200" />
+                            </CollapsibleTrigger>
+                            <CollapsibleContent>
+                              <dl className="mt-2 grid grid-cols-2 gap-2 text-sm">
+                                <div>
+                                  <dt className="text-muted-foreground text-xs">Mean</dt>
+                                  <dd>
+                                    {formatSmartValue(
+                                      explain.statistics.mean,
+                                      explain.units,
+                                    )}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt className="text-muted-foreground text-xs">
+                                    Std Dev
+                                  </dt>
+                                  <dd>
+                                    {formatSmartValue(
+                                      explain.statistics.std_dev,
+                                      explain.units,
+                                    )}
+                                  </dd>
+                                </div>
+                              </dl>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        </>
+                      )}
+                    </CardContent>
+                  </Card>
                 </div>
               )}
 
-              {activeTab === "live" && (
-                <div
-                  className="w-full space-y-6"
-                  role="tabpanel"
-                  aria-label="Live telemetry and trends"
-                >
-                {!realtimeEnabled && (
-                  <div className="rounded-md border px-3 py-2 text-sm">
-                    Live updates are only available in Latest mode.
-                  </div>
-                )}
-                <TelemetryDetailLive
-                  channelName={decodedName}
-                  initialValue={explain.recent_value}
-                  initialUnits={explain.units}
-                  initialLastTimestamp={explain.last_timestamp}
-                  initialP50={explain.statistics.p50}
-                  initialState={explain.state}
-                  initialStateReason={explain.state_reason}
-                  initialZScore={explain.z_score}
-                  recentData={recentData}
-                  realtimeEnabled={realtimeEnabled}
-                />
-
-                <Card className="overflow-visible">
-                  <CardHeader>
-                    <CardTitle>Trend analysis</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-	                    <TrendChartAnalysis
-	                      channelName={decodedName}
-	                      vehicleId={sourceId}
-	                      scope={scope}
-	                      units={explain.units}
-                      bounds={{
-                        p5: hasStats ? explain.statistics.p5 : null,
-                        p50: hasStats ? explain.statistics.p50 : null,
-                        p95: hasStats ? explain.statistics.p95 : null,
-                        mean: hasStats ? explain.statistics.mean : null,
-                        redLow: explain.red_low ?? undefined,
-                        redHigh: explain.red_high ?? undefined,
-                        minValue: hasStats ? explain.statistics.min_value : null,
-                        maxValue: hasStats ? explain.statistics.max_value : null,
-                      }}
-                      lastTimestamp={explain.last_timestamp}
-                    />
-                  </CardContent>
-                </Card>
-                </div>
-              )}
-
-              {activeTab === "history" && (
-                <div
-                  className="w-full space-y-6"
-                  role="tabpanel"
-                  aria-label="Telemetry history table"
-                >
-	                <TelemetryHistoryTable
-	                  channelName={decodedName}
-	                  sourceId={sourceId}
-                    scope={scope}
-	                  units={explain.units}
-	                />
-                </div>
-              )}
-
-              {activeTab === "explanation" && (
+              {activeView === "explanation" && (
                 <div
                   className="w-full space-y-6"
                   role="tabpanel"
                   aria-label="Explanation and related events"
                 >
-	                <ExplanationBlock
-	                  channelName={decodedName}
-	                  sourceId={sourceId}
+                  <ChannelRecentEvents
+                    channelName={decodedName}
+                    vehicleId={sourceId}
                     scope={scope}
-	                />
-		                <ChannelRecentEvents
-		                  channelName={decodedName}
-		                  vehicleId={sourceId}
+                  />
+                  <ExplanationBlock
+                    channelName={decodedName}
+                    sourceId={sourceId}
                     scope={scope}
-		                />
+                  />
                 </div>
               )}
             </div>

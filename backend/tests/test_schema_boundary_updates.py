@@ -601,3 +601,32 @@ def test_ensure_stream_belongs_to_source_rejects_unknown_explicit_source_stream(
 
     with pytest.raises(ValueError):
         ensure_stream_belongs_to_source(db, "source-a", "source-a")
+
+
+def test_parse_detail_scope_latest_ignores_stray_since_without_error() -> None:
+    scope = telemetry_routes._parse_detail_scope_params(
+        scope="latest",
+        stream_ids=["should-be-ignored"],
+        since="not-an-iso8601-timestamp",
+        until="also-bad",
+    )
+    assert scope.mode == "latest"
+    assert scope.stream_ids == ()
+
+
+def test_detail_page_scope_payload_streams() -> None:
+    since = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    until = datetime(2026, 1, 2, 12, 0, tzinfo=timezone.utc)
+    detail = telemetry_routes.DetailDataScope(
+        mode="streams",
+        stream_ids=("a", "b"),
+        since=since,
+        until=until,
+    )
+    payload = telemetry_routes._detail_page_scope_payload(detail)
+    assert payload.mode == "streams"
+    assert payload.stream_count == 2
+    assert payload.stream_ids == ["a", "b"]
+    assert payload.window is not None
+    assert payload.window.since is not None
+    assert "Z" in (payload.window.since or "")

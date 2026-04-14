@@ -227,6 +227,14 @@ body[data-operator-mode="large-type"] .text-xs {
   body {
     @apply bg-background text-foreground;
   }
+  /* Native <button> defaults no longer imply pointer; keep clickable controls obvious. */
+  button:not(:disabled):not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  button:disabled,
+  button[aria-disabled="true"] {
+    cursor: not-allowed;
+  }
 }
 
 /* Cesium Planning globe: ensure viewer and canvas fill container (Cesium docs) */

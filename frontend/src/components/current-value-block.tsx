@@ -34,7 +34,7 @@ function formatOperationalStatus(
   zScore?: number | null
 ): string {
   if (state === "no_data") return "No data";
-  if (state === "normal") return "In family";
+  if (state === "normal") return "Within expected range";
   if (stateReason === "out_of_limits") return "Out of limits";
   if (stateReason === "out_of_family" && zScore != null)
     return `Out of family: ${zScore >= 0 ? "+" : ""}${zScore.toFixed(1)}σ`;

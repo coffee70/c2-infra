@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Telemetry detail data scope** — Channel detail pages now use one page-wide Data Scope for Summary, Live & Trends, History, Explanation, and Events. Operators can view latest data, selected streams, selected streams with time bounds, or all channel data in a date range from one control above the tabs.
+- **Telemetry channel detail UX** — Detail pages now use a persistent operational strip (UTC), a scope pill and edit control in the sticky channel header (full summary on hover; Edit scope opens the draft → Apply modal), and structured `scope` metadata from the summary API. **Analysis** is the default tab with a chart/table toggle; **Summary** holds distribution stats; **Explanation** lists recent events before the narrative. Compare overlays use the same UTC window without `stream_ids`. Channel links include `view=` for deep-linking.
 - **Telemetry inventory section and detail reparenting** — Added a dedicated top-level Telemetry section for source-scoped channel browsing and watchlist discovery, moved canonical channel detail routes to `/telemetry/{source_id}/{channel_name}`, and removed the old Sources-scoped telemetry detail path.
 - **SatNOGS adapter satellite/transmitter identity** — The adapter now requires `vehicle.norad_id`, `satnogs.transmitter_uuid`, and `satnogs.status`, queries observations with `satellite__norad_cat_id`, `transmitter_uuid`, and `status`, follows SatNOGS `Link` headers for pagination, deduplicates by SatNOGS observation ID, and keeps transmitter UUID out of backend ingest payloads and tags.
 - **SatNOGS adapter source identity** — The adapter now resolves its backend vehicle source automatically at startup through `platform.source_resolve_url`. `platform.source_id` remains available as an override, but normal operation no longer requires copying backend UUIDs into YAML.
@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dynamic source identity** — Removed built-in source IDs, source aliases, and startup creation of known local-stack sources. Sources now come only from configuration files plus persisted `telemetry_sources` rows, and simulator routing uses each row's `base_url`.
 
 ### Fixed
+
+- **UI polish (cursor, scope streams list, analysis history table)** — Restored pointer cursor on native controls and shared `Button` after Tailwind base behavior, made the stream picker popover reliably scroll inside the scope dialog, removed a fixed-height clip on Analysis → Table, and let the history grid use a viewport-aware max height with internal scrolling.
+
+- **Docker / LAN UI failing to load data** — Backend CORS now supports an optional `CORS_ORIGIN_REGEX` (enabled in `docker-compose.yml` for `http://*host*:3000`) so browsers are not blocked when the dashboard origin is not exactly `localhost`. Exception responses echo the same allowed `Origin` logic. The frontend Docker build accepts `NEXT_PUBLIC_API_URL` as a **build arg** so client-side `fetch` can target a reachable API host when not using `localhost`.
 
 - **SatNOGS repeated observation samples** — Historical telemetry now keys samples by stream, channel, timestamp, and required ingest sequence, so repeated LASARSAT packets in one SatNOGS observation preserve multiple same-channel rows instead of collapsing to one timestamp collision.
 - **SatNOGS backfill and LASARSAT decode safety** — SatNOGS 429 throttling no longer advances the backfill cursor, and the LASARSAT Kaitai decoder now parses full AX.25 frames for packet telemetry while preserving CW beacon fallback decoding.

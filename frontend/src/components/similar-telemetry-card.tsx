@@ -68,7 +68,7 @@ export function SimilarTelemetryCard({ detailSourceId, scope, channels }: Simila
           {channels.map((r) => (
 	            <li key={r.name}>
 	              <Link
-	                href={buildTelemetryDetailHref(detailSourceId, r.name, scope)}
+	                href={buildTelemetryDetailHref(detailSourceId, r.name, scope, "analysis")}
                 className="hover:bg-accent focus-visible:ring-ring text-primary block rounded-md border p-2 text-sm underline-offset-4 transition-colors duration-200 hover:underline focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">

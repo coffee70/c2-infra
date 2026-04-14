@@ -40,14 +40,23 @@ function isIsoLike(value: string | null): value is string {
 export function parseTelemetryDetailScope(
   params: SearchParamsInput,
 ): TelemetryDetailScope {
-  const mode = firstValue(params, "scope");
+  const modeRaw = firstValue(params, "scope");
+  if (
+    modeRaw === "latest" ||
+    modeRaw === null ||
+    modeRaw === "" ||
+    (modeRaw !== "streams" && modeRaw !== "date_range")
+  ) {
+    return LATEST_SCOPE;
+  }
+
   const streamIds = valuesFor(params, "stream_ids");
   const since = firstValue(params, "since");
   const until = firstValue(params, "until");
   const validSince = isIsoLike(since) ? since : null;
   const validUntil = isIsoLike(until) ? until : null;
 
-  if (mode === "streams" && streamIds.length > 0) {
+  if (modeRaw === "streams" && streamIds.length > 0) {
     return {
       mode: "streams",
       streamIds,
@@ -55,7 +64,7 @@ export function parseTelemetryDetailScope(
       until: validUntil,
     };
   }
-  if (mode === "date_range" && (validSince || validUntil)) {
+  if (modeRaw === "date_range" && (validSince || validUntil)) {
     return {
       mode: "date_range",
       since: validSince,
@@ -114,6 +123,30 @@ export function telemetryScopesEqual(
 
 export function isRealtimeEligible(scope: TelemetryDetailScope): boolean {
   return scope.mode === "latest";
+}
+
+/**
+ * Query params for compare-channel `/recent` fetch: same UTC window + mode as primary,
+ * but never `stream_ids`. When primary is `streams` without a time window, falls back to
+ * latest so the backend accepts the request (Option A — time-aligned, not same streams).
+ */
+export function telemetryScopeToCompareRecentParams(
+  scope: TelemetryDetailScope,
+): URLSearchParams {
+  if (scope.mode === "latest") {
+    return telemetryScopeToQueryParams(LATEST_SCOPE);
+  }
+  if (scope.mode === "date_range") {
+    return telemetryScopeToQueryParams(scope);
+  }
+  if (scope.since || scope.until) {
+    return telemetryScopeToQueryParams({
+      mode: "date_range",
+      since: scope.since ?? null,
+      until: scope.until ?? null,
+    });
+  }
+  return telemetryScopeToQueryParams(LATEST_SCOPE);
 }
 
 function formatScopeTime(value: string): string {

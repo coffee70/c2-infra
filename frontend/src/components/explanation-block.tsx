@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Collapsible,
@@ -47,10 +48,18 @@ export function ExplanationBlock({ channelName, sourceId, scope }: ExplanationBl
         <CardHeader>
           <CardTitle>Explanation</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <p className="text-muted-foreground text-sm">
-            Unable to load explanation. You can try again later.
+            Unable to load explanation. Check the API and try again.
           </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => explanationQuery.refetch()}
+          >
+            Retry
+          </Button>
         </CardContent>
       </Card>
     );

@@ -103,13 +103,13 @@ test("telemetry detail applies repeated stream_ids scope", async ({
     new RegExp(
       `${escapeRegExp(
         `/telemetry/${selected.sourceId}/${selected.channelName}`,
-      )}\\?scope=streams&stream_ids=${escapeRegExp(selected.streamId)}$`,
+      )}\\?scope=streams&stream_ids=${escapeRegExp(selected.streamId)}&view=analysis$`,
     ),
   );
 
-  await expect(page.getByText("Viewing 1 selected stream")).toBeVisible();
-  await page.getByRole("tab", { name: "History" }).click();
-  await expect(page.locator("#history-stream")).toHaveCount(0);
+  await expect(page.getByText(/^1 stream$/)).toBeVisible();
+  await page.getByRole("button", { name: "Table" }).click();
+  await expect(page.getByRole("columnheader", { name: /Stream/ })).toHaveCount(0);
 });
 
 test("data scope stream picker preserves backend ordering for opaque ids", async ({
@@ -167,10 +167,11 @@ test("data scope stream picker preserves backend ordering for opaque ids", async
 
   await expect(page).toHaveURL(
     new RegExp(
-      `${escapeRegExp(`/telemetry/${sourceId}/${channelName}`)}\\?scope=streams&stream_ids=${escapeRegExp(newerRunId)}$`,
+      `${escapeRegExp(`/telemetry/${sourceId}/${channelName}`)}\\?scope=streams&stream_ids=${escapeRegExp(newerRunId)}&view=analysis$`,
     ),
   );
 
+  await page.getByRole("button", { name: "Edit scope" }).click();
   await page.getByRole("button", { name: "Add stream" }).click();
 
   const optionTexts = await page.getByRole("button").allTextContents();
@@ -240,11 +241,11 @@ test("telemetry detail defaults to the latest stream that contains the channel",
 
   await expect(page).toHaveURL(
     new RegExp(
-      `${escapeRegExp(`/telemetry/${selected.sourceId}/${selected.channelName}`)}$`,
+      `${escapeRegExp(`/telemetry/${selected.sourceId}/${selected.channelName}`)}\\?scope=latest&view=analysis$`,
     ),
   );
 
-  await page.getByRole("tab", { name: "History" }).click();
-  await expect(page.locator("#history-stream")).toHaveCount(0);
-  await expect(page.getByText("Viewing latest stream").first()).toBeVisible();
+  await page.getByRole("button", { name: "Table" }).click();
+  await expect(page.getByRole("columnheader", { name: /Stream/ })).toHaveCount(0);
+  await expect(page.getByText(/^Latest$/).first()).toBeVisible();
 });
