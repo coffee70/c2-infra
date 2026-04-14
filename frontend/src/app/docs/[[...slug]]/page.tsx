@@ -46,8 +46,8 @@ export default async function DocsPage({
   }
 
   return (
-    <div className="flex min-h-0 gap-12 px-4 py-8 sm:px-6">
-      <aside className="sticky top-16 shrink-0 self-start">
+    <div className="flex min-h-0 gap-12 px-4 pt-4 pb-8 sm:px-6">
+      <aside className="sticky top-0 shrink-0 self-start">
         <nav
           className="text-muted-foreground flex flex-col gap-1 text-sm"
           aria-label="Documentation"
@@ -75,8 +75,8 @@ export default async function DocsPage({
         </nav>
       </aside>
 
-      <div className="flex min-w-0 flex-1 justify-center">
-        <article className="prose prose-invert prose-slate dark:prose-invert w-full max-w-3xl">
+      <div className="flex min-w-0 flex-1 justify-center pt-2">
+        <article className="prose prose-invert prose-slate dark:prose-invert w-full max-w-3xl px-2">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{

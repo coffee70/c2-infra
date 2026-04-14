@@ -249,7 +249,7 @@ function TelemetryDetailTabsContent({
         />
 
         <div className="flex min-h-0 gap-12">
-          <aside className="sticky top-20 shrink-0 self-start">
+          <aside className="sticky top-4 shrink-0 self-start">
             <nav
               className="text-muted-foreground flex flex-col gap-1 text-sm"
               aria-label="Telemetry detail sections"

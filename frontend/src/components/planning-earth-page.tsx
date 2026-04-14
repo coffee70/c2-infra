@@ -38,10 +38,7 @@ export function PlanningEarthPage() {
   }
 
   return (
-    <div
-      className="fixed inset-x-0 top-14 bottom-0 w-full"
-      style={{ height: "calc(100vh - 3.5rem)" }}
-    >
+    <div className="relative h-dvh w-full">
       <EarthOverviewView
         sources={sources}
         initialSelectedSourceId={initialSourceId}

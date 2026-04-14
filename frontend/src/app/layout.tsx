@@ -41,11 +41,17 @@ export default function RootLayout({
         </a>
         <AppProviders>
           <TooltipProvider>
-            <Nav />
             <KeyboardShortcutsHandler />
-            <main id="main-content" tabIndex={-1} className="min-h-0 flex-1">
-              {children}
-            </main>
+            <div className="flex min-h-0 flex-1">
+              <Nav />
+              <main
+                id="main-content"
+                tabIndex={-1}
+                className="min-h-0 min-w-0 flex-1 pt-14 transition-[width,padding] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] md:pt-0"
+              >
+                {children}
+              </main>
+            </div>
           </TooltipProvider>
         </AppProviders>
       </body>

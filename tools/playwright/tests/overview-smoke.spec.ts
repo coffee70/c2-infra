@@ -15,6 +15,6 @@ test("home redirects to overview and renders primary navigation @smoke", async (
   await expect(page.getByRole("link", { name: "Overview" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Telemetry" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Planning" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Sources" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Help and documentation" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Source" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Documentation" })).toBeVisible();
 });

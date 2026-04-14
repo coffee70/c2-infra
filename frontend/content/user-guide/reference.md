@@ -14,7 +14,7 @@ Quick reference for pages and features.
 
 ## Keyboard Shortcuts
 
-Click the **?** button in the nav to view available keyboard shortcuts. Common shortcuts include navigation and quick actions.
+Open **Keybindings** from the bottom of the left navigation rail to view available keyboard shortcuts. In collapsed mode, hover the keyboard icon to see the label tooltip.
 
 ## Logs and Debugging
 
@@ -30,4 +30,4 @@ For mission control environments, the platform supports:
 - **High-contrast mode** — higher contrast for visibility
 - **Large-type mode** — larger text for readability
 
-Use the toggle in the nav to switch modes. Preferences are stored in the browser.
+Use **Screen type** in the bottom utility section of the left navigation rail to switch modes. Preferences are stored in the browser.

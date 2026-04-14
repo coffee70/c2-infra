@@ -489,7 +489,7 @@ function RealtimeOverviewContent({
         watchlistVersion={watchlistVersion}
       />
       <div className="flex min-h-0 flex-col gap-6 md:flex-row md:gap-12">
-        <aside className="shrink-0 md:sticky md:top-20 md:self-start">
+        <aside className="shrink-0 md:sticky md:top-4 md:self-start">
           <nav
             className="text-muted-foreground flex gap-2 overflow-x-auto pb-1 text-sm md:flex-col md:gap-1 md:overflow-visible md:pb-0"
             aria-label="Overview sections"

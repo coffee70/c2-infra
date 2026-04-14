@@ -122,7 +122,7 @@ export function TelemetryDetailHeader({
   const scopePillLabel = appliedScopeBadge(scopeControl.pageScope);
 
   return (
-    <header className="bg-background/95 supports-backdrop-filter:bg-background/80 sticky top-16 z-10 border-b py-3 backdrop-blur">
+    <header className="bg-background/95 supports-backdrop-filter:bg-background/80 sticky top-0 z-10 border-b py-3 backdrop-blur">
       <div className="space-y-2">
         {/* Row 1: channel identity and live reading */}
         <div className="min-w-0 space-y-1">

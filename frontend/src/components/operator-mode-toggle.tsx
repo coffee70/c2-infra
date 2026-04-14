@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -10,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { MonitorIcon } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const STORAGE_KEY = "operator_mode";
 type OperatorMode = "default" | "high-contrast" | "large-type";
@@ -41,7 +41,12 @@ const MODE_LABELS: Record<OperatorMode, string> = {
   "large-type": "Large type",
 };
 
-export function OperatorModeToggle() {
+interface OperatorModeToggleProps {
+  className?: string;
+  ariaLabel?: string;
+}
+
+export function OperatorModeToggle({ className, ariaLabel }: OperatorModeToggleProps) {
   const [mode, setMode] = useState<OperatorMode>(() => getStoredMode());
 
   useEffect(() => {
@@ -61,17 +66,22 @@ export function OperatorModeToggle() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 text-xs"
+        <button
+          type="button"
+          className={cn(
+            "flex h-9 w-full cursor-pointer items-center gap-2 overflow-hidden rounded-md border bg-background px-[9px] text-sm font-medium text-muted-foreground shadow-xs transition-colors",
+            "hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+            "focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none",
+            className,
+          )}
           title="Display mode for long console shifts"
+          aria-label={ariaLabel ?? `Screen type (${MODE_LABELS[mode]})`}
         >
-          <MonitorIcon className="size-3.5" />
-          {MODE_LABELS[mode]}
-        </Button>
+          <MonitorIcon className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 overflow-hidden whitespace-nowrap">{MODE_LABELS[mode]}</span>
+        </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup value={mode} onValueChange={(v) => setModeAndStore(v as OperatorMode)}>
           <DropdownMenuRadioItem value="default">Default</DropdownMenuRadioItem>
           <DropdownMenuRadioItem value="high-contrast">High contrast</DropdownMenuRadioItem>
