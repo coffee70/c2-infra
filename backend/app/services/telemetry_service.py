@@ -666,4 +666,5 @@ class TelemetryService:
             what_to_check_next=related,
             confidence_indicator=confidence,
             llm_explanation=llm_explanation,
+            scope=None,
         )

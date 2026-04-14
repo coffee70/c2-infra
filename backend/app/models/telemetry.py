@@ -119,6 +119,13 @@ class TelemetryData(Base):
             "timestamp",
             "sequence",
         ),
+        Index(
+            "ix_telemetry_data_telemetry_timestamp_source",
+            "telemetry_id",
+            "timestamp",
+            "sequence",
+            "source_id",
+        ),
     )
 class TelemetryStatistics(Base):
     """Precomputed statistics for each telemetry point per source."""

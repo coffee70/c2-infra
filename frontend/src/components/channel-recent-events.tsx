@@ -3,13 +3,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
-import { useOpsEventsQuery } from "@/lib/query-hooks";
+import { useTelemetryScopedEventsQuery } from "@/lib/query-hooks";
+import { telemetryScopeSummary, type TelemetryDetailScope } from "@/lib/telemetry-detail-scope";
 
 interface ChannelRecentEventsProps {
   channelName: string;
   vehicleId: string;
-  streamId?: string;
-  sinceMinutes?: number;
+  scope: TelemetryDetailScope;
 }
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
@@ -31,17 +31,9 @@ function formatTime(iso: string): string {
 export function ChannelRecentEvents({
   channelName,
   vehicleId,
-  streamId,
-  sinceMinutes = 60,
+  scope,
 }: ChannelRecentEventsProps) {
-  const params = {
-    source_id: vehicleId,
-    since_minutes: String(sinceMinutes),
-    channel_name: channelName,
-    limit: "20",
-    ...(streamId ? { stream_id: streamId } : {}),
-  };
-  const eventsQuery = useOpsEventsQuery(params);
+  const eventsQuery = useTelemetryScopedEventsQuery(channelName, vehicleId, scope);
   const loading = eventsQuery.isLoading;
   const events = eventsQuery.data?.events ?? [];
 
@@ -70,7 +62,7 @@ export function ChannelRecentEvents({
         </CardHeader>
         <CardContent>
           <p className="text-muted-foreground text-sm">
-            No events in the last {sinceMinutes} minutes.
+            No events for {telemetryScopeSummary(scope).toLowerCase()}.
           </p>
         </CardContent>
       </Card>

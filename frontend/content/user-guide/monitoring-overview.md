@@ -79,9 +79,7 @@ On the [Planning](/planning) page, the left-side **Earth view** card has two sep
 
 Each source has at most one active position mapping. If a source has no valid mapping, it won’t show a position on the globe when you add it to “Show on globe.”
 
-On channel detail pages, the **History** stream picker is explicit: choosing a stream pins history queries to that stream, while **Active / latest** keeps the page on the source’s current stream.
-
-If you open a channel detail page without `?stream_id=...`, the page stays source-scoped by default. Summary, recent values, and live updates follow the source’s current stream instead of freezing on the stream that happened to be current when the page first loaded.
+On channel detail pages, the sticky channel header shows the current **data scope** as a pill (hover for the full line). **Edit scope** opens a modal to use the latest stream, selected streams, selected streams within a time range, or all channel data in a date range. Live updates are available only in Latest mode.
 
 ### Workflow: Simulator on the Planning globe
 

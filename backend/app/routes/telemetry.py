@@ -1,9 +1,9 @@
 """Telemetry API routes."""
 
 import logging
-import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -28,6 +28,8 @@ from app.models.schemas import (
     ChannelSourcesResponse,
     DataPoint,
     ExplainResponse,
+    TelemetryDetailPageScope,
+    TelemetryDetailScopeWindow,
     RecentDataPoint,
     RelatedChannel,
     LiveStateUpdate,
@@ -170,6 +172,367 @@ def _resolve_latest_stream_id_for_channel(db: Session, source_id: str, name: str
         return historical_stream_id
 
     return _resolve_scoped_stream_id(db, logical_source_id)
+
+
+@dataclass(frozen=True)
+class DetailDataScope:
+    mode: Literal["latest", "streams", "date_range"]
+    stream_ids: tuple[str, ...] = ()
+    since: datetime | None = None
+    until: datetime | None = None
+
+
+def _scope_timestamp_iso(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    aware = dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    return aware.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _detail_page_scope_payload(detail: DetailDataScope) -> TelemetryDetailPageScope:
+    window: TelemetryDetailScopeWindow | None = None
+    if detail.since is not None or detail.until is not None:
+        window = TelemetryDetailScopeWindow(
+            since=_scope_timestamp_iso(detail.since),
+            until=_scope_timestamp_iso(detail.until),
+        )
+    if detail.mode == "latest":
+        resolved = detail.stream_ids[0] if detail.stream_ids else None
+        return TelemetryDetailPageScope(
+            mode="latest",
+            resolved_stream_id=resolved,
+            window=window,
+        )
+    if detail.mode == "streams":
+        return TelemetryDetailPageScope(
+            mode="streams",
+            stream_count=len(detail.stream_ids),
+            stream_ids=list(detail.stream_ids),
+            window=window,
+        )
+    return TelemetryDetailPageScope(mode="date_range", window=window)
+
+
+def _parse_iso_datetime_param(value: Optional[str], name: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid {name} format, use ISO8601")
+    return parsed
+
+
+def _parse_detail_scope_params(
+    *,
+    scope: str,
+    stream_ids: list[str],
+    since: Optional[str],
+    until: Optional[str],
+) -> DetailDataScope:
+    if scope == "latest":
+        return DetailDataScope(mode="latest")
+
+    since_dt = _parse_iso_datetime_param(since, "since") if since else None
+    until_dt = _parse_iso_datetime_param(until, "until") if until else None
+    if since_dt is not None and until_dt is not None and since_dt > until_dt:
+        raise HTTPException(status_code=400, detail="since must be before until")
+    if scope == "streams":
+        cleaned_stream_ids = tuple(stream_id for stream_id in stream_ids if stream_id)
+        if not cleaned_stream_ids:
+            raise HTTPException(status_code=400, detail="stream_ids is required for streams scope")
+        return DetailDataScope(
+            mode="streams",
+            stream_ids=cleaned_stream_ids,
+            since=since_dt,
+            until=until_dt,
+        )
+    if scope == "date_range":
+        if since_dt is None and until_dt is None:
+            raise HTTPException(status_code=400, detail="since or until is required for date_range scope")
+        return DetailDataScope(mode="date_range", since=since_dt, until=until_dt)
+    raise HTTPException(status_code=400, detail="Invalid scope")
+
+
+def _validate_stream_ids_for_source(
+    db: Session,
+    *,
+    source_id: str,
+    stream_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    logical_source_id = normalize_source_id(source_id)
+    requested = tuple(dict.fromkeys(stream_ids))
+    if not requested:
+        return ()
+
+    registry_rows = db.execute(
+        select(TelemetryStream.id).where(
+            TelemetryStream.source_id == logical_source_id,
+            TelemetryStream.id.in_(requested),
+        )
+    ).fetchall()
+    valid = {row[0] for row in registry_rows}
+    missing = [stream_id for stream_id in requested if stream_id not in valid]
+    if missing:
+        history_rows = db.execute(
+            select(TelemetryData.stream_id)
+            .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
+            .where(
+                TelemetryMetadata.source_id == logical_source_id,
+                TelemetryData.stream_id.in_(missing),
+            )
+            .distinct()
+        ).fetchall()
+        valid.update(row[0] for row in history_rows)
+
+    invalid = [stream_id for stream_id in requested if stream_id not in valid]
+    if invalid:
+        raise HTTPException(status_code=404, detail="Stream not found for source")
+    return tuple(stream_id for stream_id in stream_ids if stream_id in valid)
+
+
+def _resolve_detail_data_scope(
+    db: Session,
+    *,
+    source_id: str,
+    name: str,
+    scope: str,
+    stream_ids: list[str],
+    since: Optional[str],
+    until: Optional[str],
+) -> tuple[TelemetryMetadata, DetailDataScope]:
+    logical_source_id = normalize_source_id(source_id)
+    meta = _get_channel_meta(db, logical_source_id, name)
+    if not meta:
+        raise HTTPException(status_code=404, detail="Telemetry not found")
+
+    parsed_scope = _parse_detail_scope_params(
+        scope=scope,
+        stream_ids=stream_ids,
+        since=since,
+        until=until,
+    )
+    if parsed_scope.mode == "latest":
+        latest_stream_id = _resolve_latest_stream_id_for_channel(db, logical_source_id, name)
+        return meta, DetailDataScope(mode="latest", stream_ids=(latest_stream_id,))
+    if parsed_scope.mode == "streams":
+        valid_stream_ids = _validate_stream_ids_for_source(
+            db,
+            source_id=logical_source_id,
+            stream_ids=parsed_scope.stream_ids,
+        )
+        return meta, DetailDataScope(
+            mode="streams",
+            stream_ids=valid_stream_ids,
+            since=parsed_scope.since,
+            until=parsed_scope.until,
+        )
+    return meta, parsed_scope
+
+
+def _scoped_telemetry_filters(meta: TelemetryMetadata, scope: DetailDataScope):
+    filters = [TelemetryData.telemetry_id == meta.id]
+    if scope.stream_ids:
+        filters.append(TelemetryData.stream_id.in_(scope.stream_ids))
+    if scope.since is not None:
+        filters.append(TelemetryData.timestamp >= scope.since)
+    if scope.until is not None:
+        filters.append(TelemetryData.timestamp <= scope.until)
+    return filters
+
+
+def _get_scoped_recent_values(
+    db: Session,
+    *,
+    meta: TelemetryMetadata,
+    scope: DetailDataScope,
+    limit: int,
+) -> list[tuple[datetime, float, str]]:
+    stmt = (
+        select(TelemetryData.timestamp, TelemetryData.value, TelemetryData.stream_id)
+        .where(*_scoped_telemetry_filters(meta, scope))
+        .order_by(desc(TelemetryData.timestamp), desc(TelemetryData.sequence))
+        .limit(limit)
+    )
+    rows = db.execute(stmt).fetchall()
+    return [(row[0], float(row[1]), row[2]) for row in rows]
+
+
+def _get_scoped_statistics(
+    db: Session,
+    *,
+    meta: TelemetryMetadata,
+    scope: DetailDataScope,
+) -> StatisticsResponse:
+    stats_row = db.execute(
+        select(
+            func.avg(TelemetryData.value),
+            func.coalesce(func.stddev_pop(TelemetryData.value), 0),
+            func.min(TelemetryData.value),
+            func.max(TelemetryData.value),
+            func.percentile_cont(0.05).within_group(TelemetryData.value),
+            func.percentile_cont(0.50).within_group(TelemetryData.value),
+            func.percentile_cont(0.95).within_group(TelemetryData.value),
+            func.count(),
+        ).where(*_scoped_telemetry_filters(meta, scope))
+    ).first()
+    if not stats_row or not stats_row[7]:
+        return StatisticsResponse(
+            mean=None,
+            std_dev=None,
+            min_value=None,
+            max_value=None,
+            p5=None,
+            p50=None,
+            p95=None,
+            n_samples=0,
+        )
+    return StatisticsResponse(
+        mean=float(stats_row[0]),
+        std_dev=float(stats_row[1]),
+        min_value=float(stats_row[2]),
+        max_value=float(stats_row[3]),
+        p5=float(stats_row[4]),
+        p50=float(stats_row[5]),
+        p95=float(stats_row[6]),
+        n_samples=int(stats_row[7]),
+    )
+
+
+def _confidence_indicator(n_samples: int, last_timestamp: str | None) -> str | None:
+    if n_samples <= 0:
+        return None
+    if n_samples < 100:
+        return "limited data"
+    if not last_timestamp:
+        return "historical baseline"
+    return "high confidence"
+
+
+def _build_scoped_explain_response(
+    db: Session,
+    *,
+    meta: TelemetryMetadata,
+    source_id: str,
+    scope: DetailDataScope,
+    include_llm: bool = False,
+    llm: object | None = None,
+) -> ExplainResponse:
+    aliases = get_aliases_by_telemetry_ids(
+        db,
+        source_id=source_id,
+        telemetry_ids=[meta.id],
+    ).get(meta.id, [])
+    stats = _get_scoped_statistics(db, meta=meta, scope=scope)
+    recent_rows = _get_scoped_recent_values(db, meta=meta, scope=scope, limit=1)
+    recent_value = recent_rows[0][1] if recent_rows else None
+    last_timestamp = recent_rows[0][0].isoformat() if recent_rows else None
+
+    mean = stats.mean
+    std_dev = stats.std_dev or 0
+    z_score: Optional[float] = None
+    is_anomalous = False
+    if recent_value is not None and mean is not None and std_dev > 0:
+        z_score = (recent_value - mean) / std_dev
+        is_anomalous = abs(z_score) > 2
+    if recent_value is None:
+        recent_value = mean
+
+    red_low = float(meta.red_low) if meta.red_low is not None else None
+    red_high = float(meta.red_high) if meta.red_high is not None else None
+    if recent_value is None:
+        state = "no_data"
+        state_reason = "no_samples"
+    else:
+        state, state_reason = _compute_state(recent_value, z_score, red_low, red_high, std_dev)
+
+    llm_explanation = ""
+    what_this_means = ""
+    related: list[RelatedChannel] = []
+    if include_llm and llm is not None:
+        prompt = (
+            f"Telemetry Name: {meta.name}\n"
+            f"Units: {meta.units}\n"
+            f"Description: {meta.description or 'N/A'}\n"
+            f"Scoped Recent Value: {recent_value}\n"
+            f"Scoped Mean: {stats.mean}\n"
+            f"Scoped Std Dev: {stats.std_dev}\n"
+            f"Scoped P5: {stats.p5}\n"
+            f"Scoped P95: {stats.p95}\n"
+            f"Scoped Samples: {stats.n_samples}\n"
+            f"Z-Score: {z_score if z_score is not None else 'N/A'}\n"
+            f"Is Anomalous: {is_anomalous}\n\n"
+            "Provide a concise explanation for operators based only on this scoped dataset."
+        )
+        llm_explanation = llm.generate(prompt)
+        what_this_means = llm_explanation.split("\n\n")[0].strip() if llm_explanation else ""
+        service = TelemetryService(db, get_embedding_provider(), llm)
+        related = service.get_related_channels(meta.name, source_id=source_id, limit=5)
+
+    return ExplainResponse(
+        name=meta.name,
+        aliases=aliases,
+        description=meta.description,
+        units=meta.units,
+        channel_origin=meta.channel_origin or "catalog",
+        discovery_namespace=meta.discovery_namespace,
+        statistics=stats,
+        recent_value=recent_value,
+        z_score=z_score,
+        is_anomalous=is_anomalous,
+        state=state,
+        state_reason=state_reason,
+        last_timestamp=last_timestamp,
+        red_low=red_low,
+        red_high=red_high,
+        what_this_means=what_this_means,
+        what_to_check_next=related,
+        confidence_indicator=_confidence_indicator(stats.n_samples, last_timestamp),
+        llm_explanation=llm_explanation,
+        scope=_detail_page_scope_payload(scope),
+    )
+
+
+def _stream_metadata_by_id(db: Session, stream_ids: list[str]) -> dict[str, TelemetryStream]:
+    if not stream_ids:
+        return {}
+    rows = db.execute(select(TelemetryStream).where(TelemetryStream.id.in_(stream_ids))).scalars().all()
+    return {row.id: row for row in rows}
+
+
+def _metadata_string(metadata: object, key: str) -> str | None:
+    if isinstance(metadata, dict):
+        value = metadata.get(key)
+        return value if isinstance(value, str) and value else None
+    return None
+
+
+def _stream_option(
+    stream_id: str,
+    *,
+    stream: TelemetryStream | None,
+    start_time: datetime | None,
+    last_timestamp: datetime | None,
+    sample_count: int | None,
+) -> ChannelSourceItem:
+    metadata = stream.metadata_json if stream is not None else None
+    label = _metadata_string(metadata, "label")
+    summary = _metadata_string(metadata, "summary")
+    provider = _metadata_string(metadata, "provider")
+    stream_start = stream.started_at if stream is not None else None
+    stream_seen = stream.last_seen_at if stream is not None else None
+    effective_start = start_time or stream_start
+    effective_last = last_timestamp or stream_seen
+    return ChannelSourceItem(
+        stream_id=stream_id,
+        label=label,
+        start_time=effective_start.isoformat() if effective_start is not None else None,
+        end_time=stream_seen.isoformat() if stream_seen is not None else None,
+        sample_count=sample_count,
+        last_timestamp=effective_last.isoformat() if effective_last is not None else None,
+        provider=provider,
+        summary=summary,
+    )
 
 
 def get_embedding_provider() -> SentenceTransformerEmbeddingProvider:
@@ -555,36 +918,60 @@ def get_source_streams(
     registry_rows = db.execute(
         select(
             TelemetryStream.id,
+            TelemetryStream.started_at,
             TelemetryStream.last_seen_at,
         ).where(TelemetryStream.source_id == logical_source_id)
     ).fetchall()
     history_rows = db.execute(
         select(
             TelemetryData.stream_id,
+            func.min(TelemetryData.timestamp).label("start_time"),
             func.max(TelemetryData.timestamp).label("last_seen_at"),
+            func.count().label("sample_count"),
         )
         .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
         .where(TelemetryMetadata.source_id == logical_source_id)
         .group_by(TelemetryData.stream_id)
     ).fetchall()
 
-    stream_seen_at: dict[str, datetime | None] = {}
-    for stream_id, seen_at in registry_rows:
-        stream_seen_at[stream_id] = seen_at
-    for stream_id, seen_at in history_rows:
-        prior = stream_seen_at.get(stream_id)
-        if prior is None or (seen_at is not None and seen_at > prior):
-            stream_seen_at[stream_id] = seen_at
+    stream_stats: dict[str, dict[str, object]] = {}
+    for stream_id, started_at, seen_at in registry_rows:
+        stream_stats[stream_id] = {
+            "start_time": started_at,
+            "last_timestamp": seen_at,
+            "sample_count": None,
+        }
+    for stream_id, start_time, seen_at, sample_count in history_rows:
+        prior = stream_stats.get(stream_id, {})
+        prior_seen = prior.get("last_timestamp")
+        latest_seen = prior_seen if isinstance(prior_seen, datetime) else None
+        stream_stats[stream_id] = {
+            "start_time": prior.get("start_time") or start_time,
+            "last_timestamp": seen_at if latest_seen is None or (seen_at is not None and seen_at > latest_seen) else latest_seen,
+            "sample_count": sample_count,
+        }
 
     rows = sorted(
-        stream_seen_at.items(),
-        key=lambda item: (item[1].timestamp() if item[1] is not None else float("-inf"), item[0]),
+        stream_stats.items(),
+        key=lambda item: (
+            item[1]["last_timestamp"].timestamp()
+            if isinstance(item[1].get("last_timestamp"), datetime)
+            else float("-inf"),
+            item[0],
+        ),
         reverse=True,
     )
+    registry_by_id = _stream_metadata_by_id(db, [stream_id for stream_id, _stats in rows])
     return ChannelSourcesResponse(
         sources=[
-            ChannelSourceItem(stream_id=stream_id, label=_format_source_label(stream_id))
-            for stream_id, _seen_at in rows
+            _stream_option(
+                stream_id,
+                stream=registry_by_id.get(stream_id),
+                start_time=stats.get("start_time") if isinstance(stats.get("start_time"), datetime) else None,
+                last_timestamp=stats.get("last_timestamp") if isinstance(stats.get("last_timestamp"), datetime) else None,
+                sample_count=stats.get("sample_count") if isinstance(stats.get("sample_count"), int) else None,
+            )
+            for stream_id, stats in rows
         ]
     )
 
@@ -745,6 +1132,14 @@ def search(
     return SearchResponse(results=results)
 
 
+def _summary_db_only_page_scope(db: Session, data_source_id: str, meta: TelemetryMetadata) -> TelemetryDetailPageScope:
+    try:
+        sid = _resolve_latest_stream_id_for_channel(db, data_source_id, meta.name)
+        return TelemetryDetailPageScope(mode="latest", resolved_stream_id=sid)
+    except HTTPException:
+        return TelemetryDetailPageScope(mode="latest", resolved_stream_id=None)
+
+
 def _get_explanation_summary_db_only(db: Session, name: str, source_id: str) -> ExplainResponse:
     """Build explain response using only DB—no embedding/LLM cold start."""
     data_source_id = normalize_source_id(source_id)
@@ -796,6 +1191,7 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str) -> 
             what_to_check_next=[],
             confidence_indicator=None,
             llm_explanation="",
+            scope=_summary_db_only_page_scope(db, data_source_id, meta),
         )
 
     rows = _get_recent_values_db_only(db, name, limit=1, source_id=data_source_id)
@@ -847,6 +1243,7 @@ def _get_explanation_summary_db_only(db: Session, name: str, source_id: str) -> 
         what_to_check_next=[],
         confidence_indicator=None,
         llm_explanation="",
+        scope=_summary_db_only_page_scope(db, data_source_id, meta),
     )
 
 
@@ -868,16 +1265,29 @@ def get_summary(
 def get_summary_for_source(
     source_id: str,
     name: str,
-    stream_id: Optional[str] = None,
+    scope: str = "latest",
+    stream_ids: list[str] = Query(default=[]),
+    since: Optional[str] = None,
+    until: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    scoped_stream_id = (
-        _resolve_scoped_stream_id(db, source_id, stream_id)
-        if stream_id is not None
-        else _resolve_latest_stream_id_for_channel(db, source_id, name)
+    meta, detail_scope = _resolve_detail_data_scope(
+        db,
+        source_id=source_id,
+        name=name,
+        scope=scope,
+        stream_ids=stream_ids,
+        since=since,
+        until=until,
     )
-    return get_summary(name=name, source_id=scoped_stream_id, db=db)
+    return _build_scoped_explain_response(
+        db,
+        meta=meta,
+        source_id=normalize_source_id(source_id),
+        scope=detail_scope,
+        include_llm=False,
+    )
 
 
 @router.get("/{name}/explain", response_model=ExplainResponse)
@@ -902,39 +1312,33 @@ def explain(
 def explain_for_source(
     source_id: str,
     name: str,
-    stream_id: Optional[str] = None,
+    scope: str = "latest",
+    stream_ids: list[str] = Query(default=[]),
+    since: Optional[str] = None,
+    until: Optional[str] = None,
     skip_llm: bool = False,
     db: Session = Depends(get_db),
     embedding: SentenceTransformerEmbeddingProvider = Depends(get_embedding_provider),
     llm: object = Depends(get_llm_provider),
 ):
     name = unquote(name)
-    scoped_stream_id = (
-        _resolve_scoped_stream_id(db, source_id, stream_id)
-        if stream_id is not None
-        else _resolve_latest_stream_id_for_channel(db, source_id, name)
-    )
-    return explain(
+    meta, detail_scope = _resolve_detail_data_scope(
+        db,
+        source_id=source_id,
         name=name,
-        skip_llm=skip_llm,
-        source_id=scoped_stream_id,
+        scope=scope,
+        stream_ids=stream_ids,
+        since=since,
+        until=until,
+    )
+    return _build_scoped_explain_response(
         db=db,
-        embedding=embedding,
+        meta=meta,
+        source_id=normalize_source_id(source_id),
+        scope=detail_scope,
+        include_llm=not skip_llm,
         llm=llm,
     )
-
-
-def _format_source_label(source_id: str, registered_name: Optional[str] = None) -> str:
-    """Human-readable label for a source or stream id."""
-    if registered_name:
-        return registered_name
-
-    match = re.search(r"-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})Z?$", source_id)
-    if match:
-        date_part, h, m, s = match.groups()
-        return f"Stream started at {date_part} {h}:{m} UTC"
-
-    return source_id
 
 
 @router.get("/{name}/streams", response_model=ChannelSourcesResponse)
@@ -958,7 +1362,9 @@ def get_channel_streams(
     rows = db.execute(
         select(
             TelemetryData.stream_id,
+            func.min(TelemetryData.timestamp).label("start_time"),
             func.max(TelemetryData.timestamp).label("last_seen_at"),
+            func.count().label("sample_count"),
         )
         .join(TelemetryMetadata, TelemetryMetadata.id == TelemetryData.telemetry_id)
         .where(
@@ -971,9 +1377,16 @@ def get_channel_streams(
             TelemetryData.stream_id.desc(),
         )
     ).fetchall()
+    registry_by_id = _stream_metadata_by_id(db, [row[0] for row in rows])
     return ChannelSourcesResponse(
         sources=[
-            ChannelSourceItem(stream_id=row[0], label=_format_source_label(row[0]))
+            _stream_option(
+                row[0],
+                stream=registry_by_id.get(row[0]),
+                start_time=row[1],
+                last_timestamp=row[2],
+                sample_count=row[3],
+            )
             for row in rows
         ]
     )
@@ -1081,25 +1494,45 @@ def get_recent(
 def get_recent_for_source(
     source_id: str,
     name: str,
-    stream_id: Optional[str] = None,
+    scope: str = "latest",
+    stream_ids: list[str] = Query(default=[]),
     limit: int = 100,
     since: Optional[str] = None,
     until: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     name = unquote(name)
-    scoped_stream_id = (
-        _resolve_scoped_stream_id(db, source_id, stream_id)
-        if stream_id is not None
-        else _resolve_latest_stream_id_for_channel(db, source_id, name)
-    )
-    return get_recent(
+    meta, detail_scope = _resolve_detail_data_scope(
+        db,
+        source_id=source_id,
         name=name,
-        limit=limit,
+        scope=scope,
+        stream_ids=stream_ids,
         since=since,
         until=until,
-        source_id=scoped_stream_id,
-        db=db,
+    )
+    rows = _get_scoped_recent_values(
+        db,
+        meta=meta,
+        scope=detail_scope,
+        limit=limit,
+    )
+    data_points = [
+        RecentDataPoint(
+            timestamp=row[0].isoformat(),
+            value=row[1],
+            stream_id=row[2],
+        )
+        for row in reversed(rows)
+    ]
+    return RecentDataResponse(
+        data=data_points,
+        requested_since=since if since else None,
+        requested_until=until if until else None,
+        effective_since=data_points[0].timestamp if data_points else None,
+        effective_until=data_points[-1].timestamp if data_points else None,
+        applied_time_filter=bool(data_points) and (detail_scope.since is not None or detail_scope.until is not None),
+        fallback_to_recent=False,
     )
 
 

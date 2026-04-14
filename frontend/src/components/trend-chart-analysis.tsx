@@ -4,6 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RealtimeWsClient } from "@/lib/realtime-ws-client";
 import { buildTelemetryApiBase } from "@/lib/telemetry-routes";
 import {
+  isRealtimeEligible,
+  telemetryScopeKey,
+  telemetryScopeSummary,
+  telemetryScopeToCompareRecentParams,
+  telemetryScopeToQueryParams,
+  type TelemetryDetailScope,
+} from "@/lib/telemetry-detail-scope";
+import {
   Line,
   XAxis,
   YAxis,
@@ -18,23 +26,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/empty-state";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { CustomTimestampPicker } from "@/components/custom-timestamp-picker";
 import { ChevronDownIcon } from "lucide-react";
 
 const API_URL =
@@ -57,13 +58,6 @@ interface Bounds {
   minValue?: number | null;
   maxValue?: number | null;
 }
-
-const RANGE_PRESETS = [
-  { label: "15m", minutes: 15 },
-  { label: "1h", minutes: 60 },
-  { label: "6h", minutes: 360 },
-  { label: "24h", minutes: 1440 },
-] as const;
 
 function formatWithUnits(
   value: number | null | undefined,
@@ -94,6 +88,44 @@ function medianInterval(points: { timestamp: string }[]): number | null {
         new Date(points[i].timestamp).getTime()
     );
   return median(diffs);
+}
+
+/** Insert discontinuity markers so the line does not hide long gaps. */
+function insertTimeGapBreaks<
+  T extends {
+    timestamp: string;
+    value: number;
+    compareValue?: number;
+    time?: string;
+    timeFull?: string;
+  },
+>(rows: T[], gapFactor = 4): T[] {
+  if (rows.length < 2) return rows;
+  const intervals = rows.slice(1).map((row, i) =>
+    new Date(row.timestamp).getTime() - new Date(rows[i].timestamp).getTime(),
+  );
+  const med = median(intervals) || 60_000;
+  const threshold = Math.max(med * gapFactor, 120_000);
+  const out: T[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    out.push(rows[i]);
+    if (i < rows.length - 1) {
+      const t0 = new Date(rows[i].timestamp).getTime();
+      const t1 = new Date(rows[i + 1].timestamp).getTime();
+      if (t1 - t0 > threshold) {
+        const mid = new Date((t0 + t1) / 2).toISOString();
+        out.push({
+          ...rows[i],
+          timestamp: mid,
+          value: Number.NaN,
+          compareValue: Number.NaN,
+          time: "",
+          timeFull: "",
+        });
+      }
+    }
+  }
+  return out;
 }
 
 function formatInterval(ms: number): string {
@@ -138,29 +170,26 @@ function downsampleByWidth<T extends { timestamp: string; value: number }>(
 export function TrendChartAnalysis({
   channelName,
   vehicleId,
-  streamId = null,
+  scope,
   units,
   bounds,
   lastTimestamp,
 }: {
   channelName: string;
   vehicleId: string;
-  streamId?: string | null;
+  scope: TelemetryDetailScope;
   units?: string | null;
   bounds?: Bounds;
   lastTimestamp?: string | null;
 }) {
-  const [useUTC, setUseUTC] = useState(true);
+  const useUTC = true;
   const [showMeanP50, setShowMeanP50] = useState(true);
   const [showP5P95, setShowP5P95] = useState(true);
   const [compareChannel, setCompareChannel] = useState<string | null>(null);
   const [channelList, setChannelList] = useState<string[]>([]);
-  const [rangeMinutes, setRangeMinutes] = useState<number>(60);
-  const [customStart, setCustomStart] = useState<string | null>(null);
-  const [customEnd, setCustomEnd] = useState<string | null>(null);
-  const [useCustomRange, setUseCustomRange] = useState(false);
+  const [compareSearch, setCompareSearch] = useState("");
+  const [searchHits, setSearchHits] = useState<string[]>([]);
   const [timeRangePct, setTimeRangePct] = useState<[number, number]>([0, 100]);
-  const [zoomRefetch, setZoomRefetch] = useState<{ since: string; until: string } | null>(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [chartWidth, setChartWidth] = useState(800);
 
@@ -172,66 +201,35 @@ export function TrendChartAnalysis({
   }>({ requestKey: "", error: null });
   const [nowTs, setNowTs] = useState(() => Date.now());
 
-  const { sinceDate, untilDate } = useMemo(() => {
-    if (zoomRefetch) {
-      return {
-        sinceDate: zoomRefetch.since,
-        untilDate: zoomRefetch.until,
-      };
-    }
-    if (useCustomRange && customStart) {
-      const start = new Date(customStart);
-      const end = customEnd ? new Date(customEnd) : null;
-      return {
-        sinceDate: isNaN(start.getTime()) ? null : start.toISOString(),
-        untilDate: end && !isNaN(end.getTime()) ? end.toISOString() : null,
-      };
-    }
-    if (useCustomRange && !customStart) {
-      const since = new Date();
-      since.setMinutes(since.getMinutes() - 60);
-      return { sinceDate: since.toISOString(), untilDate: customEnd ?? null };
-    }
-    const since = new Date();
-    since.setMinutes(since.getMinutes() - rangeMinutes);
-    return { sinceDate: since.toISOString(), untilDate: null };
-  }, [useCustomRange, customStart, customEnd, rangeMinutes, zoomRefetch]);
-  const loadRequestKey = `${channelName}:${compareChannel ?? ""}:${sinceDate ?? ""}:${untilDate ?? ""}`;
+  const scopeKey = telemetryScopeKey(scope);
+  const realtimeEnabled = isRealtimeEligible(scope);
+  const loadRequestKey = `${channelName}:${compareChannel ?? ""}:${scopeKey}`;
   const loading = loadState.requestKey !== loadRequestKey;
   const error = loading ? null : loadState.error;
 
-  const fetchLimit = useMemo(() => {
-    if (zoomRefetch) return 1000;
-    const mins = useCustomRange ? 60 : rangeMinutes;
-    if (mins <= 15) return 150;
-    if (mins <= 60) return 300;
-    if (mins <= 360) return 600;
-    return 1000;
-  }, [zoomRefetch, useCustomRange, rangeMinutes]);
+  const fetchLimit = scope.mode === "latest" ? 300 : 1000;
 
   const fetchData = useCallback(
-    async (name: string, since: string, until: string | null) => {
-      const params = new URLSearchParams({
-        limit: `${fetchLimit}`,
-        since,
-      });
-      if (until) params.set("until", until);
-      if (streamId) params.set("stream_id", streamId);
+    async (name: string) => {
+      const params =
+        name !== channelName
+          ? telemetryScopeToCompareRecentParams(scope)
+          : telemetryScopeToQueryParams(scope);
+      params.set("limit", `${fetchLimit}`);
       const url = `${API_URL}${buildTelemetryApiBase(vehicleId, name)}/recent?${params.toString()}`;
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`Failed to fetch ${name}`);
       const json = await res.json();
       return (json.data || []) as DataPoint[];
     },
-    [fetchLimit, streamId, vehicleId]
+    [channelName, fetchLimit, scope, vehicleId]
   );
 
   useEffect(() => {
-    if (!sinceDate) return;
     Promise.all([
-      fetchData(channelName, sinceDate, untilDate),
+      fetchData(channelName),
       compareChannel
-        ? fetchData(compareChannel, sinceDate, untilDate)
+        ? fetchData(compareChannel)
         : Promise.resolve([]),
     ])
       .then(([main, compare]) => {
@@ -245,7 +243,6 @@ export function TrendChartAnalysis({
         });
         setCompareData(compare);
         setTimeRangePct([0, 100]);
-        setZoomRefetch(null);
         setLoadState({ requestKey: loadRequestKey, error: null });
       })
       .catch((e) =>
@@ -254,7 +251,7 @@ export function TrendChartAnalysis({
           error: e instanceof Error ? e.message : "Failed to load",
         })
       );
-  }, [channelName, compareChannel, fetchData, loadRequestKey, sinceDate, untilDate]);
+  }, [channelName, compareChannel, fetchData, loadRequestKey]);
 
   useEffect(() => {
     const el = chartContainerRef.current;
@@ -273,6 +270,30 @@ export function TrendChartAnalysis({
   }, [vehicleId]);
 
   useEffect(() => {
+    const q = compareSearch.trim();
+    if (q.length < 2) {
+      setSearchHits([]);
+      return;
+    }
+    const id = window.setTimeout(() => {
+      const url = `${API_URL}/telemetry/search?${new URLSearchParams({
+        q,
+        source_id: vehicleId,
+        limit: "40",
+      }).toString()}`;
+      fetch(url, { cache: "no-store" })
+        .then((r) => r.json())
+        .then((json) => {
+          const names = (json.results || []).map((row: { name: string }) => row.name);
+          setSearchHits(names);
+        })
+        .catch(() => setSearchHits([]));
+    }, 250);
+    return () => window.clearTimeout(id);
+  }, [compareSearch, vehicleId]);
+
+  useEffect(() => {
+    if (!realtimeEnabled) return;
     const client = new RealtimeWsClient();
     client.subscribe((msg) => {
       if (msg.type === "telemetry_update" && msg.channel?.name === channelName) {
@@ -302,9 +323,9 @@ export function TrendChartAnalysis({
       }
     });
     client.connect();
-    client.subscribeWatchlist([channelName], vehicleId, streamId);
+    client.subscribeWatchlist([channelName], vehicleId, null);
     return () => client.disconnect();
-  }, [channelName, fetchLimit, streamId, vehicleId]);
+  }, [channelName, fetchLimit, realtimeEnabled, vehicleId]);
 
   useEffect(() => {
     const id = setInterval(() => setNowTs(Date.now()), 1000);
@@ -336,16 +357,23 @@ export function TrendChartAnalysis({
         else merged.set(d.timestamp, { ...d, value: NaN, compareValue: d.value });
       });
     }
-    const arr = Array.from(merged.values()).sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    const arr = insertTimeGapBreaks(
+      Array.from(merged.values()).sort(
+        (a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+      ),
     );
     return arr.map((d) => ({
       ...d,
-      time: new Date(d.timestamp).toLocaleString(undefined, {
-        ...timeOpts,
-        second: undefined,
-      }),
-      timeFull: new Date(d.timestamp).toLocaleString(undefined, timeOpts),
+      time: Number.isNaN(d.value)
+        ? ""
+        : new Date(d.timestamp).toLocaleString(undefined, {
+            ...timeOpts,
+            second: undefined,
+          }),
+      timeFull: Number.isNaN(d.value)
+        ? ""
+        : new Date(d.timestamp).toLocaleString(undefined, timeOpts),
     }));
   }, [data, compareData, timeOpts]);
 
@@ -376,8 +404,10 @@ export function TrendChartAnalysis({
 
   const allYValues = useMemo(() => {
     const vals = [
-      ...displayData.map((d) => d.value).filter((v) => !Number.isNaN(v)),
-      ...displayData.map((d) => d.compareValue).filter((v) => v != null && !Number.isNaN(v)) as number[],
+      ...displayData.map((d) => d.value).filter((v) => typeof v === "number" && Number.isFinite(v)),
+      ...displayData.map((d) => d.compareValue).filter((v): v is number =>
+        typeof v === "number" && Number.isFinite(v),
+      ),
     ];
     [p5, p95, p50, mean, minVal, maxVal].forEach((value) => {
       if (value != null) vals.push(value);
@@ -413,7 +443,13 @@ export function TrendChartAnalysis({
   }, [compareChannel, hasBounds, showMeanP50, showP5P95]);
 
   const sampleInterval = useMemo(() => medianInterval(data), [data]);
-  const lastPoint = displayData.length > 0 ? displayData[displayData.length - 1] : null;
+  const lastPoint = useMemo(() => {
+    for (let i = displayData.length - 1; i >= 0; i--) {
+      const p = displayData[i];
+      if (p && !Number.isNaN(p.value)) return p;
+    }
+    return null;
+  }, [displayData]);
   const lastReceivedAt =
     lastPoint?.receptionTime
       ? new Date(lastPoint.receptionTime).getTime()
@@ -430,6 +466,8 @@ export function TrendChartAnalysis({
       const { active, payload } = props;
       if (!active || !payload?.length) return null;
       const p = payload[0].payload;
+      if (Number.isNaN(p.value) && (p.compareValue == null || Number.isNaN(p.compareValue)))
+        return null;
       return (
         <div
           className="bg-card rounded-md border p-3 text-sm shadow-md"
@@ -475,13 +513,6 @@ export function TrendChartAnalysis({
     );
   }
 
-  const rangeAriaLabels: Record<string, string> = {
-    "15m": "Last 15 minutes",
-    "1h": "Last 1 hour",
-    "6h": "Last 6 hours",
-    "24h": "Last 24 hours",
-  };
-
   const isZoomed = timeRangePct[0] > 0 || timeRangePct[1] < 100;
   const dataMaxTime = chartData.length > 0 ? new Date(chartData[chartData.length - 1].timestamp).getTime() : 0;
   const isLiveData = lastPoint && dataMaxTime > 0 && nowTs - dataMaxTime < 60_000;
@@ -489,62 +520,9 @@ export function TrendChartAnalysis({
   return (
     <div className="space-y-3 overflow-visible">
       <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <span className="text-muted-foreground w-14 shrink-0 text-xs font-medium tracking-wider uppercase">
-            Range
-          </span>
-          <div className="flex flex-wrap items-center gap-1.5">
-          {RANGE_PRESETS.map(({ label, minutes }) => (
-            <Button
-              key={label}
-              variant={!useCustomRange && rangeMinutes === minutes ? "default" : "outline"}
-              size="sm"
-              aria-label={rangeAriaLabels[label] ?? `Last ${label}`}
-              onClick={() => {
-                setUseCustomRange(false);
-                setRangeMinutes(minutes);
-              }}
-            >
-              {label}
-            </Button>
-          ))}
-          <Button
-            variant={useCustomRange ? "default" : "outline"}
-            size="sm"
-            aria-label="Custom time range"
-            onClick={() => {
-              setUseCustomRange(true);
-              const now = new Date();
-              const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-              setCustomStart(oneHourAgo.toISOString());
-              setCustomEnd(now.toISOString());
-            }}
-          >
-            Custom
-          </Button>
-          {useCustomRange && (
-            <span className="inline-flex items-center gap-2 text-sm">
-              <CustomTimestampPicker
-                value={customStart}
-                onChange={setCustomStart}
-                placeholder="Start"
-                id="trend-custom-start"
-                aria-label="Custom range start"
-                className="h-8 w-48 justify-start text-left text-xs font-normal"
-              />
-              <span className="text-muted-foreground">to</span>
-              <CustomTimestampPicker
-                value={customEnd}
-                onChange={setCustomEnd}
-                placeholder="End"
-                id="trend-custom-end"
-                aria-label="Custom range end"
-                className="h-8 w-48 justify-start text-left text-xs font-normal"
-              />
-            </span>
-          )}
-          </div>
-        </div>
+        <p className="text-muted-foreground text-sm">
+          {telemetryScopeSummary(scope)}
+        </p>
         <Collapsible className="border-border border-t pt-3">
           <div className="flex flex-col gap-2">
             <CollapsibleTrigger className="text-muted-foreground hover:text-foreground flex w-fit cursor-pointer items-center gap-2 text-xs font-medium tracking-wider uppercase data-[state=open]:[&_svg]:rotate-180">
@@ -553,24 +531,6 @@ export function TrendChartAnalysis({
             </CollapsibleTrigger>
             <CollapsibleContent className="w-full">
               <div className="flex flex-wrap items-center gap-3 pt-2">
-                <div className="flex gap-1">
-                  <Button
-                    variant={useUTC ? "default" : "outline"}
-                    size="sm"
-                    aria-label="Show times in UTC"
-                    onClick={() => setUseUTC(true)}
-                  >
-                    UTC
-                  </Button>
-                  <Button
-                    variant={!useUTC ? "default" : "outline"}
-                    size="sm"
-                    aria-label="Show times in local timezone"
-                    onClick={() => setUseUTC(false)}
-                  >
-                    Local
-                  </Button>
-                </div>
                 <div className="flex items-center gap-2">
                   <Checkbox
                     id="show-mean-p50"
@@ -593,33 +553,64 @@ export function TrendChartAnalysis({
                     P5/P95
                   </Label>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Select
-                    value={compareChannel ?? "__none__"}
-                    onValueChange={(v) => setCompareChannel(v === "__none__" ? null : v)}
-                  >
-                    <SelectTrigger className="h-9 min-w-[180px]" aria-label="Compare with another channel">
-                      <SelectValue placeholder="Add channel to compare" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">Add channel to compare</SelectItem>
-                      {channelList
-                        .filter((n) => n !== channelName)
-                        .map((n) => (
-                          <SelectItem key={n} value={n}>
-                            {n}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
+                <div className="flex min-w-0 flex-1 flex-col gap-2 sm:max-w-md">
+                  <Label htmlFor="compare-search" className="text-muted-foreground text-xs">
+                    Compare channel (search)
+                  </Label>
+                  <Input
+                    id="compare-search"
+                    placeholder="Type to search telemetry names…"
+                    value={compareSearch}
+                    onChange={(e) => setCompareSearch(e.target.value)}
+                    className="h-9"
+                    aria-label="Search channels to compare"
+                  />
+                  <div className="border-border max-h-40 overflow-y-auto rounded-md border">
+                    {(() => {
+                      const q = compareSearch.trim().toLowerCase();
+                      const base =
+                        q.length >= 2 && searchHits.length > 0
+                          ? searchHits
+                          : channelList.filter((n) => n !== channelName);
+                      const filtered = q
+                        ? base.filter((n) => n.toLowerCase().includes(q))
+                        : base.filter((n) => n !== channelName).slice(0, 80);
+                      if (!filtered.length) {
+                        return (
+                          <p className="text-muted-foreground p-2 text-xs">
+                            No channels match. Try another search.
+                          </p>
+                        );
+                      }
+                      return filtered.map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          className={`hover:bg-muted block w-full truncate px-2 py-1.5 text-left text-sm ${
+                            compareChannel === n ? "bg-muted font-medium" : ""
+                          }`}
+                          onClick={() => {
+                            setCompareChannel(n);
+                            setCompareSearch(n);
+                          }}
+                        >
+                          {n}
+                        </button>
+                      ));
+                    })()}
+                  </div>
                   {compareChannel && (
                     <Button
                       size="sm"
                       variant="outline"
+                      className="w-fit"
                       aria-label={`Clear compare channel (currently ${compareChannel})`}
-                      onClick={() => setCompareChannel(null)}
+                      onClick={() => {
+                        setCompareChannel(null);
+                        setCompareSearch("");
+                      }}
                     >
-                      Clear
+                      Clear compare
                     </Button>
                   )}
                 </div>
@@ -644,26 +635,6 @@ export function TrendChartAnalysis({
             />
             {isZoomed && (
               <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  aria-label="Zoom to selected range (refetch)"
-                  onClick={() => {
-                    const len = chartData.length;
-                    const startIdx = Math.floor((timeRangePct[0] / 100) * len);
-                    const endIdx = Math.min(Math.ceil((timeRangePct[1] / 100) * len), len);
-                    const startPt = chartData[startIdx];
-                    const endPt = chartData[endIdx];
-                    if (startPt && endPt) {
-                      setZoomRefetch({
-                        since: startPt.timestamp,
-                        until: endPt.timestamp,
-                      });
-                    }
-                  }}
-                >
-                  Zoom
-                </Button>
                 <Button
                   size="sm"
                   variant="ghost"
@@ -868,6 +839,7 @@ export function TrendChartAnalysis({
                   : (props) => {
                       const { cx, cy, payload } = props;
                       if (cx == null || cy == null) return null;
+                      if (Number.isNaN(payload.value)) return null;
                       const isLast = lastPoint && payload.timestamp === lastPoint.timestamp;
                       const inBand = hasBounds ? isInNominalBand(payload.value) : true;
                       return (
@@ -883,7 +855,7 @@ export function TrendChartAnalysis({
                     }
               }
               activeDot={displayData.length > 150 ? false : { r: 5, fill: "var(--primary)" }}
-              connectNulls
+              connectNulls={false}
             />
             {compareChannel && (
               <Line
@@ -894,7 +866,7 @@ export function TrendChartAnalysis({
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 4 }}
-                connectNulls
+                connectNulls={false}
                 isAnimationActive={displayData.length <= 200}
               />
             )}

@@ -9,12 +9,12 @@ export const queryKeys = {
   telemetryChannelRuns: (channelName: string, sourceId: string) =>
     ["telemetry-channel-runs", channelName, sourceId] as const,
   telemetrySearch: (params: Record<string, string>) => ["telemetry-search", params] as const,
-  telemetryExplanation: (channelName: string, sourceId: string) =>
-    ["telemetry-explanation", channelName, sourceId] as const,
+  telemetryExplanation: (channelName: string, sourceId: string, scopeKey = "") =>
+    ["telemetry-explanation", channelName, sourceId, scopeKey] as const,
   telemetryRecent: (params: Record<string, string>) => ["telemetry-recent", params] as const,
   telemetrySourcesStatus: (sourceId: string) => ["simulator-status", sourceId] as const,
   sourceObservations: (sourceId: string, limit: number) => ["source-observations", sourceId, limit] as const,
-  telemetryEvents: (params: Record<string, string>) => ["ops-events", params] as const,
+  telemetryEvents: (params: Record<string, string> | string) => ["ops-events", params] as const,
   subsystems: (sourceId: string) => ["telemetry-subsystems", sourceId] as const,
   units: (sourceId: string) => ["telemetry-units", sourceId] as const,
 } as const;

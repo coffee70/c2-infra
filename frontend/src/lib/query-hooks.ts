@@ -12,6 +12,11 @@ import { fetchJson, fetchVoid } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import type { SimulatorRuntimeStatus } from "@/lib/simulator-runtime";
 import { buildTelemetryApiBase } from "@/lib/telemetry-routes";
+import {
+  telemetryScopeKey,
+  telemetryScopeToQueryParams,
+  type TelemetryDetailScope,
+} from "@/lib/telemetry-detail-scope";
 
 export interface WatchlistEntry {
   name: string;
@@ -120,14 +125,21 @@ export interface SearchResult {
   last_timestamp?: string | null;
 }
 
-export interface ChannelSource {
+export interface TelemetryChannelStreamOption {
   stream_id: string;
-  label: string;
+  label?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+  sample_count?: number | null;
+  last_timestamp?: string | null;
+  provider?: string | null;
+  summary?: string | null;
 }
 
 export interface HistoryPoint {
   timestamp: string;
   value: number;
+  stream_id?: string | null;
 }
 
 export interface TelemetryRecentResponse {
@@ -567,12 +579,12 @@ export function useTelemetrySearchQuery(params: SearchParams, enabled: boolean) 
 }
 
 export function useTelemetryChannelStreamsQuery(channelName: string, sourceId: string, enabled = true) {
-  return useQuery<ChannelSource[]>({
+  return useQuery<TelemetryChannelStreamOption[]>({
     queryKey: queryKeys.telemetryChannelRuns(channelName, sourceId),
     enabled,
     staleTime: 5 * 60 * 1000,
     queryFn: async ({ signal }) => {
-      const data = await fetchJson<{ sources?: ChannelSource[] }>(
+      const data = await fetchJson<{ sources?: TelemetryChannelStreamOption[] }>(
         `${buildTelemetryApiBase(sourceId, channelName)}/streams`,
         { signal }
       );
@@ -601,33 +613,78 @@ export function useTelemetryRecentQuery(
   });
 }
 
+export function useTelemetryScopedRecentQuery(
+  channelName: string,
+  sourceId: string,
+  scope: TelemetryDetailScope,
+  limit = "500",
+  enabled = true
+) {
+  const queryParams = telemetryScopeToQueryParams(scope);
+  queryParams.set("limit", limit);
+  const queryKey = {
+    channelName,
+    sourceId,
+    scope: telemetryScopeKey(scope),
+    limit,
+  };
+  return useQuery<TelemetryRecentResponse>({
+    queryKey: queryKeys.telemetryRecent(queryKey),
+    enabled,
+    queryFn: async ({ signal }) =>
+      fetchJson<TelemetryRecentResponse>(
+        `${buildTelemetryApiBase(sourceId, channelName)}/recent?${queryParams.toString()}`,
+        { signal }
+      ),
+  });
+}
+
 export function useTelemetryExplanationQuery(
   channelName: string,
   sourceId: string,
-  streamId?: string,
+  scope: TelemetryDetailScope,
   enabled = true
 ) {
-  const suffix = streamId ? `?stream_id=${encodeURIComponent(streamId)}` : "";
+  const params = telemetryScopeToQueryParams(scope);
   return useQuery<ExplainResponse>({
-    queryKey: queryKeys.telemetryExplanation(channelName, streamId ?? sourceId),
+    queryKey: queryKeys.telemetryExplanation(channelName, sourceId, telemetryScopeKey(scope)),
     enabled,
     retry: 0,
     queryFn: async ({ signal }) =>
       fetchJson<ExplainResponse>(
-        `${buildTelemetryApiBase(sourceId, channelName)}/explain${suffix}`,
+        `${buildTelemetryApiBase(sourceId, channelName)}/explain?${params.toString()}`,
         { signal, cache: "no-store" }
       ),
   });
 }
 
-export function useOpsEventsQuery(params: Record<string, string>, enabled = true) {
+export function useTelemetryScopedEventsQuery(
+  channelName: string,
+  sourceId: string,
+  scope: TelemetryDetailScope,
+  limit = "20",
+  enabled = true
+) {
+  const queryParams = telemetryScopeToQueryParams(scope);
+  queryParams.set("source_id", sourceId);
+  queryParams.set("channel_name", channelName);
+  queryParams.set("limit", limit);
+  if (scope.mode === "latest") {
+    queryParams.set("since_minutes", "60");
+  }
+  return useOpsEventsQuery(queryParams, enabled);
+}
+
+export function useOpsEventsQuery(params: Record<string, string> | URLSearchParams, enabled = true) {
+  const key = params instanceof URLSearchParams ? params.toString() : params;
   return useQuery<{ events: OpsEventSchema[]; total: number }>({
-    queryKey: queryKeys.telemetryEvents(params),
+    queryKey: queryKeys.telemetryEvents(key),
     enabled,
     staleTime: 15 * 1000,
     queryFn: async ({ signal }) => {
+      const query = params instanceof URLSearchParams ? params : new URLSearchParams(params);
       const data = await fetchJson<{ events?: OpsEventSchema[]; total?: number }>(
-        `/ops/events?${new URLSearchParams(params).toString()}`,
+        `/ops/events?${query.toString()}`,
         { signal }
       );
       return {

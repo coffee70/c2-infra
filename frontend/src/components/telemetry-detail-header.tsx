@@ -1,7 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { useState, useCallback } from "react";
+import { PencilIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,6 +10,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { TelemetryDetailActions } from "@/components/telemetry-detail-actions";
+import { TelemetryScopeModal } from "@/components/telemetry-scope-modal";
+import type { TelemetryDetailView } from "@/lib/telemetry-routes";
+import {
+  appliedScopeBadge,
+  formatAppliedScopeSummaryLine,
+  type TelemetryAppliedScope,
+} from "@/lib/telemetry-applied-scope";
+import type { TelemetryDetailScope } from "@/lib/telemetry-detail-scope";
 
 function formatWithUnits(
   value: number | null | undefined,
@@ -42,7 +50,7 @@ function formatOperationalStatus(
   zScore?: number | null
 ): string {
   if (state === "no_data") return "No data";
-  if (state === "normal") return "In family";
+  if (state === "normal") return "Within expected range";
   if (stateReason === "out_of_limits") return "Out of limits";
   if (stateReason === "out_of_family" && zScore != null)
     return `Out of family: ${zScore >= 0 ? "+" : ""}${zScore.toFixed(1)}σ`;
@@ -62,6 +70,13 @@ interface TelemetryDetailHeaderProps {
   description?: string | null;
   /** When true, show a Live badge (value is updating from stream). */
   live?: boolean;
+  /** URL-backed scope + structured summary for the compact scope pill and edit modal. */
+  scopeControl: {
+    pageScope: TelemetryAppliedScope | null;
+    scope: TelemetryDetailScope;
+    channelName: string;
+    currentView: TelemetryDetailView;
+  };
 }
 
 export function TelemetryDetailHeader({
@@ -76,9 +91,11 @@ export function TelemetryDetailHeader({
   lastTimestamp,
   description,
   live = false,
+  scopeControl,
 }: TelemetryDetailHeaderProps) {
   const [copied, setCopied] = useState<string | null>(null);
   const [copyFailedKey, setCopyFailedKey] = useState<string | null>(null);
+  const [scopeModalOpen, setScopeModalOpen] = useState(false);
 
   const copyToClipboard = useCallback(async (text: string, key: string) => {
     try {
@@ -101,15 +118,14 @@ export function TelemetryDetailHeader({
     ? `${name} @ ${lastTimestamp} UTC`
     : "";
 
+  const scopeSummaryLine = formatAppliedScopeSummaryLine(scopeControl.pageScope);
+  const scopePillLabel = appliedScopeBadge(scopeControl.pageScope);
+
   return (
-    <header className="bg-background/95 supports-backdrop-filter:bg-background/80 sticky top-14 z-10 mb-2 border-b py-4 backdrop-blur">
-      <div className="flex flex-wrap items-center justify-between gap-4 px-4 sm:px-6">
+    <header className="bg-background/95 supports-backdrop-filter:bg-background/80 sticky top-16 z-10 border-b py-3 backdrop-blur">
+      <div className="space-y-2">
+        {/* Row 1: channel identity and live reading */}
         <div className="min-w-0 space-y-1">
-          <Button asChild variant="ghost" size="sm" className="h-7 px-0 text-xs">
-            <Link href={`/telemetry?source=${encodeURIComponent(sourceId)}`}>
-              Back to Telemetry
-            </Link>
-          </Button>
           <div className="flex min-w-0 flex-wrap items-center gap-3">
             <h1 className="truncate text-lg font-semibold" title={name}>
               {name}
@@ -144,58 +160,106 @@ export function TelemetryDetailHeader({
             </p>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => copyToClipboard(name, "name")}
-                aria-label="Copy channel name"
-                aria-live="polite"
-              >
-                {copyFailedKey === "name" ? "Copy failed" : copied === "name" ? "Copied!" : "Copy name"}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Copy channel name</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-                onClick={() => copyToClipboard(copyValueText, "value")}
-                aria-label="Copy channel name and value"
-                aria-live="polite"
-                disabled={value == null}
-              >
-                {value == null ? "No value" : copyFailedKey === "value" ? "Copy failed" : copied === "value" ? "Copied!" : "Copy value"}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{value == null ? "No value has been received yet" : "Copy channel name and value"}</TooltipContent>
-          </Tooltip>
-          {lastTimestamp && (
+
+        {/* Row 2: data scope + channel actions */}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="max-w-[min(100vw-8rem,20rem)] min-w-0 cursor-default sm:max-w-[14rem]">
+                  <Badge
+                    variant="secondary"
+                    className="text-muted-foreground max-w-full truncate border text-xs font-normal"
+                  >
+                    {scopePillLabel}
+                  </Badge>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-md text-left">
+                {scopeSummaryLine}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon-sm"
+                  className="size-7 shrink-0"
+                  aria-label="Edit scope"
+                  onClick={() => setScopeModalOpen(true)}
+                >
+                  <PencilIcon className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Edit scope</TooltipContent>
+            </Tooltip>
+          </div>
+          <div
+            className="border-border flex shrink-0 flex-wrap items-center gap-2 sm:border-l sm:pl-3"
+            role="group"
+            aria-label="Channel actions"
+          >
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="outline"
                   size="sm"
                   className="h-8 text-xs"
-                  onClick={() => copyToClipboard(copyTimestampText, "timestamp")}
-                  aria-label="Copy channel name and timestamp"
+                  onClick={() => copyToClipboard(name, "name")}
+                  aria-label="Copy channel name"
                   aria-live="polite"
                 >
-                  {copyFailedKey === "timestamp" ? "Copy failed" : copied === "timestamp" ? "Copied!" : "Copy timestamp"}
+                  {copyFailedKey === "name" ? "Copy failed" : copied === "name" ? "Copied!" : "Copy name"}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Copy channel name and timestamp</TooltipContent>
+              <TooltipContent>Copy channel name</TooltipContent>
             </Tooltip>
-          )}
-          <TelemetryDetailActions name={name} sourceId={sourceId} />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => copyToClipboard(copyValueText, "value")}
+                  aria-label="Copy channel name and value"
+                  aria-live="polite"
+                  disabled={value == null}
+                >
+                  {value == null ? "No value" : copyFailedKey === "value" ? "Copy failed" : copied === "value" ? "Copied!" : "Copy value"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{value == null ? "No value has been received yet" : "Copy channel name and value"}</TooltipContent>
+            </Tooltip>
+            {lastTimestamp && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => copyToClipboard(copyTimestampText, "timestamp")}
+                    aria-label="Copy channel name and timestamp"
+                    aria-live="polite"
+                  >
+                    {copyFailedKey === "timestamp" ? "Copy failed" : copied === "timestamp" ? "Copied!" : "Copy timestamp"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Copy channel name and timestamp</TooltipContent>
+              </Tooltip>
+            )}
+            <TelemetryDetailActions name={name} sourceId={sourceId} />
+          </div>
         </div>
       </div>
+      <TelemetryScopeModal
+        open={scopeModalOpen}
+        onOpenChange={setScopeModalOpen}
+        sourceId={sourceId}
+        channelName={scopeControl.channelName}
+        scope={scopeControl.scope}
+        currentView={scopeControl.currentView}
+      />
     </header>
   );
 }

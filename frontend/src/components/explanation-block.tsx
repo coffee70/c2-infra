@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Collapsible,
@@ -11,15 +12,16 @@ import { ChevronDownIcon } from "lucide-react";
 import { SimilarTelemetryCard } from "@/components/similar-telemetry-card";
 import { Spinner } from "@/components/ui/spinner";
 import { useTelemetryExplanationQuery } from "@/lib/query-hooks";
+import type { TelemetryDetailScope } from "@/lib/telemetry-detail-scope";
 
 interface ExplanationBlockProps {
   channelName: string;
   sourceId: string;
-  streamId?: string;
+  scope: TelemetryDetailScope;
 }
 
-export function ExplanationBlock({ channelName, sourceId, streamId }: ExplanationBlockProps) {
-  const explanationQuery = useTelemetryExplanationQuery(channelName, sourceId, streamId);
+export function ExplanationBlock({ channelName, sourceId, scope }: ExplanationBlockProps) {
+  const explanationQuery = useTelemetryExplanationQuery(channelName, sourceId, scope);
   const loading = explanationQuery.isLoading;
   const data = explanationQuery.data ?? null;
   const error = explanationQuery.isError;
@@ -46,10 +48,18 @@ export function ExplanationBlock({ channelName, sourceId, streamId }: Explanatio
         <CardHeader>
           <CardTitle>Explanation</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <p className="text-muted-foreground text-sm">
-            Unable to load explanation. You can try again later.
+            Unable to load explanation. Check the API and try again.
           </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => explanationQuery.refetch()}
+          >
+            Retry
+          </Button>
         </CardContent>
       </Card>
     );
@@ -93,7 +103,11 @@ export function ExplanationBlock({ channelName, sourceId, streamId }: Explanatio
         </CardContent>
       </Card>
 
-      <SimilarTelemetryCard detailSourceId={streamId ?? sourceId} channels={data.what_to_check_next ?? []} />
+      <SimilarTelemetryCard
+        detailSourceId={sourceId}
+        scope={scope}
+        channels={data.what_to_check_next ?? []}
+      />
     </>
   );
 }

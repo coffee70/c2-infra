@@ -44,6 +44,13 @@ This starts:
 
 Migrations run automatically on backend startup.
 
+**If Overview / Telemetry / Planning show “Failed to load” or “Failed to fetch”:** the browser is almost always blocked from calling the API (CORS) or is calling the wrong host for the API.
+
+- **Same machine, `http://localhost:3000`:** ensure the backend is up (`docker compose ps`, port **8000**). The compose file sets `CORS_ORIGIN_REGEX` so any Origin on port **3000** is allowed.
+- **Another device or `http://<this-host-ip>:3000`:** `NEXT_PUBLIC_API_URL` is baked in at **frontend image build time**. Rebuild with your reachable API URL, for example:
+  `NEXT_PUBLIC_API_URL=http://192.168.1.10:8000 docker compose build frontend && docker compose up -d frontend`
+  (Use the host/IP **as the browser would reach it**, same host you use for `:3000`.)
+
 ### 2. Generate synthetic data
 
 Using a virtual environment (recommended):
@@ -299,8 +306,9 @@ curl -X POST "http://localhost:8000/telemetry/watchlist" \
 | `DATABASE_URL` | PostgreSQL connection string |
 | `OPENAI_API_KEY` | OpenAI API key (optional; mock used if empty) |
 | `OPENAI_BASE_URL` | Custom API base (e.g., Ollama) |
-| `NEXT_PUBLIC_API_URL` | Backend URL for frontend (default: http://localhost:8000) |
+| `NEXT_PUBLIC_API_URL` | Backend URL embedded in the **browser** bundle (Next.js `NEXT_PUBLIC_*`). For Docker, pass as a **build arg** when rebuilding `frontend` if the UI is not opened via `localhost`. |
 | `CORS_ORIGINS` | Backend: comma-separated allowed CORS origins (default: http://localhost:3000,http://127.0.0.1:3000). Set to your frontend URL(s) when deploying (e.g. `https://app.example.com`). |
+| `CORS_ORIGIN_REGEX` | Backend: optional full-match regex for `Origin` (compose default allows `http://*host*:3000` for local/LAN dev). Empty disables. |
 
 ## Project Structure
 

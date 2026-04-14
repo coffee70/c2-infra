@@ -37,11 +37,18 @@ test("registered channel detail renders when no samples or statistics exist", as
 
   await expect(page).toHaveURL(
     new RegExp(
-      `${escapeRegExp(`/telemetry/${source.id}/${channelName}`)}$`,
+      `${escapeRegExp(`/telemetry/${source.id}/${channelName}`)}(?:\\?scope=latest&view=analysis)?$`,
     ),
   );
+  const detailHeader = page.locator("header").filter({
+    has: page.getByRole("heading", { name: new RegExp(channelName) }),
+  });
+
   await expect(page.getByRole("heading", { name: new RegExp(channelName) })).toBeVisible();
+  await expect(detailHeader).toHaveCSS("position", "sticky");
+  await expect(detailHeader).toHaveCSS("top", "64px");
   await expect(page.locator("header [data-value='']")).toContainText("No data");
+  await page.getByRole("tab", { name: "Summary" }).click();
   await expect(
     page.getByText(
       "No statistics yet. This channel is registered, but no samples have been received.",

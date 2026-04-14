@@ -8,9 +8,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.database import get_db
 from app.realtime.feed_health import get_feed_health_tracker
 from app.models.schemas import OpsEventSchema, OpsEventsResponse
+from app.services.source_stream_service import resolve_latest_stream_id
 from app.services.ops_events_service import query_events
 
 router = APIRouter()
+
+
+def _parse_iso_datetime(value: Optional[str], field_name: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}") from exc
 
 
 @router.get("/feed-status")
@@ -30,7 +40,10 @@ def get_feed_status(source_id: str = Query(...)):
 @router.get("/events", response_model=OpsEventsResponse)
 def get_timeline_events(
     source_id: str = Query(...),
-    stream_id: Optional[str] = None,
+    scope: str = "latest",
+    stream_ids: list[str] = Query(default=[]),
+    since: Optional[str] = None,
+    until: Optional[str] = None,
     since_minutes: int = 60,
     until_minutes: Optional[int] = None,
     event_types: Optional[str] = None,
@@ -42,21 +55,28 @@ def get_timeline_events(
 ):
     """Query ops events (timeline). since_minutes: lookback from now. until_minutes: optional end (minutes ago); default now."""
     now = datetime.now(timezone.utc)
-    since = now - timedelta(minutes=since_minutes)
-    until = (
-        (now - timedelta(minutes=until_minutes)) if until_minutes is not None else now
-    )
-    if until <= since:
+    parsed_since = _parse_iso_datetime(since, "since")
+    parsed_until = _parse_iso_datetime(until, "until")
+    since_dt = parsed_since if parsed_since else now - timedelta(minutes=since_minutes)
+    until_dt = parsed_until if parsed_until else (now - timedelta(minutes=until_minutes)) if until_minutes is not None else now
+    if until_dt <= since_dt:
         raise HTTPException(status_code=400, detail="until must be after since")
+    scoped_stream_ids = [stream_id for stream_id in stream_ids if stream_id]
+    if scope == "streams" and not scoped_stream_ids:
+        raise HTTPException(status_code=400, detail="stream_ids is required for streams scope")
+    if scope not in {"latest", "streams", "date_range"}:
+        raise HTTPException(status_code=400, detail="Invalid scope")
+    if scope == "latest":
+        scoped_stream_ids = [resolve_latest_stream_id(db, source_id)]
 
     types_list = [t.strip() for t in event_types.split(",") if t.strip()] if event_types else None
 
     events, total = query_events(
         db,
         source_id=source_id,
-        stream_id=stream_id,
-        since=since,
-        until=until,
+        stream_ids=scoped_stream_ids if scope in {"latest", "streams"} else None,
+        since=since_dt,
+        until=until_dt,
         event_types=types_list,
         entity_type=entity_type,
         channel_name=channel_name,

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -20,24 +21,20 @@ from app.routes import ops, orbit as orbit_routes, position, realtime, simulator
 configure_logging()
 logger = logging.getLogger(__name__)
 
-# CORS origins: from CORS_ORIGINS env (comma-separated). Default includes localhost for local dev.
-CORS_ORIGINS = get_settings().get_cors_origins_list()
+# CORS: explicit origins plus optional regex (e.g. LAN access to UI on port 3000 in Docker).
+_settings_for_cors = get_settings()
+CORS_ORIGINS = _settings_for_cors.get_cors_origins_list()
+_CORS_ORIGIN_REGEX_RAW = (_settings_for_cors.cors_origin_regex or "").strip()
+CORS_ORIGIN_PATTERN = re.compile(_CORS_ORIGIN_REGEX_RAW) if _CORS_ORIGIN_REGEX_RAW else None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     logger.info("Starting Telemetry Operations Platform")
-    from datetime import datetime, timezone
-
-    from app.database import get_session_factory
     from app.realtime import get_realtime_processor
     from app.realtime.feed_health import get_feed_health_tracker
     from app.realtime.ws_hub import get_ws_hub
-    from app.services.ops_events_service import write_event as write_ops_event
-    from app.services.realtime_service import (
-        auto_register_sources_from_configs,
-        repair_registered_sources_on_startup,
-        refresh_source_embeddings,
-    )
 
     hub = get_ws_hub()
     hub.set_loop(asyncio.get_running_loop())
@@ -45,7 +42,15 @@ async def lifespan(app: FastAPI):
     proc.register_telemetry_update_handler(hub.schedule_telemetry_update)
     bus = proc._bus
 
+    from app.database import get_session_factory
     from app.orbit import register_on_status_change
+    from app.services.ops_events_service import write_event as write_ops_event
+    from app.services.realtime_service import (
+        auto_register_sources_from_configs,
+        repair_registered_sources_on_startup,
+        refresh_source_embeddings,
+    )
+
     register_on_status_change(hub.schedule_orbit_status)
 
     def on_alert(ev: dict):
@@ -55,6 +60,8 @@ async def lifespan(app: FastAPI):
         session_factory = get_session_factory()
         session = session_factory()
         try:
+            from datetime import datetime, timezone
+
             write_ops_event(
                 session,
                 source_id=source_id,
@@ -78,43 +85,33 @@ async def lifespan(app: FastAPI):
     get_feed_health_tracker().set_on_transition(on_feed_transition)
     bus.subscribe_alerts(on_alert)
 
-    bootstrap_session = get_session_factory()()
-    try:
-        repaired_source_ids = repair_registered_sources_on_startup(bootstrap_session)
-        try:
-            from app.services.embedding_service import SentenceTransformerEmbeddingProvider
-
-            auto_register_sources_from_configs(
-                bootstrap_session,
-                embedding_provider=SentenceTransformerEmbeddingProvider(),
-            )
-        except Exception as e:
-            logger.exception("Skipping startup auto-registration due to embedding provider failure: %s", e)
-    finally:
-        bootstrap_session.close()
-
-    async def backfill_repaired_source_embeddings():
-        if not repaired_source_ids:
-            return
-        def run_backfill_sync() -> None:
+    async def run_startup_reconciliation():
+        def run_sync() -> None:
             session = get_session_factory()()
             try:
+                repaired_source_ids = repair_registered_sources_on_startup(session)
                 from app.services.embedding_service import SentenceTransformerEmbeddingProvider
 
-                refresh_source_embeddings(
+                provider = SentenceTransformerEmbeddingProvider()
+                auto_register_sources_from_configs(
                     session,
-                    source_ids=repaired_source_ids,
-                    embedding_provider=SentenceTransformerEmbeddingProvider(),
+                    embedding_provider=provider,
                 )
+                if repaired_source_ids:
+                    refresh_source_embeddings(
+                        session,
+                        source_ids=repaired_source_ids,
+                        embedding_provider=provider,
+                    )
             except Exception as e:
-                logger.exception("Failed to backfill repaired source embeddings after startup: %s", e)
+                logger.exception("Startup source reconciliation failed: %s", e)
                 session.rollback()
             finally:
                 session.close()
 
-        await asyncio.to_thread(run_backfill_sync)
+        await asyncio.to_thread(run_sync)
 
-    embedding_backfill_task = asyncio.create_task(backfill_repaired_source_embeddings())
+    startup_reconciliation_task = asyncio.create_task(run_startup_reconciliation())
 
     async def broadcast_feed_status_periodically():
         while True:
@@ -133,10 +130,10 @@ async def lifespan(app: FastAPI):
         await feed_task
     except asyncio.CancelledError:
         pass
-    if not embedding_backfill_task.done():
-        embedding_backfill_task.cancel()
+    if not startup_reconciliation_task.done():
+        startup_reconciliation_task.cancel()
         try:
-            await embedding_backfill_task
+            await startup_reconciliation_task
         except asyncio.CancelledError:
             pass
     await hub.stop()
@@ -156,6 +153,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
+    allow_origin_regex=_CORS_ORIGIN_REGEX_RAW or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -163,12 +161,22 @@ app.add_middleware(
 )
 
 
+def _allowed_request_origin(origin: str | None) -> str:
+    """Return Origin header value to echo on responses (must match browser Origin for credentialed CORS)."""
+    if not origin:
+        return CORS_ORIGINS[0] if CORS_ORIGINS else ""
+    if origin in CORS_ORIGINS:
+        return origin
+    if CORS_ORIGIN_PATTERN and CORS_ORIGIN_PATTERN.fullmatch(origin):
+        return origin
+    return CORS_ORIGINS[0] if CORS_ORIGINS else ""
+
+
 def _cors_headers(request: Request) -> dict:
     origin = request.headers.get("origin")
-    if origin not in CORS_ORIGINS:
-        origin = CORS_ORIGINS[0] if CORS_ORIGINS else ""
+    allowed = _allowed_request_origin(origin)
     return {
-        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Origin": allowed,
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Allow-Methods": "*",
         "Access-Control-Allow-Headers": "*",

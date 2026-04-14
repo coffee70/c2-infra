@@ -110,6 +110,24 @@ class RelatedChannel(BaseModel):
     units: Optional[str] = None
 
 
+class TelemetryDetailScopeWindow(BaseModel):
+    """UTC window bounds for channel detail scope metadata."""
+
+    since: Optional[str] = None
+    until: Optional[str] = None
+
+
+class TelemetryDetailPageScope(BaseModel):
+    """Structured scope for telemetry detail UI (strip, modals); not preformatted copy."""
+
+    mode: Literal["latest", "streams", "date_range"]
+    stream_count: Optional[int] = None
+    stream_ids: list[str] = []
+    resolved_stream_id: Optional[str] = None
+    window: Optional[TelemetryDetailScopeWindow] = None
+    preset: Optional[str] = None
+
+
 class ExplainResponse(BaseModel):
     """Response for GET /telemetry/{name}/explain."""
 
@@ -132,6 +150,10 @@ class ExplainResponse(BaseModel):
     what_to_check_next: list[RelatedChannel] = []
     confidence_indicator: Optional[str] = None
     llm_explanation: str
+    scope: Optional[TelemetryDetailPageScope] = Field(
+        default=None,
+        description="Applied data scope metadata for the detail page (modes, windows, stream ids).",
+    )
 
 
 # --- Recent data ---
@@ -140,6 +162,7 @@ class RecentDataPoint(BaseModel):
 
     timestamp: str
     value: float
+    stream_id: Optional[str] = None
 
 
 class RecentDataResponse(BaseModel):
@@ -155,10 +178,16 @@ class RecentDataResponse(BaseModel):
 
 
 class ChannelSourceItem(BaseModel):
-    """Stream that has data for a channel; label is display-friendly."""
+    """Stream that has data for a channel; display metadata is backend-owned."""
 
     stream_id: str
-    label: str
+    label: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    sample_count: Optional[int] = None
+    last_timestamp: Optional[str] = None
+    provider: Optional[str] = None
+    summary: Optional[str] = None
 
 
 class ChannelSourcesResponse(BaseModel):

@@ -140,6 +140,11 @@ def upgrade() -> None:
         "telemetry_data",
         ["source_id", "telemetry_id", "timestamp", "sequence"],
     )
+    op.create_index(
+        "ix_telemetry_data_telemetry_timestamp_source",
+        "telemetry_data",
+        ["telemetry_id", "timestamp", "sequence", "source_id"],
+    )
     op.execute(
         sa.text(
             """
@@ -418,6 +423,7 @@ def downgrade() -> None:
 
     op.drop_table("telemetry_statistics")
 
+    op.drop_index("ix_telemetry_data_telemetry_timestamp_source", table_name="telemetry_data")
     op.drop_index("ix_telemetry_data_source_telemetry_timestamp", table_name="telemetry_data")
     op.drop_table("telemetry_data")
 
