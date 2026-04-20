@@ -2,21 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  EyeIcon,
+  EyeOffIcon,
+  Settings2Icon,
+} from "lucide-react";
 
 import {
   fetchLatestPositions,
   fetchPositionConfig,
-  upsertPositionConfig,
-  deletePositionConfig,
+  formatPositionMappingSummary,
   type PositionSample,
   type PositionChannelMapping,
   type PositionHistoryEntry,
 } from "@/lib/position-client";
-import {
-  fetchOrbitStatus,
-  type OrbitStatus,
-} from "@/lib/orbit-client";
+import { fetchOrbitStatus, type OrbitStatus } from "@/lib/orbit-client";
 import {
   fetchSimulatorRuntimeStatus,
   type SimulatorRuntimeStatus,
@@ -32,29 +34,23 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { FeedStatusBadge } from "@/components/feed-status-badge";
-import { UpcomingObservationsCard } from "@/components/upcoming-observations-card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  UpcomingObservationPreview,
+  UpcomingObservationsCard,
+} from "@/components/upcoming-observations-card";
+import { PositionMappingConfig } from "@/components/position-mapping-config";
 import { Spinner } from "@/components/ui/spinner";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuCheckboxItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const EarthOverviewGlobe = dynamic(
   () => import("./earth-overview-globe").then((m) => m.EarthOverviewGlobe),
   { ssr: false }
 );
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface TelemetrySource {
   id: string;
@@ -71,34 +67,32 @@ interface EarthOverviewViewProps {
 
 const POLL_MS = 5000;
 const MAX_POSITION_HISTORY_POINTS = 600;
-const SUGGESTIONS_ID = "earth-view-position-channel-suggestions";
 const PLANNING_SHOW_ON_GLOBE_KEY = "planningShowOnGlobeIds";
 
-function mappingSummary(m: PositionChannelMapping): string {
-  if (m.frame_type === "gps_lla") {
-    const parts = [m.lat_channel_name, m.lon_channel_name].filter(Boolean);
-    if (m.alt_channel_name) parts.push(m.alt_channel_name);
-    return parts.length ? `GPS: ${parts.join(", ")}` : "GPS (no channels)";
-  }
-  const parts = [m.x_channel_name, m.y_channel_name, m.z_channel_name].filter(Boolean);
-  return parts.length ? `${m.frame_type.toUpperCase()}: ${parts.join(", ")}` : `${m.frame_type.toUpperCase()} (no channels)`;
-}
+type PlanningPanelTab = "view" | "observations";
 
 export function EarthOverviewView({
   sources,
   initialSelectedSourceId,
 }: EarthOverviewViewProps) {
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
-    const fallback = initialSelectedSourceId && sources.some((s) => s.id === initialSelectedSourceId)
-      ? [initialSelectedSourceId]
-      : sources.map((s) => s.id);
+    const fallback =
+      initialSelectedSourceId &&
+      sources.some((s) => s.id === initialSelectedSourceId)
+        ? [initialSelectedSourceId]
+        : sources.map((s) => s.id);
     if (typeof window === "undefined") return fallback;
     try {
       const raw = sessionStorage.getItem(PLANNING_SHOW_ON_GLOBE_KEY);
       if (raw) {
         const parsed: unknown = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.every((id): id is string => typeof id === "string")) {
-          const valid = parsed.filter((id) => sources.some((s) => s.id === id));
+        if (
+          Array.isArray(parsed) &&
+          parsed.every((id): id is string => typeof id === "string")
+        ) {
+          const valid = parsed.filter((id) =>
+            sources.some((s) => s.id === id)
+          );
           if (valid.length > 0) return valid;
         }
       }
@@ -113,22 +107,17 @@ export function EarthOverviewView({
   >({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const [mappingsBySource, setMappingsBySource] = useState<Record<string, PositionChannelMapping | null>>({});
+  const [mappingsBySource, setMappingsBySource] = useState<
+    Record<string, PositionChannelMapping | null>
+  >({});
   const [allMappingsLoading, setAllMappingsLoading] = useState(true);
-  const [expandedSourceId, setExpandedSourceId] = useState<string | null>(null);
-  const [frameType, setFrameType] = useState<string>("gps_lla");
-  const [latChannel, setLatChannel] = useState("");
-  const [lonChannel, setLonChannel] = useState("");
-  const [altChannel, setAltChannel] = useState("");
-  const [xChannel, setXChannel] = useState("");
-  const [yChannel, setYChannel] = useState("");
-  const [zChannel, setZChannel] = useState("");
-  const [allChannelNames, setAllChannelNames] = useState<string[]>([]);
-  const [savingSourceId, setSavingSourceId] = useState<string | null>(null);
-  const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
-  const [mappingError, setMappingError] = useState<string | null>(null);
-  const [orbitStatusBySource, setOrbitStatusBySource] = useState<Record<string, OrbitStatus>>({});
+  const [panelTab, setPanelTab] = useState<PlanningPanelTab>("view");
+  const [mappingDialogOpen, setMappingDialogOpen] = useState(false);
+  const [expandedObservationSourceId, setExpandedObservationSourceId] =
+    useState<string | null>(null);
+  const [orbitStatusBySource, setOrbitStatusBySource] = useState<
+    Record<string, OrbitStatus>
+  >({});
   const [simulatorRuntimeBySource, setSimulatorRuntimeBySource] = useState<
     Record<string, SimulatorRuntimeStatus>
   >({});
@@ -141,14 +130,16 @@ export function EarthOverviewView({
     try {
       const configs = await fetchPositionConfig();
       const bySource: Record<string, PositionChannelMapping | null> = {};
-      for (const s of sources) bySource[s.id] = null;
-      for (const m of configs) {
-        const sourceKey = m.vehicle_id;
-        if (sourceKey && sourceKey in bySource) bySource[sourceKey] = m;
+      for (const source of sources) bySource[source.id] = null;
+      for (const mapping of configs) {
+        const sourceKey = mapping.vehicle_id;
+        if (sourceKey && sourceKey in bySource) {
+          bySource[sourceKey] = mapping;
+        }
       }
       setMappingsBySource(bySource);
     } catch {
-      // ignore
+      // Keep the globe usable even when mapping metadata is temporarily unavailable.
     } finally {
       setAllMappingsLoading(false);
     }
@@ -207,7 +198,9 @@ export function EarthOverviewView({
     let cancelled = false;
     async function load() {
       const simulatorIds = selectedIds.filter(
-        (id) => sources.find((source) => source.id === id)?.source_type === "simulator"
+        (id) =>
+          sources.find((source) => source.id === id)?.source_type ===
+          "simulator"
       );
       if (simulatorIds.length === 0) {
         if (!cancelled) setSimulatorRuntimeBySource({});
@@ -308,7 +301,18 @@ export function EarthOverviewView({
 
   useEffect(() => {
     const client = new RealtimeWsClient();
-    const handler = (msg: { type: string; vehicle_id?: string; status?: string; reason?: string; orbit_type?: string | null; perigee_km?: number | null; apogee_km?: number | null; eccentricity?: number | null; velocity_kms?: number | null; period_sec?: number | null }) => {
+    const handler = (msg: {
+      type: string;
+      vehicle_id?: string;
+      status?: string;
+      reason?: string;
+      orbit_type?: string | null;
+      perigee_km?: number | null;
+      apogee_km?: number | null;
+      eccentricity?: number | null;
+      velocity_kms?: number | null;
+      period_sec?: number | null;
+    }) => {
       if (msg.type === "orbit_status" && msg.vehicle_id != null) {
         const logicalSourceId = logicalSourceIdByOrbitSourceId[msg.vehicle_id];
         if (!logicalSourceId) return;
@@ -346,24 +350,25 @@ export function EarthOverviewView({
         setPositions(data);
         setPositionHistoryBySource((prev) => {
           const next = { ...prev };
-          for (const p of data) {
+          for (const position of data) {
             if (
-              p.valid &&
-              p.lat_deg != null &&
-              p.lon_deg != null &&
-              typeof p.lat_deg === "number" &&
-              typeof p.lon_deg === "number"
+              position.valid &&
+              position.lat_deg != null &&
+              position.lon_deg != null &&
+              typeof position.lat_deg === "number" &&
+              typeof position.lon_deg === "number"
             ) {
               const entry: PositionHistoryEntry = {
-                lat_deg: p.lat_deg,
-                lon_deg: p.lon_deg,
-                alt_m: typeof p.alt_m === "number" ? p.alt_m : 0,
-                timestamp: p.timestamp ?? undefined,
+                lat_deg: position.lat_deg,
+                lon_deg: position.lon_deg,
+                alt_m:
+                  typeof position.alt_m === "number" ? position.alt_m : 0,
+                timestamp: position.timestamp ?? undefined,
               };
-              const sourceKey = p.vehicle_id;
+              const sourceKey = position.vehicle_id;
               if (!sourceKey) continue;
-              const arr = [...(next[sourceKey] ?? []), entry];
-              next[sourceKey] = arr.slice(-MAX_POSITION_HISTORY_POINTS);
+              const history = [...(next[sourceKey] ?? []), entry];
+              next[sourceKey] = history.slice(-MAX_POSITION_HISTORY_POINTS);
             }
           }
           return next;
@@ -371,7 +376,11 @@ export function EarthOverviewView({
         setLastUpdated(new Date());
         setError(null);
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load latest positions");
+        if (!cancelled) {
+          setError(
+            e instanceof Error ? e.message : "Failed to load latest positions"
+          );
+        }
       }
     }
     loadOnce();
@@ -380,14 +389,14 @@ export function EarthOverviewView({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [selectedIds, sources]);
+  }, [selectedIds]);
 
   useEffect(() => {
     setPositionHistoryBySource((prev) => {
-      const set = new Set(selectedIds);
+      const selected = new Set(selectedIds);
       const next = { ...prev };
       for (const id of Object.keys(next)) {
-        if (!set.has(id)) delete next[id];
+        if (!selected.has(id)) delete next[id];
       }
       return next;
     });
@@ -396,57 +405,26 @@ export function EarthOverviewView({
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      sessionStorage.setItem(PLANNING_SHOW_ON_GLOBE_KEY, JSON.stringify(selectedIds));
+      sessionStorage.setItem(
+        PLANNING_SHOW_ON_GLOBE_KEY,
+        JSON.stringify(selectedIds)
+      );
     } catch {
       // ignore when storage unavailable (e.g. private browsing)
     }
   }, [selectedIds]);
 
-  useEffect(() => {
-    if (!expandedSourceId) return;
-    const m = mappingsBySource[expandedSourceId] ?? null;
-    const ft = m?.frame_type ?? "gps_lla";
-    setFrameType(ft);
-    setLatChannel(m?.lat_channel_name ?? "");
-    setLonChannel(m?.lon_channel_name ?? "");
-    setAltChannel(m?.alt_channel_name ?? "");
-    setXChannel(m?.x_channel_name ?? "");
-    setYChannel(m?.y_channel_name ?? "");
-    setZChannel(m?.z_channel_name ?? "");
-  }, [expandedSourceId, mappingsBySource]);
-
-  useEffect(() => {
-    const catalogSourceId = expandedSourceId ?? sources[0]?.id;
-    if (!catalogSourceId) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(
-          `${API_URL}/telemetry/list?source_id=${encodeURIComponent(catalogSourceId)}`,
-          { cache: "no-store" }
-        );
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setAllChannelNames(Array.isArray(data?.names) ? data.names : []);
-      } catch {
-        // ignore
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [expandedSourceId, sources]);
-
   const effectivePositions = useMemo(() => {
     if (selectedIds.length === 0) return [];
-    const set = new Set(selectedIds);
-    return positions.filter((p) => set.has(p.vehicle_id));
+    const selected = new Set(selectedIds);
+    return positions.filter((position) => selected.has(position.vehicle_id));
   }, [positions, selectedIds]);
 
   const effectivePositionHistory = useMemo(() => {
     const acc: Record<string, PositionHistoryEntry[]> = {};
     for (const id of selectedIds) {
-      const hist = positionHistoryBySource[id];
-      if (hist?.length) acc[id] = hist;
+      const history = positionHistoryBySource[id];
+      if (history?.length) acc[id] = history;
     }
     return acc;
   }, [selectedIds, positionHistoryBySource]);
@@ -461,89 +439,6 @@ export function EarthOverviewView({
     (id: string) => selectedIds.includes(id),
     [selectedIds]
   );
-
-  const canSaveMapping = useMemo(() => {
-    if (frameType === "gps_lla") {
-      const lat = latChannel.trim();
-      const lon = lonChannel.trim();
-      return lat.length > 0 && lon.length > 0;
-    }
-    const x = xChannel.trim();
-    const y = yChannel.trim();
-    const z = zChannel.trim();
-    return x.length > 0 && y.length > 0 && z.length > 0;
-  }, [frameType, latChannel, lonChannel, xChannel, yChannel, zChannel]);
-
-  async function handleSaveMapping(sourceId: string) {
-    const src = sources.find((s) => s.id === sourceId);
-    if (!src) return;
-    if (!canSaveMapping) {
-      setMappingError(
-        frameType === "gps_lla"
-          ? "Latitude and longitude channel names are required."
-          : "X, Y, and Z channel names are required."
-      );
-      return;
-    }
-    setSavingSourceId(sourceId);
-    setMappingError(null);
-    try {
-      const lat = latChannel.trim() || null;
-      const lon = lonChannel.trim() || null;
-      const alt = altChannel.trim() || null;
-      const x = xChannel.trim() || null;
-      const y = yChannel.trim() || null;
-      const z = zChannel.trim() || null;
-      const saved = await upsertPositionConfig({
-        vehicle_id: src.id,
-        frame_type: frameType,
-        lat_channel_name: frameType === "gps_lla" ? lat : null,
-        lon_channel_name: frameType === "gps_lla" ? lon : null,
-        alt_channel_name: frameType === "gps_lla" ? alt : null,
-        x_channel_name: frameType !== "gps_lla" ? x : null,
-        y_channel_name: frameType !== "gps_lla" ? y : null,
-        z_channel_name: frameType !== "gps_lla" ? z : null,
-      });
-      setMappingsBySource((prev) => ({ ...prev, [sourceId]: saved }));
-    } catch (e) {
-      setMappingError(e instanceof Error ? e.message : "Failed to save");
-    } finally {
-      setSavingSourceId(null);
-    }
-  }
-
-  async function handleRemoveMapping(sourceId: string, mapping: PositionChannelMapping) {
-    setDeletingSourceId(sourceId);
-    setMappingError(null);
-    try {
-      await deletePositionConfig(mapping.id);
-      setMappingsBySource((prev) => ({ ...prev, [sourceId]: null }));
-      if (expandedSourceId === sourceId) {
-        setLatChannel("");
-        setLonChannel("");
-        setAltChannel("");
-        setXChannel("");
-        setYChannel("");
-        setZChannel("");
-        setFrameType("gps_lla");
-      }
-    } catch (e) {
-      setMappingError(e instanceof Error ? e.message : "Failed to remove");
-    } finally {
-      setDeletingSourceId(null);
-    }
-  }
-
-  const showOnGlobeLabel = useMemo(() => {
-    if (sources.length === 0) return "No sources";
-    if (selectedIds.length === 0) return "No sources";
-    if (selectedIds.length === sources.length) return "All sources";
-    if (selectedIds.length === 1) {
-      const s = sources.find((x) => x.id === selectedIds[0]);
-      return s ? s.name : "1 source";
-    }
-    return `${selectedIds.length} sources`;
-  }, [sources, selectedIds]);
 
   const feedStateBySource = useMemo<Record<string, FeedState>>(() => {
     const next: Record<string, FeedState> = {};
@@ -560,274 +455,305 @@ export function EarthOverviewView({
     }
     return next;
   }, [feedStatusBySource, simulatorRuntimeBySource, sources]);
-  const observationSourceId = expandedSourceId ?? selectedIds[0] ?? null;
 
   return (
     <div className="absolute inset-0 h-full min-h-0 w-full min-w-0">
       <div className="relative h-full min-h-0 w-full min-w-0">
         {sources.length > 0 && (
-          <div className="pointer-events-auto absolute top-4 left-4 z-20 max-w-md">
+          <div className="pointer-events-auto absolute top-4 left-4 z-20 max-w-lg">
             <Card className="bg-background/90 border-border/70 border shadow-lg backdrop-blur-sm">
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between gap-2">
                   <CardTitle className="text-sm">Earth view</CardTitle>
-                  {lastUpdated && (
-                    <div className="text-muted-foreground text-[11px]">
-                      {lastUpdated.toLocaleTimeString()}
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {lastUpdated && (
+                      <div className="text-muted-foreground text-[11px]">
+                        {lastUpdated.toLocaleTimeString()}
+                      </div>
+                    )}
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={() => setMappingDialogOpen(true)}
+                            aria-label="Configure position mappings"
+                            data-testid="planning-position-mapping-configure"
+                          >
+                            <Settings2Icon className="size-3.5" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">
+                          Configure position mappings
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-5 pt-0">
-                {/* Orbit anomaly banner: when any visible + mapped source has orbit anomaly */}
+              <CardContent className="max-h-[calc(100dvh-6rem)] space-y-4 overflow-y-auto pt-0">
                 {(() => {
                   const anomalySources = selectedIds.filter((id) => {
-                    const m = mappingsBySource[id];
-                    const st = orbitStatusBySource[id];
-                    if (!m || !st) return false;
-                    const s = st.status;
-                    return s !== "VALID" && s !== "INSUFFICIENT_DATA";
+                    const mapping = mappingsBySource[id];
+                    const status = orbitStatusBySource[id];
+                    if (!mapping || !status) return false;
+                    return (
+                      status.status !== "VALID" &&
+                      status.status !== "INSUFFICIENT_DATA"
+                    );
                   });
                   if (anomalySources.length === 0) return null;
                   const first = anomalySources[0];
-                  const src = sources.find((s) => s.id === first);
-                  const st = orbitStatusBySource[first];
+                  const source = sources.find((s) => s.id === first);
+                  const status = orbitStatusBySource[first];
                   return (
                     <Alert variant="destructive" className="py-2">
                       <AlertDescription className="text-xs">
                         <span className="font-medium">Orbit anomaly</span>
-                        {src && st && (
-                          <> — {src.name}: {st.reason || st.status}</>
+                        {source && status && (
+                          <> - {source.name}: {status.reason || status.status}</>
                         )}
                       </AlertDescription>
                     </Alert>
                   );
                 })()}
 
-                {/* Section 1: Which sources are shown on the globe (independent of config) */}
-                <div className="space-y-2">
-                  <p className="text-muted-foreground text-xs font-medium">Show on globe</p>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 w-full justify-between px-3 text-xs font-normal"
-                      >
-                        <span className="truncate">{showOnGlobeLabel}</span>
-                        <ChevronDownIcon className="size-3.5 shrink-0 opacity-50" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="min-w-(--radix-popper-anchor-width)">
-                      {sources.map((src) => {
-                        const typeLabel = src.source_type === "simulator" ? "Simulator" : "Vehicle";
-                        return (
-                          <DropdownMenuCheckboxItem
-                            key={src.id}
-                            checked={isSourceSelected(src.id)}
-                            onSelect={(e) => {
-                              e.preventDefault();
-                              toggleSource(src.id);
-                            }}
-                            className="text-xs"
-                          >
-                            <span className="truncate">{src.name}</span>
-                            <Badge variant="outline" className="ml-1 shrink-0 text-[9px] uppercase">
-                              {typeLabel}
-                            </Badge>
-                          </DropdownMenuCheckboxItem>
-                        );
-                      })}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  {error && <p className="text-destructive text-[11px]">Positions: {error}</p>}
+                <div
+                  role="tablist"
+                  aria-label="Planning panel sections"
+                  className="bg-muted/50 grid grid-cols-2 rounded-md p-1"
+                >
+                  {(
+                    [
+                      ["view", "View"],
+                      ["observations", "Observations"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      id={`planning-tab-${value}`}
+                      type="button"
+                      role="tab"
+                      aria-selected={panelTab === value}
+                      aria-controls={`planning-tabpanel-${value}`}
+                      onClick={() => setPanelTab(value as PlanningPanelTab)}
+                      className={`rounded-sm px-3 py-1.5 text-xs font-medium ${
+                        panelTab === value
+                          ? "bg-background text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
 
-                <UpcomingObservationsCard sourceId={observationSourceId} />
+                <div className="contents">
+                  <div className="min-h-0 overflow-hidden">
+                    <div
+                      className="space-y-2"
+                      role="tabpanel"
+                      id="planning-tabpanel-view"
+                      aria-labelledby="planning-tab-view"
+                      hidden={panelTab !== "view"}
+                    >
+                      <div>
+                        <p className="text-muted-foreground text-xs font-medium">
+                          Vehicles visible on globe
+                        </p>
+                        <p className="text-muted-foreground text-[11px]">
+                          Click a row to toggle its marker and recent trail.
+                        </p>
+                      </div>
 
-                {/* Section 2: Position mapping per source (independent of visibility) */}
-                <div className="border-t pt-5">
-                  <p className="text-muted-foreground mb-1 text-xs font-medium">
-                    Position mapping
-                  </p>
-                  <p className="text-muted-foreground mb-3 text-[11px]">
-                    Configure frame and channels for each source. Visibility above is separate.
-                  </p>
-                  {allMappingsLoading ? (
-                    <div className="text-muted-foreground flex items-center gap-2 py-3 text-xs">
-                      <Spinner size="sm" />
-                      Loading mappings…
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {sources.map((src) => {
-                        const m = mappingsBySource[src.id] ?? null;
-                        const typeLabel = src.source_type === "simulator" ? "Simulator" : "Vehicle";
-                        const open = expandedSourceId === src.id;
-                        return (
-                          <Collapsible
-                            key={src.id}
-                            open={open}
-                            onOpenChange={(o) => setExpandedSourceId(o ? src.id : null)}
-                          >
-                            <CollapsibleTrigger
-                              data-testid={`planning-source-row-${src.id}`}
-                              className="hover:bg-accent/50 hover:border-border data-[state=open]:border-border data-[state=open]:bg-accent/50 flex w-full items-center gap-2 rounded-md border border-transparent px-3 py-2 text-left text-xs"
-                            >
-                              {open ? (
-                                <ChevronDownIcon className="text-muted-foreground size-3.5 shrink-0" />
-                              ) : (
-                                <ChevronRightIcon className="text-muted-foreground size-3.5 shrink-0" />
-                              )}
-                              <span className="truncate font-medium">{src.name}</span>
-                              <Badge variant="outline" className="shrink-0 text-[9px] uppercase">
-                                {typeLabel}
-                              </Badge>
-                              {selectedIds.includes(src.id) && (
-                                <FeedStatusBadge
-                                  state={feedStateBySource[src.id] ?? "disconnected"}
-                                  className="ml-1.5 shrink-0"
-                                />
-                              )}
-                              <span className="text-muted-foreground ml-auto truncate text-[11px]">
-                                {m ? mappingSummary(m) : "Not configured"}
-                              </span>
-                              {m && (() => {
-                                const st = orbitStatusBySource[src.id];
-                                if (!st) return null;
-                                const isAnomaly = st.status !== "VALID" && st.status !== "INSUFFICIENT_DATA";
-                                return (
+                      {error && (
+                        <p className="text-destructive text-[11px]">
+                          Positions: {error}
+                        </p>
+                      )}
+
+                      {allMappingsLoading ? (
+                        <div className="text-muted-foreground flex items-center gap-2 py-3 text-xs">
+                          <Spinner size="sm" />
+                          Loading mappings...
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {sources.map((source) => {
+                            const mapping = mappingsBySource[source.id] ?? null;
+                            const visible = isSourceSelected(source.id);
+                            const typeLabel =
+                              source.source_type === "simulator"
+                                ? "Simulator"
+                                : "Vehicle";
+                            const status = mapping
+                              ? orbitStatusBySource[source.id]
+                              : null;
+                            const isAnomaly =
+                              status != null &&
+                              status.status !== "VALID" &&
+                              status.status !== "INSUFFICIENT_DATA";
+
+                            return (
+                              <button
+                                key={source.id}
+                                type="button"
+                                data-testid={`planning-source-row-${source.id}`}
+                                aria-pressed={visible}
+                                onClick={() => toggleSource(source.id)}
+                                className={`hover:bg-accent/60 flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left text-xs transition ${
+                                  visible
+                                    ? "border-primary/60 bg-primary/10"
+                                    : "border-border/70 bg-background/60 opacity-75"
+                                }`}
+                              >
+                                {visible ? (
+                                  <EyeIcon className="text-primary mt-0.5 size-3.5 shrink-0" />
+                                ) : (
+                                  <EyeOffIcon className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
+                                )}
+                                <span className="min-w-0 flex-1">
+                                  <span className="flex min-w-0 items-center gap-1.5">
+                                    <span className="truncate font-medium">
+                                      {source.name}
+                                    </span>
+                                    <Badge
+                                      variant="outline"
+                                      className="shrink-0 text-[9px] uppercase"
+                                    >
+                                      {typeLabel}
+                                    </Badge>
+                                    {visible && (
+                                      <FeedStatusBadge
+                                        state={
+                                          feedStateBySource[source.id] ??
+                                          "disconnected"
+                                        }
+                                        className="shrink-0"
+                                      />
+                                    )}
+                                  </span>
+                                  <span className="text-muted-foreground mt-1 block truncate text-[11px]">
+                                    {mapping
+                                      ? formatPositionMappingSummary(mapping)
+                                      : "Not configured"}
+                                  </span>
+                                </span>
+                                {status && (
                                   <Badge
                                     variant={isAnomaly ? "destructive" : "secondary"}
-                                    className="ml-1.5 shrink-0 text-[9px]"
-                                    title={st.reason || st.status}
+                                    className="mt-0.5 shrink-0 text-[9px]"
+                                    title={status.reason || status.status}
                                   >
-                                    {isAnomaly ? st.status.replace(/_/g, " ") : (st.orbit_type ?? "OK")}
+                                    {isAnomaly
+                                      ? status.status.replace(/_/g, " ")
+                                      : status.orbit_type ?? "OK"}
                                   </Badge>
-                                );
-                              })()}
-                            </CollapsibleTrigger>
-                            <CollapsibleContent>
-                              <div className="border-border bg-muted/30 mt-3 space-y-3 rounded-md border p-3">
-                                <div className="space-y-1.5">
-                                  <Label className="text-xs">Frame</Label>
-                                  <Select value={frameType} onValueChange={setFrameType}>
-                                    <SelectTrigger className="h-8 text-xs">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="gps_lla">GPS (lat / lon / alt)</SelectItem>
-                                      <SelectItem value="ecef">ECEF (X / Y / Z)</SelectItem>
-                                      <SelectItem value="eci">ECI (X / Y / Z)</SelectItem>
-                                    </SelectContent>
-                                  </Select>
-                                </div>
-                                {frameType === "gps_lla" ? (
-                                  <div className="grid grid-cols-3 gap-3">
-                                    <div className="space-y-1">
-                                      <Label className="text-xs">Lat</Label>
-                                      <Input
-                                        list={SUGGESTIONS_ID}
-                                        placeholder="GPS_LAT"
-                                        value={latChannel}
-                                        onChange={(e) => setLatChannel(e.target.value)}
-                                        className="h-8 text-xs"
-                                      />
-                                    </div>
-                                    <div className="space-y-1">
-                                      <Label className="text-xs">Lon</Label>
-                                      <Input
-                                        list={SUGGESTIONS_ID}
-                                        placeholder="GPS_LON"
-                                        value={lonChannel}
-                                        onChange={(e) => setLonChannel(e.target.value)}
-                                        className="h-8 text-xs"
-                                      />
-                                    </div>
-                                    <div className="space-y-1">
-                                      <Label className="text-xs">Alt</Label>
-                                      <Input
-                                        list={SUGGESTIONS_ID}
-                                        placeholder="GPS_ALT"
-                                        value={altChannel}
-                                        onChange={(e) => setAltChannel(e.target.value)}
-                                        className="h-8 text-xs"
-                                      />
-                                    </div>
-                                  </div>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="min-h-0 overflow-hidden">
+                    <div
+                      className="space-y-2"
+                      role="tabpanel"
+                      id="planning-tabpanel-observations"
+                      aria-labelledby="planning-tab-observations"
+                      hidden={panelTab !== "observations"}
+                    >
+                      <div>
+                        <p className="text-muted-foreground text-xs font-medium">
+                          Upcoming observations
+                        </p>
+                        <p className="text-muted-foreground text-[11px]">
+                          Expand a vehicle to inspect expected contact windows.
+                        </p>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        {sources.map((source) => {
+                          const isExpanded =
+                            expandedObservationSourceId === source.id;
+                          const typeLabel =
+                            source.source_type === "simulator"
+                              ? "Simulator"
+                              : "Vehicle";
+                          return (
+                            <div
+                              key={source.id}
+                              className="bg-muted/30 border-border/40 rounded-md border"
+                            >
+                              <button
+                                type="button"
+                                data-testid={`planning-observations-row-${source.id}`}
+                                aria-expanded={isExpanded}
+                                onClick={() =>
+                                  setExpandedObservationSourceId((prev) =>
+                                    prev === source.id ? null : source.id
+                                  )
+                                }
+                                className="hover:bg-accent/50 flex w-full items-start gap-2 rounded-md px-3 py-2 text-left text-xs transition"
+                              >
+                                {isExpanded ? (
+                                  <ChevronDownIcon className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
                                 ) : (
-                                  <div className="grid grid-cols-3 gap-3">
-                                    <div className="space-y-1">
-                                      <Label className="text-xs">X</Label>
-                                      <Input
-                                        list={SUGGESTIONS_ID}
-                                        placeholder="POS_X"
-                                        value={xChannel}
-                                        onChange={(e) => setXChannel(e.target.value)}
-                                        className="h-8 text-xs"
-                                      />
-                                    </div>
-                                    <div className="space-y-1">
-                                      <Label className="text-xs">Y</Label>
-                                      <Input
-                                        list={SUGGESTIONS_ID}
-                                        value={yChannel}
-                                        onChange={(e) => setYChannel(e.target.value)}
-                                        className="h-8 text-xs"
-                                      />
-                                    </div>
-                                    <div className="space-y-1">
-                                      <Label className="text-xs">Z</Label>
-                                      <Input
-                                        list={SUGGESTIONS_ID}
-                                        value={zChannel}
-                                        onChange={(e) => setZChannel(e.target.value)}
-                                        className="h-8 text-xs"
-                                      />
-                                    </div>
-                                  </div>
+                                  <ChevronRightIcon className="text-muted-foreground mt-0.5 size-3.5 shrink-0" />
                                 )}
-                                {mappingError && (
-                                  <p className="text-destructive text-xs">{mappingError}</p>
-                                )}
-                                <div className="flex flex-wrap gap-2 pt-0.5">
-                                  {m && (
-                                    <Button
+                                <span className="min-w-0 flex-1">
+                                  <span className="flex min-w-0 items-center gap-1.5">
+                                    <span className="truncate font-medium">
+                                      {source.name}
+                                    </span>
+                                    <Badge
                                       variant="outline"
-                                      size="sm"
-                                      className="h-8 text-xs"
-                                      onClick={() => handleRemoveMapping(src.id, m)}
-                                      disabled={deletingSourceId === src.id}
+                                      className="shrink-0 text-[9px] uppercase"
                                     >
-                                      {deletingSourceId === src.id ? "Removing…" : "Remove mapping"}
-                                    </Button>
-                                  )}
-                                  <Button
-                                    size="sm"
-                                    className="h-8 text-xs"
-                                    onClick={() => handleSaveMapping(src.id)}
-                                    disabled={savingSourceId === src.id || !canSaveMapping}
-                                  >
-                                    {savingSourceId === src.id ? "Saving…" : "Save mapping"}
-                                  </Button>
+                                      {typeLabel}
+                                    </Badge>
+                                  </span>
+                                  <span className="text-muted-foreground mt-1 block truncate text-[11px]">
+                                    <UpcomingObservationPreview
+                                      sourceId={source.id}
+                                    />
+                                  </span>
+                                </span>
+                              </button>
+                              <div
+                                className="grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                                style={{ gridTemplateRows: isExpanded ? "1fr" : "0fr" }}
+                              >
+                                <div className="min-h-0 overflow-hidden">
+                                  <div className="px-3 pb-3">
+                                    <UpcomingObservationsCard
+                                      sourceId={source.id}
+                                      title={`${source.name} observations`}
+                                    />
+                                  </div>
                                 </div>
                               </div>
-                            </CollapsibleContent>
-                          </Collapsible>
-                        );
-                      })}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  )}
-                  {allChannelNames.length > 0 && (
-                    <datalist id={SUGGESTIONS_ID}>
-                      {allChannelNames.map((n) => (
-                        <option key={n} value={n} />
-                      ))}
-                    </datalist>
-                  )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
+            <PositionMappingConfig
+              sources={sources}
+              open={mappingDialogOpen}
+              onOpenChange={setMappingDialogOpen}
+              initialSourceId={selectedIds[0] ?? sources[0]?.id ?? null}
+              onMappingsChange={loadAllMappings}
+            />
           </div>
         )}
 

@@ -3,12 +3,21 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 const API_URL = process.env.PLAYWRIGHT_API_URL || "http://127.0.0.1:8000";
 
 test.describe.configure({ mode: "serial" });
-test.setTimeout(90_000);
+test.setTimeout(150_000);
 
 interface TelemetrySource {
   id: string;
   name: string;
   source_type?: string;
+}
+
+interface PositionMapping {
+  id: string;
+  vehicle_id: string;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function getPlanningSimulator(request: APIRequestContext): Promise<TelemetrySource> {
@@ -36,6 +45,18 @@ async function ensureSimulatorPositionMapping(
   });
 
   expect(response.ok()).toBeTruthy();
+}
+
+async function getPositionMapping(
+  request: APIRequestContext,
+  simulatorId: string
+): Promise<PositionMapping | null> {
+  const response = await request.get(
+    `${API_URL}/telemetry/position/config?vehicle_id=${encodeURIComponent(simulatorId)}`
+  );
+  expect(response.ok()).toBeTruthy();
+  const mappings = (await response.json()) as PositionMapping[];
+  return mappings[0] ?? null;
 }
 
 async function ensureSimulatorRunning(
@@ -94,6 +115,57 @@ test("planning renders the live simulator marker on the globe", async ({
 
   await page.goto("/planning");
 
+  let simulatorRow = page.getByTestId(`planning-source-row-${simulator.id}`);
+  await expect(simulatorRow).toHaveAttribute("aria-pressed", "true");
+  await simulatorRow.click();
+  await expect(simulatorRow).toHaveAttribute("aria-pressed", "false");
+  await simulatorRow.click();
+  await expect(simulatorRow).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByTestId("planning-position-mapping-configure").click();
+  const mappingDialog = page.getByRole("dialog", {
+    name: "Configure position mapping",
+  });
+  await expect(mappingDialog).toBeVisible();
+  await expect(
+    mappingDialog.getByRole("button", { name: new RegExp(escapeRegExp(simulator.name)) })
+  ).toBeVisible();
+  await expect(await getPositionMapping(request, simulator.id)).toBeTruthy();
+
+  await mappingDialog.getByTestId("position-mapping-remove").click();
+  const deleteConfirm = page.getByRole("alertdialog", {
+    name: new RegExp(
+      `Delete position mapping for ${escapeRegExp(simulator.name)}`
+    ),
+  });
+  await expect(deleteConfirm).toBeVisible();
+  await expect(await getPositionMapping(request, simulator.id)).toBeTruthy();
+
+  await deleteConfirm.getByTestId("position-mapping-delete-confirm").click();
+  await expect(deleteConfirm).toBeHidden();
+  await expect(await getPositionMapping(request, simulator.id)).toBeNull();
+  await expect(
+    mappingDialog.getByTestId("position-mapping-remove")
+  ).toHaveCount(0);
+  await mappingDialog.getByRole("button", { name: "Close" }).first().click();
+  await expect(mappingDialog).toBeHidden();
+  await expect(simulatorRow).toContainText("Not configured");
+
+  await ensureSimulatorPositionMapping(request, simulator.id);
+  await page.reload();
+  simulatorRow = page.getByTestId(`planning-source-row-${simulator.id}`);
+  await expect(simulatorRow).toContainText("GPS:");
+
+  await page.getByRole("tab", { name: "Observations" }).click();
+  const observationsRow = page.getByTestId(
+    `planning-observations-row-${simulator.id}`
+  );
+  await expect(observationsRow).toHaveAttribute("aria-expanded", "false");
+  await observationsRow.click();
+  await expect(observationsRow).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByText(`${simulator.name} observations`)).toBeVisible();
+
+  await page.getByRole("tab", { name: "View" }).click({ force: true });
   await expect(
     page.getByText("An error occurred while rendering. Rendering has stopped.")
   ).toHaveCount(0);

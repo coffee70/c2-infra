@@ -7,6 +7,7 @@ import { useUpcomingObservationsQuery, type SourceObservation } from "@/lib/quer
 interface UpcomingObservationsCardProps {
   sourceId: string | null;
   limit?: number;
+  title?: string;
 }
 
 function formatWindowTime(iso: string): string {
@@ -58,13 +59,41 @@ function ObservationRow({ observation }: { observation: SourceObservation }) {
   );
 }
 
-export function UpcomingObservationsCard({ sourceId, limit = 5 }: UpcomingObservationsCardProps) {
+export function UpcomingObservationPreview({ sourceId }: { sourceId: string }) {
+  const query = useUpcomingObservationsQuery(sourceId, 1);
+
+  if (query.isLoading) {
+    return <span>Loading observation window...</span>;
+  }
+
+  if (query.isError) {
+    return <span className="text-destructive">Observation load failed</span>;
+  }
+
+  const next = query.data?.[0];
+  if (!next) {
+    return <span>No upcoming observations</span>;
+  }
+
+  return (
+    <span>
+      {formatCountdown(next)} · {formatWindowTime(next.start_time)}
+      {next.station_name ? ` · ${next.station_name}` : ""}
+    </span>
+  );
+}
+
+export function UpcomingObservationsCard({
+  sourceId,
+  limit = 5,
+  title = "Upcoming observations",
+}: UpcomingObservationsCardProps) {
   const query = useUpcomingObservationsQuery(sourceId, limit);
 
   if (!sourceId) {
     return (
-      <section className="border-border/70 rounded-md border p-3 text-xs">
-        <p className="font-medium">Upcoming observations</p>
+      <section className="border-border/50 border-t pt-3 text-xs">
+        <p className="font-medium">{title}</p>
         <p className="text-muted-foreground mt-1">Select a source to view upcoming observations.</p>
       </section>
     );
@@ -72,8 +101,8 @@ export function UpcomingObservationsCard({ sourceId, limit = 5 }: UpcomingObserv
 
   if (query.isLoading) {
     return (
-      <section className="border-border/70 rounded-md border p-3 text-xs">
-        <p className="font-medium">Upcoming observations</p>
+      <section className="border-border/50 border-t pt-3 text-xs">
+        <p className="font-medium">{title}</p>
         <div className="text-muted-foreground mt-2 flex items-center gap-2">
           <Spinner size="sm" />
           Loading expected contact windows...
@@ -84,8 +113,8 @@ export function UpcomingObservationsCard({ sourceId, limit = 5 }: UpcomingObserv
 
   if (query.isError) {
     return (
-      <section className="border-border/70 rounded-md border p-3 text-xs">
-        <p className="font-medium">Upcoming observations</p>
+      <section className="border-border/50 border-t pt-3 text-xs">
+        <p className="font-medium">{title}</p>
         <p className="text-destructive mt-1">Failed to load expected contact windows.</p>
       </section>
     );
@@ -97,18 +126,18 @@ export function UpcomingObservationsCard({ sourceId, limit = 5 }: UpcomingObserv
 
   if (!next) {
     return (
-      <section className="border-border/70 rounded-md border p-3 text-xs">
-        <p className="font-medium">Upcoming observations</p>
+      <section className="border-border/50 border-t pt-3 text-xs">
+        <p className="font-medium">{title}</p>
         <p className="text-muted-foreground mt-1">No upcoming observations available.</p>
       </section>
     );
   }
 
   return (
-    <section className="border-border/70 rounded-md border p-3 text-xs">
+    <section className="border-border/50 border-t pt-3 text-xs">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="font-medium">Next observation</p>
+          <p className="font-medium">{title}</p>
           <p className="text-muted-foreground mt-1 truncate">
             {formatWindowTime(next.start_time)} - {formatWindowTime(next.end_time)}
           </p>

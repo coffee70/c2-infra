@@ -4,7 +4,7 @@
 
 The Overview is your main dashboard. When you have a telemetry stream connected (or historical data), it shows your watchlist, feed health, anomalies, event workflows, and integrated telemetry search in a single data-focused layout—no Earth view on this page.
 
-For a full-screen 3D Earth view with position markers and source selection, use the **Planning** tab (or [Planning](/planning)): the globe fills the viewport below the app bar. Each selected source shows its current position (point and label) and a recent position trail (polyline) that builds as telemetry is received. For simulators, Planning follows the source's active stream automatically, so you keep selecting the logical source while the globe reads live position and orbit status from the current stream behind it. A single left-side card (“Earth view”) has two independent sections: **Show on globe** (a dropdown to select one or multiple sources to display) and **Position mapping** (per-source configuration of frame and channels). You can configure position for any source whether or not it’s currently shown on the globe.
+For a full-screen 3D Earth view with position markers and source selection, use the **Planning** tab (or [Planning](/planning)): the globe fills the viewport below the app bar. Each visible source shows its current position (point and label) and a recent position trail (polyline) that builds as telemetry is received. For simulators, Planning follows the source's active stream automatically, so you keep selecting the logical source while the globe reads live position and orbit status from the current stream behind it. The left-side **Earth view** card has a **View** tab for clickable source visibility rows, an **Observations** tab for expandable upcoming observation windows by source, and a gear icon (with tooltip) for configuring position mappings. Switching tabs and expanding or collapsing observation rows animates smoothly rather than jumping. If many sources are registered, the panel scrolls internally instead of overflowing the viewport.
 
 For broad telemetry browsing, use the **Telemetry** tab instead of Overview. Overview stays intentionally watchlist-focused: use it for the channels you already care about, not for full source inventory browsing.
 
@@ -72,12 +72,13 @@ Use **Edit watchlist** to open the configure modal: add or remove channels, and 
 
 ## Configure position mapping
 
-On the [Planning](/planning) page, the left-side **Earth view** card has two separate areas:
+On the [Planning](/planning) page, the left-side **Earth view** card separates operational viewing from configuration:
 
-- **Show on globe** — Open the dropdown to select which sources appear on the globe. You can pick one, several, or all. This does not affect which sources you can configure.
-- **Position mapping** — A list of all sources; each row shows the source name, type, and current mapping (or “Not configured”). Expand a row to set **frame** (GPS lat/lon/alt or ECEF/ECI X/Y/Z) and channel names, then **Save mapping** or **Remove mapping**. You can configure any source even if it’s not currently shown on the globe.
+- **View tab** — Click a source row to toggle whether it appears on the globe. Active rows are visible on the globe; inactive rows are hidden. Each row shows source type, feed health when visible, mapping summary, and orbit status when available.
+- **Observations tab** — All registered sources are listed as collapsed rows. Expand a source to view its upcoming observation windows without showing every vehicle's schedule at once.
+- **Configure icon** — Open the position mapping modal from the icon on the right side of the title block. Select a source row in the modal, set **frame** (GPS lat/lon/alt or ECEF/ECI X/Y/Z) and channel names, then **Save**. **Remove** prompts a confirmation and, once confirmed, deletes the mapping immediately. Telemetry data is retained, so you can re-create the mapping from the same modal without leaving the Planning page.
 
-Each source has at most one active position mapping. If a source has no valid mapping, it won’t show a position on the globe when you add it to “Show on globe.”
+Each source has at most one active position mapping. If a source has no valid mapping, it won’t show a position on the globe when you activate it in the **View** tab.
 
 On channel detail pages, the sticky channel header shows the current **data scope** as a pill (hover for the full line). **Edit scope** opens a modal to use the latest stream, selected streams, selected streams within a time range, or all channel data in a date range. Live updates are available only in Latest mode.
 
@@ -86,8 +87,8 @@ On channel detail pages, the sticky channel header shows the current **data scop
 To see a simulator’s position and trail on the globe:
 
 1. **Generate position telemetry** — On the [Sources](/sources) page, add a simulator (if needed), click **Manage**, then **Start**. The simulator emits position channels (e.g. `GPS_LAT`, `GPS_LON`, `GPS_ALT`) along with other telemetry.
-2. **Open Planning** — Go to the [Planning](/planning) tab. In the Earth view card, open **Show on globe** and select the simulator (and any other sources you want).
-3. **Confirm the mapping** — Built-in and newly registered sources seed their position mapping from the vehicle configuration file. In **Position mapping**, verify the frame and channel names if you want operator confirmation or an override. `DrogonSat` uses GPS/LLA channels; `RhaegalSat` uses ECEF XYZ channels.
+2. **Open Planning** — Go to the [Planning](/planning) tab. In the Earth view card's **View** tab, click the simulator row (and any other sources you want) so it is active.
+3. **Confirm the mapping** — Built-in and newly registered sources seed their position mapping from the vehicle configuration file. Use the configure icon in the **Earth view** title block to verify the frame and channel names if you want operator confirmation or an override. `DrogonSat` uses GPS/LLA channels; `RhaegalSat` uses ECEF XYZ channels.
 4. Planning resolves the simulator source to its current stream automatically. The globe then shows the simulator’s current position (point and label), a recent trail (polyline), and a per-source feed badge (`Live`, `Degraded`, or `No data`) on the selected source row as telemetry is received for that stream.
 5. Use **Nominal** or **Orbit nominal** when you want a stable realistic path on the globe. Use **Orbit decay**, **Orbit highly elliptical**, **Orbit suborbital**, or **Orbit escape** only when you intentionally want the orbit-analysis badges and alerting to exercise those cases.
 
@@ -96,7 +97,7 @@ To see a simulator’s position and trail on the globe:
 For sources that have a **position mapping** (and thus a position telemetry stream), the platform runs **orbit validation** in real time: it computes orbital parameters (perigee, apogee, eccentricity, velocity), classifies the orbit (LEO, MEO, GEO), and detects anomalies such as escape trajectory, suborbital, orbit decay, or highly elliptical LEO.
 
 - **Where to see status**
-  - **Planning page** — In the left panel, each selected source row shows its own feed-health badge (`Live`, `Degraded`, or `No data`). Each source with a position mapping also shows an orbit status badge (e.g. **LEO** for valid nominal, or the anomaly type). If any source currently shown on the globe has an orbit anomaly, a **red alert banner** appears in the left panel with the source name and reason.
+  - **Planning page** — In the View tab, each visible source row shows its own feed-health badge (`Live`, `Degraded`, or `No data`). Each source with a position mapping also shows an orbit status badge (e.g. **LEO** for valid nominal, or the anomaly type). If any source currently shown on the globe has an orbit anomaly, a **red alert banner** appears in the left panel with the source name and reason.
   - **Overview** — Orbit anomalies appear in the **Events Console** under an **Orbit** subsection (with a link to Planning). The **Alerts** count and dropdown in the Context Banner include orbit anomalies so you see them alongside telemetry alerts.
 
 - **What anomalies mean** — *Escape trajectory*: orbital energy ≥ 0 (unbound). *Suborbital*: velocity < 7 km/s at altitude < 1000 km. *Orbit decay*: predicted perigee below 120 km. *Highly elliptical*: eccentricity > 0.2 for an expected LEO mission. Status updates are pushed in real time over the same WebSocket as telemetry and alerts.

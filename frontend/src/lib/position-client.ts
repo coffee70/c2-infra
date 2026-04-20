@@ -77,6 +77,27 @@ export interface PositionHistoryEntry {
   timestamp?: string;
 }
 
+export function formatPositionMappingSummary(
+  mapping: PositionChannelMapping
+): string {
+  if (mapping.frame_type === "gps_lla") {
+    const parts = [
+      mapping.lat_channel_name,
+      mapping.lon_channel_name,
+      mapping.alt_channel_name,
+    ].filter(Boolean);
+    return parts.length ? `GPS: ${parts.join(", ")}` : "GPS (no channels)";
+  }
+
+  const parts = [
+    mapping.x_channel_name,
+    mapping.y_channel_name,
+    mapping.z_channel_name,
+  ].filter(Boolean);
+  const frame = mapping.frame_type.toUpperCase();
+  return parts.length ? `${frame}: ${parts.join(", ")}` : `${frame} (no channels)`;
+}
+
 export async function fetchPositionConfig(
   vehicleId?: string
 ): Promise<PositionChannelMapping[]> {
